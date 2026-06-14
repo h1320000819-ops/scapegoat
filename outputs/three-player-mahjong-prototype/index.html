@@ -2,9 +2,9 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="styles.css?v=20260614-remote-viewer-discard-a" />
-    <title>三人麻雀</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <link rel="stylesheet" href="styles.css?v=20260615-online-win-riichi-mobile-a" />
+    <title>アンミカロケット</title>
     <style>
       .online-debug-page {
         min-height: 100vh;
@@ -112,9 +112,9 @@
 
       <section id="game-root" class="game-root" aria-live="polite">
         <section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
-          <h2>Loading...</h2>
-          <p>Preparing the mahjong table. If this stays here, return to the lobby and start again.</p>
-          <button type="button" onclick="location.href='online-debug/index.html'">Back to lobby</button>
+          <h2>読み込み中...</h2>
+          <p>麻雀卓を準備しています。しばらく変わらない場合はロビーに戻ってください。</p>
+          <button type="button" onclick="location.href='online-debug/index.html'">ロビーへ戻る</button>
         </section>
       </section>
     </main>
@@ -178,7 +178,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-      const assetVersion = "20260615-last-hand-cpu-delay-a";
+      const assetVersion = "20260615-online-win-riichi-mobile-a";
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>

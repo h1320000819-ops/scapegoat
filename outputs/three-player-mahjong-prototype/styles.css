@@ -1484,3 +1484,192 @@ button:hover {
     width: var(--center-info-width);
   }
 }
+
+@media (max-width: 920px) and (orientation: landscape) {
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    width: 100%;
+  }
+
+  .app-shell:has(.mahjong-table) {
+    height: 100dvh;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .mahjong-table {
+    --center-info-height: 116px;
+    --center-info-width: 152px;
+    --discard-gap: 2px;
+    --discard-tile-height: 26px;
+    --discard-tile-width: 19px;
+    --river-center-gap: 2px;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    width: 100vw;
+  }
+
+  .mahjong-table::before {
+    border-width: 9px;
+    inset: 0;
+  }
+
+  .mahjong-table::after {
+    inset: 24px 10px 42px;
+  }
+
+  .top-bar {
+    left: 6px;
+    right: 6px;
+    top: 4px;
+    transform: scale(0.84);
+    transform-origin: top left;
+  }
+
+  .seat-bottom {
+    bottom: 2px;
+    max-width: 640px;
+    width: min(86vw, 640px);
+  }
+
+  .seat-top {
+    max-width: 500px;
+    top: 2px;
+    width: min(58vw, 500px);
+  }
+
+  .seat-right {
+    right: 2px;
+    width: 160px;
+  }
+
+  .seat-info {
+    border-radius: 8px;
+    font-size: 10px;
+    gap: 4px;
+    padding: 3px 5px;
+  }
+
+  .seat-avatar {
+    height: 26px;
+    width: 26px;
+  }
+
+  .hand-row {
+    border-radius: 7px;
+    gap: 0;
+    padding: 2px;
+  }
+
+  .tile,
+  .tile-button,
+  .tile-image,
+  .tile-fallback {
+    height: 34px;
+    min-width: 24px;
+    width: 24px;
+  }
+
+  .drawn-tile {
+    margin-left: 6px;
+    padding-left: 5px;
+  }
+
+  .drawn-tile::before {
+    height: 30px;
+  }
+
+  .center-info {
+    border-radius: 8px;
+    font-size: 10px;
+    max-height: 116px;
+    min-height: var(--center-info-height);
+    overflow: hidden;
+    padding: 5px;
+    width: var(--center-info-width);
+  }
+
+  .center-info h2 {
+    font-size: 16px;
+    margin-bottom: 3px;
+  }
+
+  .center-scores {
+    gap: 2px;
+    margin: 3px 0;
+  }
+
+  .center-scores li,
+  .wall-info {
+    font-size: 9px;
+  }
+
+  .center-dora {
+    gap: 2px;
+    margin-top: 3px;
+  }
+
+  .center-dora .tile,
+  .center-dora .tile-button,
+  .center-dora .tile-image,
+  .center-dora .tile-fallback {
+    height: 23px;
+    min-width: 16px;
+    width: 16px;
+  }
+
+  .discard-area {
+    padding: 2px;
+  }
+
+  .discard-title {
+    font-size: 8px;
+    margin-bottom: 1px;
+  }
+
+  .bottom-actions {
+    bottom: 50px;
+    max-width: 92vw;
+    transform: translateX(-50%) scale(0.88);
+    transform-origin: bottom center;
+  }
+
+  .action-prompt {
+    padding: 6px;
+  }
+
+  .action-prompt .actions button {
+    font-size: 13px;
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+
+  .assist-controls {
+    font-size: 12px;
+    gap: 8px;
+  }
+
+  .settings-toggle {
+    transform: scale(0.82);
+    transform-origin: bottom right;
+  }
+
+  .exposed-row {
+    transform: scale(0.8);
+    transform-origin: bottom right;
+  }
+
+  .result-modal {
+    max-height: 92dvh;
+    overflow: auto;
+  }
+
+  .win-announcement > div {
+    font-size: 72px;
+  }
+}
