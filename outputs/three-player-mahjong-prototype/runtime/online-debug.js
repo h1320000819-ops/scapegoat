@@ -1,0 +1,3297 @@
+﻿(function () {
+  const JA_MESSAGES = {
+    actionFailed: "操作に失敗しました",
+    cause: "原因",
+    passwordRequired: "パスワードを入力してください。",
+    passwordTooShort: "パスワードは6文字以上で入力してください。",
+    displayNameRequired: "プレイヤー名を入力してください。",
+    userIdRequired: "ログインIDを入力してください。",
+    invalidLogin: "メールアドレスまたはパスワードが違います。",
+    profileNotFound: "ユーザー情報が見つかりません。",
+    selectClub: "クラブを選択してください。",
+    selectTable: "卓を選択してください。",
+    signInRequired: "先にログインしてください。",
+  };
+
+  const config = window.ANMIKA_SUPABASE_CONFIG || {};
+  const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
+  const TSUMO_LOSSLESS_3MA_LABEL = "ツモ損なし全赤三麻";
+  const RULE_LABELS = {
+    "anmika-rocket": "アンミカロケット",
+    [TSUMO_LOSSLESS_3MA_RULE_ID]: TSUMO_LOSSLESS_3MA_LABEL,
+    "normal-4ma": "ノーマル四麻",
+    "normal-3ma": "ノーマル三麻",
+    jewel: "ジュエル",
+  };
+  const state = {
+    accessToken: localStorage.getItem("anmikaAccessToken") || "",
+    refreshToken: localStorage.getItem("anmikaRefreshToken") || "",
+    user: JSON.parse(localStorage.getItem("anmikaDebugUser") || "null"),
+    clubs: [],
+    memberships: [],
+    joinRequests: [],
+    adminJoinRequests: [],
+    tables: [],
+    activeGameState: null,
+    activeGameEvents: [],
+    lastGameSyncAt: "",
+    onlineGameOpened: false,
+    autoStartingTableIds: new Set(),
+    autoOpenedPlayingTableIds: new Set(),
+    activeClubId: sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
+    activeTableId: new URLSearchParams(location.search).get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
+    searchedClub: null,
+    localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
+    pollTimer: 0,
+    clubPollTimer: 0,
+  };
+
+  const $ = (id) => {
+    const element = document.getElementById(id);
+    if (!element) throw new Error("missing element: " + id);
+    return element;
+  };
+  const has = (id) => !!document.getElementById(id);
+  const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
+  const extractClubSearchText = (input) => {
+    const raw = String(input || "").trim();
+    if (!raw) return "";
+    const codeMatch = raw.match(/C-[A-Za-z0-9]{6,20}/);
+    if (codeMatch) return codeMatch[0].toUpperCase();
+    const uuidMatch = raw.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    if (uuidMatch) return uuidMatch[0];
+    return raw.replace(/^クラブID\s*[:：]\s*/i, "").trim();
+  };
+  const selectedClubId = () => state.activeClubId || (has("clubSelect") ? $("clubSelect").value : "") || "";
+  const selectedTableId = () => state.activeTableId || (has("tableSelect") ? $("tableSelect").value : "") || new URLSearchParams(location.search).get("tableId") || "";
+  const selectedMembership = () => state.memberships.find((row) => row.clubs && row.clubs.club_id === selectedClubId());
+  const isAdmin = () => selectedMembership()?.role === "admin";
+  const escapeHtml = (value) =>
+    String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  const loadClubIconCache = () => {
+    try {
+      return JSON.parse(localStorage.getItem("anmikaClubIconCache") || "{}") || {};
+    } catch {
+      return {};
+    }
+  };
+  const saveClubIconCache = (clubId, iconUrl) => {
+    if (!clubId) return;
+    const cache = loadClubIconCache();
+    if (iconUrl) cache[clubId] = iconUrl;
+    else delete cache[clubId];
+    localStorage.setItem("anmikaClubIconCache", JSON.stringify(cache));
+  };
+  const cachedClubIcon = (clubId) => loadClubIconCache()[clubId] || "";
+  const mergeClubIcon = (club) => {
+    if (!club?.club_id) return club;
+    return { ...club, icon_url: club.icon_url || cachedClubIcon(club.club_id) || "" };
+  };
+  const leftClubCacheKey = () => `anmikaLeftClubIds:${state.user?.id || "anonymous"}`;
+  const loadLeftClubIds = () => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(leftClubCacheKey()) || "[]"));
+    } catch {
+      return new Set();
+    }
+  };
+  const saveLeftClubIds = (ids) => {
+    localStorage.setItem(leftClubCacheKey(), JSON.stringify([...ids].filter(Boolean)));
+  };
+  const markClubLeft = (clubId) => {
+    const ids = loadLeftClubIds();
+    ids.add(clubId);
+    saveLeftClubIds(ids);
+  };
+  const clearClubLeft = (clubId) => {
+    const ids = loadLeftClubIds();
+    ids.delete(clubId);
+    saveLeftClubIds(ids);
+  };
+  const isClubLeft = (clubId) => loadLeftClubIds().has(clubId);
+  const profileToUser = (profile) => ({
+    id: profile.user_id,
+    loginId: profile.login_id || profile.user_id,
+    displayName: profile.display_name || "Player",
+    iconUrl: profile.icon_url || "",
+  });
+  const uniqueMembershipRows = (rows) => {
+    const byClub = new Map();
+    (rows || []).forEach((row) => {
+      const club = row?.clubs;
+      if (!club?.club_id) return;
+      const existing = byClub.get(club.club_id);
+      if (!existing || existing.role !== "admin") byClub.set(club.club_id, row);
+      if (existing && row.role === "admin") byClub.set(club.club_id, row);
+    });
+    return [...byClub.values()];
+  };
+  const localSeatKey = (tableId) => String(tableId || "default");
+  const emptySeatRows = (tableId) =>
+    [0, 1, 2].map((seatIndex) => ({
+      table_id: tableId,
+      seat_index: seatIndex,
+      user_id: null,
+      player_type: "empty",
+      display_name: null,
+    }));
+  const parseSeatRows = (rows) => {
+    if (Array.isArray(rows)) return rows;
+    if (typeof rows === "string") {
+      try {
+        const parsed = JSON.parse(rows);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  };
+  const normalizeSeats = (rows, tableId) => {
+    const byIndex = new Map(parseSeatRows(rows).map((seat) => [Number(seat.seat_index ?? seat.seatIndex), {
+      ...seat,
+      table_id: seat.table_id ?? seat.tableId ?? tableId,
+      seat_index: Number(seat.seat_index ?? seat.seatIndex),
+      user_id: seat.user_id ?? seat.userId ?? null,
+      player_type: seat.player_type ?? seat.playerType ?? "empty",
+      display_name: seat.display_name ?? seat.displayName ?? null,
+      is_last_hand_declared: Boolean(seat.is_last_hand_declared ?? seat.isLastHandDeclared),
+    }]));
+    return emptySeatRows(tableId).map((emptySeat) => ({ ...emptySeat, ...(byIndex.get(emptySeat.seat_index) || {}) }));
+  };
+  const getLocalSeats = (tableId) => normalizeSeats(state.localSeatsByTable[localSeatKey(tableId)] || [], tableId);
+  const getKnownSeats = (tableId) => {
+    const table = state.tables.find((item) => item.table_id === tableId);
+    const tableSeats = parseSeatRows(table?.table_seats || table?.seats || table?.tableSeats);
+    if (tableSeats.length) return normalizeSeats(tableSeats, tableId);
+    return getLocalSeats(tableId);
+  };
+  const saveLocalSeats = (tableId, rows) => {
+    state.localSeatsByTable[localSeatKey(tableId)] = normalizeSeats(rows, tableId);
+    sessionStorage.setItem("anmikaOnlineDebugSeats", JSON.stringify(state.localSeatsByTable));
+  };
+  const saveLocalSeatsCache = () => {
+    sessionStorage.setItem("anmikaOnlineDebugSeats", JSON.stringify(state.localSeatsByTable || {}));
+  };
+  const clearLocalUserSeatsExcept = (tableId, seatIndex) => {
+    if (!state.user?.id) return;
+    Object.entries(state.localSeatsByTable || {}).forEach(([key, rows]) => {
+      state.localSeatsByTable[key] = normalizeSeats(rows, key).map((seat) => {
+        if (seat.user_id !== state.user.id) return seat;
+        if (String(seat.table_id || key) === String(tableId) && Number(seat.seat_index) === Number(seatIndex)) return seat;
+        return {
+          ...seat,
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        };
+      });
+    });
+    saveLocalSeatsCache();
+  };
+  const filledSeatCount = (rows) => rows.filter((seat) => seat.user_id || seat.player_type === "cpu").length;
+  const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
+  const visibleTableSeats = (table) => normalizeSeats(
+    table?.table_seats || table?.seats || table?.tableSeats || state.localSeatsByTable[localSeatKey(table?.table_id)] || [],
+    table?.table_id
+  );
+  const formatSeatName = (seat) => {
+    if (seat.player_type === "cpu") return seat.display_name || `CPU${Number(seat.seat_index) + 1}`;
+    if (seat.user_id) {
+      if (state.user?.id === seat.user_id) return state.user.displayName || "あなた";
+      return seat.display_name || `Player ${String(seat.user_id).slice(0, 8)}`;
+    }
+    return "空席";
+  };
+  const requireTableId = (tableId, actionName = "操作") => {
+    if (!tableId) throw new Error(`${actionName}に失敗しました。原因: tableId が取得できません。`);
+    return tableId;
+  };
+  const setActiveTableId = (tableId) => {
+    if (!tableId) return;
+    state.activeTableId = tableId;
+    sessionStorage.setItem("anmikaOnlineDebugActiveTableId", tableId);
+    if (!has("tableSelect")) return;
+    if (![...$("tableSelect").options].some((option) => option.value === tableId)) {
+      const option = document.createElement("option");
+      option.value = tableId;
+      option.textContent = tableId;
+      $("tableSelect").append(option);
+    }
+    $("tableSelect").value = tableId;
+  };
+  const setActiveClubId = (clubId) => {
+    if (!clubId) return;
+    state.activeClubId = clubId;
+    sessionStorage.setItem("anmikaOnlineDebugActiveClubId", clubId);
+    if (!has("clubSelect")) return;
+    if (![...$("clubSelect").options].some((option) => option.value === clubId)) {
+      const option = document.createElement("option");
+      option.value = clubId;
+      option.textContent = clubId;
+      $("clubSelect").append(option);
+    }
+    $("clubSelect").value = clubId;
+  };
+
+  const stringify = (value) => {
+    if (value instanceof Error) return value.message;
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const rawErrorText = (error) => {
+    if (!error) return "";
+    const data = error.data || {};
+    const parts = [
+      error.message,
+      error.status,
+      data.message,
+      data.code || error.code,
+      data.details || error.details,
+      data.hint || error.hint,
+      data.error_description,
+      data.error,
+    ].filter(Boolean);
+    if (parts.length) return [...new Set(parts.map(String))].join("\n");
+    return stringify(error);
+  };
+
+  const toJapaneseError = (message) => {
+    if (!message) return "詳細不明のエラーです。";
+    if (message.includes("invalid input syntax for type uuid")) return "空のIDが送信されました。クラブまたは卓を選択してから操作してください。";
+    if (message.includes("no empty seat")) return "空席がありません。";
+    if (message.includes("not club member")) return "クラブに所属していないため着席できません。";
+    if (message.includes("admin required")) return "管理者権限がありません。";
+    if (message.includes("table not found")) return "卓が見つかりません。";
+    if (message.includes("debug start")) return "デバッグ対局を開始できません。3席を埋めてから開始してください。";
+    if (message.includes("new row violates row-level security policy for table \"tables\"")) return "卓作成がDBの保護ルールにより拒否されました。patch_create_table_with_seats.sql を実行してください。";
+    if (message.includes("create_table_with_seats") && message.includes("schema cache")) return "卓作成用のDB関数が見つかりません。patch_create_table_with_seats.sql を実行してください。";
+    if (message.includes("Password should be at least") || message.includes("at least 6")) return JA_MESSAGES.passwordTooShort;
+    if (message.includes("Invalid login credentials")) return JA_MESSAGES.invalidLogin;
+    if (message.includes("User already registered")) return "このユーザーはすでに登録されています。";
+    if (message.includes("get_login_email") && message.includes("schema cache")) return "ログイン用のDB関数が見つかりません。最新版の schema.sql または該当パッチSQLを実行してください。";
+    if (message.includes("ensure_user_profile") && message.includes("schema cache")) return "ユーザー情報作成用のDB関数が見つかりません。patch_auth_profile.sql を実行してください。";
+    if (message.includes("create_club_with_owner") && message.includes("schema cache")) return "クラブ作成用のDB関数が見つかりません。patch_club_owner_membership.sql を実行してください。";
+    if (message.includes("get_my_clubs") && message.includes("schema cache")) return "アカウントに紐づくクラブ取得用のDB関数が見つかりません。patch_account_persistent_data.sql を実行してください。";
+    if (message.includes("find_club_for_join") && message.includes("schema cache")) return "クラブ検索用のDB関数が見つかりません。patch_club_search_join_rpc.sql を実行してください。";
+    if (message.includes("request_join_club_by_code") && message.includes("schema cache")) return "クラブ加入申請用のDB関数が見つかりません。patch_club_search_join_rpc.sql を実行してください。";
+    if (message.includes("ensure_online_game_for_table") && message.includes("schema cache")) return "オンライン対局開始用のDB関数が見つかりません。patch_online_game_sync_safe.sql を実行してください。";
+    if (message.includes("submit_game_action") && message.includes("schema cache")) return "オンライン対局イベント用のDB関数が見つかりません。patch_online_game_sync_safe.sql を実行してください。";
+    if (message.includes("club not found")) return "そのクラブは見つかりません。クラブID（C-XXXXXX）を確認してください。";
+    if (message.includes("shared_sit_at_table") && message.includes("schema cache")) return "共有着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
+    if (message.includes("sit_at_table") && message.includes("schema cache")) return "着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
+    if (message.includes("JWT expired") || message.includes("PGRST303")) return "ログイン期限が切れました。自動更新に失敗した場合は、いったんログアウトして再ログインしてください。";
+    if (message.includes("duplicate key") && message.includes("owner_user_id")) return "このアカウントではすでにクラブを作成済みです。加入済みクラブ一覧を更新してください。";
+    if (message.includes("login id already used") || message.includes("users_login_id_unique")) return "このログインIDはすでに使われています。別のIDを入力してください。";
+    if (message.includes("amount exceeds club point limit")) return "一度に操作できるポイントは10,000,000ポイント以下です。";
+    if (message.includes("club reserve would be negative")) return "クラブ保管ポイントが不足しています。送信でクラブ保管ポイントをマイナスにはできません。";
+    if (message.includes("member balance would be negative")) return "対象プレイヤーのポイントが不足しています。送信・回収で残高をマイナスにはできません。";
+    if (message.includes("amount must be positive")) return "ポイント数は1以上で入力してください。";
+    return message;
+  };
+
+  const getErrorText = (error) => {
+    const raw = rawErrorText(error);
+    const mapped = toJapaneseError(raw);
+    return mapped === raw ? raw : mapped + "\n\nSupabase詳細:\n" + raw;
+  };
+  const toJapaneseAuthError = toJapaneseError;
+
+  const log = (message, detail) => {
+    if (!has("logOutput")) return;
+    const extra = detail === undefined ? "" : "\n" + stringify(detail);
+    $("logOutput").textContent = new Date().toLocaleTimeString() + " " + message + extra + "\n\n" + ($("logOutput").textContent || "");
+  };
+  const uiLog = (label, detail) => {
+    console.log(`[UI] ${label}`, detail || "");
+    log(`[UI] ${label}`, detail);
+  };
+  const copyText = async (text, successMessage = "コピーしました") => {
+    if (!text) throw new Error("コピーする文字列がありません。");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.append(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    }
+    log(successMessage, text);
+  };
+  const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      if (!file) return reject(new Error("画像ファイルを選択してください。"));
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("画像の読み込みに失敗しました。"));
+      reader.readAsDataURL(file);
+    });
+  const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
+  const isLocalHostName = (hostname) => hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const isPublicOrigin = () => location.protocol === "https:" && !isLocalHostName(location.hostname);
+  const pcOrigin = () => {
+    if (location.protocol === "file:") return "http://localhost:5173";
+    return location.origin;
+  };
+  const mobileOrigin = () => {
+    if (isPublicOrigin()) return location.origin;
+    return trimTrailingSlash(config.devLanOrigin) || "http://192.168.x.x:5173";
+  };
+  const buildAppUrl = (path = "/online-debug") => {
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    return `${mobileOrigin()}${normalizedPath}`;
+  };
+  const buildTableShareUrl = (tableId) => buildAppUrl(`/table/${encodeURIComponent(tableId)}`);
+  const buildOnlineDebugReturnUrl = () => {
+    if (location.protocol === "file:") {
+      const path = String(location.pathname || "").replace(/\\/g, "/");
+      if (path.includes("/online-debug/")) return new URL("./index.html", window.location.href).href;
+      return new URL("online-debug/index.html", window.location.href).href;
+    }
+    return `${location.origin}/online-debug`;
+  };
+  const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
+  const debugTileAssetPath = (fileName) => (location.protocol === "file:" ? `../public/tiles/${fileName}` : `/tiles/${fileName}`);
+  const canLoadImage = (src) =>
+    new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(true);
+      image.onerror = () => resolve(false);
+      image.src = src;
+    });
+  const runTileImageCheck = async () => {};
+  const clearError = () => {
+    if (!has("errorBox")) return;
+    $("errorBox").textContent = "";
+    $("errorBox").classList.remove("visible");
+  };
+  const showError = (title, error) => {
+    const text = title + "\n\n" + JA_MESSAGES.cause + ":\n" + getErrorText(error);
+    $("errorBox").textContent = text;
+    $("errorBox").classList.add("visible");
+    log(text);
+  };
+  const requireConfig = () => {
+    if (!config.url || !config.anonKey) throw new Error("Supabase設定が不足しています。runtime/supabase-public-config.js を確認してください。");
+  };
+
+  const request = async (path, options = {}, retry = true) => {
+    requireConfig();
+    const url = config.url.replace(/\/$/, "") + path;
+    const headers = { apikey: config.anonKey, "Content-Type": "application/json", ...(options.headers || {}) };
+    if (options.auth !== false && state.accessToken) headers.Authorization = "Bearer " + state.accessToken;
+    const response = await fetch(url, { ...options, headers });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      const error = new Error(data?.message || response.statusText);
+      error.status = response.status;
+      error.data = data;
+      if (retry && (response.status === 401 || data?.code === "PGRST303") && state.refreshToken) {
+        await refreshSession();
+        return request(path, options, false);
+      }
+      throw error;
+    }
+    return data;
+  };
+  const rest = (path, options = {}) => request("/rest/v1" + path, options);
+  const auth = (path, options = {}) => request("/auth/v1" + path, { ...options, auth: false });
+  const CLUB_POINT_FIXED_TOTAL = 10000000;
+  const clubPointSummaryFromMembers = (members = []) => {
+    const memberTotal = members.reduce((sum, member) => sum + Number(member.point_balance || 0), 0);
+    return {
+      fixedTotal: CLUB_POINT_FIXED_TOTAL,
+      memberTotal,
+      clubReserve: CLUB_POINT_FIXED_TOTAL - memberTotal,
+    };
+  };
+  const readPointAmount = (value, label = "ポイント数") => {
+    const amount = Number(value || 0);
+    if (!Number.isFinite(amount) || !Number.isInteger(amount)) throw new Error(`${label}は整数で入力してください。`);
+    if (amount <= 0) throw new Error(`${label}は1以上で入力してください。`);
+    if (amount > CLUB_POINT_FIXED_TOTAL) throw new Error(`${label}は${CLUB_POINT_FIXED_TOTAL}ポイント以下にしてください。`);
+    return amount;
+  };
+  const loadActiveGameState = async (tableId = selectedTableId()) => {
+    if (!tableId || !state.accessToken) return null;
+    const rows = await rest(`/game_states?select=*&table_id=eq.${encodeURIComponent(tableId)}&is_active=eq.true&order=updated_at.desc&limit=1`);
+    state.activeGameState = rows[0] || null;
+    if (state.activeGameState?.game_id) {
+      state.activeGameEvents = await rest(`/game_events?select=event_id,action_type,turn_version,player_id,created_at,payload&game_id=eq.${encodeURIComponent(state.activeGameState.game_id)}&order=created_at.asc&limit=200`);
+    } else {
+      state.activeGameEvents = [];
+    }
+    state.lastGameSyncAt = new Date().toLocaleTimeString();
+    renderOnlineGamePanel();
+    renderDebug("GameState同期済み");
+    return state.activeGameState;
+  };
+  const ensureOnlineGameForTable = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "オンライン対局準備");
+    const gameState = await rest("/rpc/ensure_online_game_for_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+    const nextGameState = Array.isArray(gameState) ? gameState[0] : gameState;
+    if (!nextGameState?.game_id) {
+      throw new Error("オンライン対局を開始できませんでした。3席が埋まっているか確認してください。");
+    }
+    state.activeGameState = nextGameState;
+    const latest = await loadActiveGameState(tableId).catch((error) => {
+      log("オンラインGameStateの再取得に失敗しました。作成済みの局面で続行します。", rawErrorText(error));
+      return null;
+    });
+    return latest || state.activeGameState;
+  };
+  const submitOnlineGameAction = async (actionType, payload = {}, tableId = selectedTableId()) => {
+    const gameState = state.activeGameState || await loadActiveGameState(tableId);
+    if (!gameState?.game_id) throw new Error("オンラインGameStateがありません。先に対局を開始してください。");
+    const event = await rest("/rpc/submit_game_action", {
+      method: "POST",
+      body: JSON.stringify({
+        p_game_id: gameState.game_id,
+        p_table_id: tableId,
+        p_player_id: state.user.id,
+        p_action_type: actionType,
+        p_turn_version: gameState.version,
+        p_payload: payload,
+      }),
+    });
+    await loadActiveGameState(tableId);
+    renderOnlineGamePanel();
+    return event;
+  };
+
+  const onlineState = () => state.activeGameState?.state || {};
+  const onlinePlayers = () => Array.isArray(onlineState().players) ? onlineState().players : [];
+  const formatOnlinePlayer = (player) => {
+    if (!player) return "不明";
+    if (player.playerType === "cpu") return player.displayName || `CPU${Number(player.seatIndex) + 1}`;
+    if (player.userId === state.user?.id) return `${player.displayName || state.user?.displayName || "あなた"}（あなた）`;
+    return player.displayName || `Player ${String(player.userId || "").slice(0, 8)}`;
+  };
+  const formatOnlineAction = (action) => {
+    const player = onlinePlayers().find((item) => Number(item.seatIndex) === Number(action.seatIndex));
+    const typeLabels = {
+      draw: "ツモ",
+      discard: "打牌",
+      ron: "ロン",
+      tsumo: "ツモ和了",
+      pon: "ポン",
+      kan: "カン",
+      riichi: "リーチ",
+      skip: "スキップ",
+      flower: "華",
+      nukiDora: "抜きドラ",
+    };
+    const payload = action.payload || {};
+    const tile = payload.tileLabel || payload.tileId || payload.tile || "";
+    return `${formatOnlinePlayer(player)} ${typeLabels[action.type] || action.type}${tile ? ` ${tile}` : ""}`;
+  };
+  const renderOnlineGamePanel = () => {
+    if (!has("onlineGamePanel")) return;
+    const panel = $("onlineGamePanel");
+    const gameState = state.activeGameState;
+    const sharedState = onlineState();
+    panel.classList.toggle("open", !!gameState && state.onlineGameOpened);
+    if (!gameState) {
+      $("onlineGameBoard").innerHTML = "<p class=\"muted\">まだオンライン対局は開始されていません。</p>";
+      return;
+    }
+    const players = onlinePlayers();
+    const discards = sharedState.discards || {};
+    const actionLog = Array.isArray(sharedState.actionLog) ? sharedState.actionLog : [];
+    const currentSeat = Number(sharedState.currentTurnSeatIndex ?? 0);
+    const rows = players
+      .map((player) => {
+        const seatDiscards = Array.isArray(discards[String(player.seatIndex)]) ? discards[String(player.seatIndex)] : [];
+        const discardText = seatDiscards.map((item) => item.tileLabel || item.tileId || item.tile || "?").join(" ");
+        return `
+          <div class="online-player-row ${Number(player.seatIndex) === currentSeat ? "current" : ""}">
+            <strong>席${Number(player.seatIndex) + 1}: ${formatOnlinePlayer(player)}</strong>
+            <span>${player.playerType === "cpu" ? "CPU" : "実プレイヤー"}</span>
+            <span>河: ${discardText || "なし"}</span>
+          </div>
+        `;
+      })
+      .join("");
+    $("onlineGameBoard").innerHTML = `
+      <div class="online-state-summary">
+        <strong>gameId:</strong> ${gameState.game_id}<br>
+        <strong>version:</strong> ${gameState.version}<br>
+        <strong>phase:</strong> ${sharedState.phase || "onlinePlaying"}<br>
+        <strong>現在手番:</strong> 席${currentSeat + 1}
+      </div>
+      <div class="online-player-list">${rows}</div>
+      <h4>イベントログ</h4>
+      <ol class="online-action-log">
+        ${actionLog.slice(-30).map((action) => `<li>${formatOnlineAction(action)}</li>`).join("") || "<li>なし</li>"}
+      </ol>
+    `;
+  };
+  const openOnlineGame = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "オンライン対局開始");
+    setActiveTableId(tableId);
+    state.onlineGameOpened = true;
+    if (has("onlineGamePanel")) $("onlineGamePanel").classList.add("open");
+    startPolling();
+    renderOnlineGamePanel();
+  };
+  const sendOnlineActionFromUi = async (actionType) => {
+    const tileLabel = has("onlineTileLabel") ? $("onlineTileLabel").value.trim() : "";
+    const payload = tileLabel ? { tileLabel } : {};
+    await submitOnlineGameAction(actionType, payload);
+  };
+
+  const refreshSession = async () => {
+    if (!state.refreshToken) throw new Error("ログイン期限が切れました。再ログインしてください。");
+    const data = await auth("/token?grant_type=refresh_token", { method: "POST", body: JSON.stringify({ refresh_token: state.refreshToken }) });
+    saveSession(data, null);
+    return data;
+  };
+  const saveSession = (session, profile) => {
+    if (session?.access_token) {
+      state.accessToken = session.access_token;
+      state.refreshToken = session.refresh_token || state.refreshToken || "";
+      localStorage.setItem("anmikaAccessToken", state.accessToken);
+      localStorage.setItem("anmikaRefreshToken", state.refreshToken);
+    }
+    if (profile) {
+      state.user = profileToUser(profile);
+      localStorage.setItem("anmikaDebugUser", JSON.stringify(state.user));
+    }
+    render();
+  };
+  const requireUser = () => {
+    if (!state.user || !state.accessToken) throw new Error(JA_MESSAGES.signInRequired);
+    return state.user;
+  };
+  const randomEmail = () => crypto.randomUUID() + "@anmika.local";
+  const authRedirectUrl = () => {
+    if (location.protocol === "file:") return buildAppUrl("/online-debug/index.html");
+    return `${location.origin}/online-debug/index.html`;
+  };
+  const getProfile = async (idOrLoginId) => {
+    if (isUuid(idOrLoginId)) {
+      const rows = await rest("/users?select=*&user_id=eq." + encodeURIComponent(idOrLoginId));
+      return rows[0] || null;
+    }
+    const rows = await rest("/users?select=*&login_id=eq." + encodeURIComponent(String(idOrLoginId).toUpperCase()));
+    return rows[0] || null;
+  };
+  const getLoginEmail = async (loginId) => {
+    const data = await rest("/rpc/get_login_email", { method: "POST", body: JSON.stringify({ p_user_id: loginId }) });
+    return Array.isArray(data) ? data[0] : data;
+  };
+  const ensureProfileForAuthUser = async (authUser, displayName = "") => {
+    if (!authUser?.id) throw new Error("認証ユーザー情報を取得できませんでした。");
+    const email = authUser.email || `${authUser.id}@anmika.local`;
+    const name =
+      displayName ||
+      authUser.user_metadata?.display_name ||
+      authUser.user_metadata?.full_name ||
+      authUser.user_metadata?.name ||
+      (email.includes("@") ? email.split("@")[0] : "Player");
+    const profile = await rest("/rpc/ensure_user_profile", {
+      method: "POST",
+      body: JSON.stringify({ p_user_id: authUser.id, p_auth_email: email, p_display_name: name }),
+    });
+    return Array.isArray(profile) ? profile[0] : profile;
+  };
+  const completeOAuthRedirectIfNeeded = async () => {
+    const hash = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const accessToken = hash.get("access_token");
+    if (!accessToken) return false;
+    const session = {
+      access_token: accessToken,
+      refresh_token: hash.get("refresh_token") || "",
+    };
+    saveSession(session, null);
+    const authUser = await request("/auth/v1/user");
+    const profile = await ensureProfileForAuthUser(authUser);
+    saveSession(session, profile);
+    history.replaceState(null, "", location.pathname + location.search);
+    log("外部アカウントでログインしました。", profile);
+    await loadClubs().catch(() => {});
+    startClubPolling();
+    return true;
+  };
+  const startOAuthLogin = async (provider) => {
+    requireConfig();
+    const redirectTo = encodeURIComponent(authRedirectUrl());
+    window.location.href = `${config.url.replace(/\/$/, "")}/auth/v1/authorize?provider=${encodeURIComponent(provider)}&redirect_to=${redirectTo}`;
+  };
+
+  const signUp = async () => {
+    console.log("[Auth] create account start");
+    log("アカウント作成を開始しました。");
+    const displayName = $("displayName").value.trim();
+    const password = $("password").value;
+    if (!displayName) throw new Error(JA_MESSAGES.displayNameRequired);
+    if (!password) throw new Error(JA_MESSAGES.passwordRequired);
+    if (password.length < 6) throw new Error(JA_MESSAGES.passwordTooShort);
+    const email = has("email") ? $("email").value.trim() : "";
+    if (!email) throw new Error("メールアドレスを入力してください。");
+    try {
+      const signUpData = await auth("/signup", { method: "POST", body: JSON.stringify({ email, password, data: { display_name: displayName } }) });
+      const authUserId = signUpData.user?.id;
+      if (!signUpData.access_token || !authUserId) throw new Error("アカウント作成後の認証情報を取得できませんでした。メール確認OFF設定を確認してください。");
+      saveSession(signUpData, null);
+      const profile = await rest("/rpc/ensure_user_profile", { method: "POST", body: JSON.stringify({ p_user_id: authUserId, p_auth_email: email, p_display_name: displayName }) });
+      const nextProfile = Array.isArray(profile) ? profile[0] : profile;
+      saveSession(signUpData, nextProfile);
+      if (has("userId")) $("userId").value = nextProfile.login_id || nextProfile.user_id;
+      console.log("[Auth] create account success", nextProfile);
+      log("アカウントを作成しました", nextProfile);
+      await loadClubs().catch(() => {});
+    } catch (error) {
+      console.error("[Auth] create account failed", error);
+      log("アカウント作成に失敗しました。", rawErrorText(error));
+      throw error;
+    }
+  };
+  // DEBUG ACCOUNT START: 本番前に削除しやすいよう、このブロックと debugSignInButton だけで完結させる。
+  const createDebugAccount = async () => {
+    console.log("[Auth][Debug] create debug account start");
+    const suffix = crypto.randomUUID().slice(0, 8).toUpperCase();
+    const displayName = `デバッグ${suffix}`;
+    const email = `debug-${suffix.toLowerCase()}@anmika.local`;
+    const password = `debug-${suffix}`;
+    if (has("displayName")) $("displayName").value = displayName;
+    if (has("email")) $("email").value = email;
+    if (has("password")) $("password").value = password;
+    const signUpData = await auth("/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password, data: { display_name: displayName, is_debug_account: true } }),
+    });
+    const authUserId = signUpData.user?.id;
+    if (!signUpData.access_token || !authUserId) throw new Error("デバッグアカウント作成後の認証情報を取得できませんでした。メール確認OFF設定を確認してください。");
+    saveSession(signUpData, null);
+    const profile = await rest("/rpc/ensure_user_profile", {
+      method: "POST",
+      body: JSON.stringify({ p_user_id: authUserId, p_auth_email: email, p_display_name: displayName }),
+    });
+    const nextProfile = Array.isArray(profile) ? profile[0] : profile;
+    saveSession(signUpData, nextProfile);
+    console.log("[Auth][Debug] create debug account success", { email, password, profile: nextProfile });
+    log("デバッグアカウントを作成してログインしました。", { email, password, loginId: nextProfile?.login_id });
+    await loadClubs().catch(() => {});
+    startClubPolling();
+  };
+  // DEBUG ACCOUNT END
+  const signIn = async () => {
+    await signInWithEmail();
+  };
+  const signInWithEmail = async () => {
+    const email = has("email") ? $("email").value.trim() : "";
+    const password = $("password").value;
+    if (!email) throw new Error("メールアドレスを入力してください。");
+    if (!password) throw new Error(JA_MESSAGES.passwordRequired);
+    const session = await auth("/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
+    saveSession(session, null);
+    const authUser = session.user || await request("/auth/v1/user");
+    const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");
+    saveSession(session, profile);
+    log("メールアドレスでログインしました", state.user);
+    await loadClubs();
+    startClubPolling();
+  };
+  const signOut = async () => {
+    const token = state.accessToken;
+    clearInterval(state.pollTimer);
+    clearInterval(state.clubPollTimer);
+    if (token) {
+      await request("/auth/v1/logout", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token },
+      }).catch((error) => log("Supabaseログアウト通知に失敗しました。ローカル状態は削除します。", rawErrorText(error)));
+    }
+    Object.assign(state, { accessToken: "", refreshToken: "", user: null, clubs: [], memberships: [], tables: [] });
+    localStorage.removeItem("anmikaAccessToken");
+    localStorage.removeItem("anmikaRefreshToken");
+    localStorage.removeItem("anmikaDebugUser");
+    sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
+    sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+    document.body.dataset.screen = "auth";
+    render();
+  };
+
+  const changeLoginId = async () => {
+    const user = requireUser();
+    const newLoginId = $("newLoginId").value.trim().toUpperCase();
+    const password = $("confirmPassword").value;
+    if (!newLoginId) throw new Error("新しいログインIDを入力してください。");
+    if (!password) throw new Error("本人確認のため、現在のパスワードを入力してください。");
+    const email = await getLoginEmail(user.loginId || user.id);
+    await auth("/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
+    const profile = await rest("/rpc/change_my_login_id", { method: "POST", body: JSON.stringify({ p_new_login_id: newLoginId }) });
+    const nextProfile = Array.isArray(profile) ? profile[0] : profile;
+    saveSession({ access_token: state.accessToken, refresh_token: state.refreshToken }, nextProfile);
+    if (has("userId")) $("userId").value = nextProfile.login_id;
+    $("newLoginId").value = "";
+    $("confirmPassword").value = "";
+  };
+  const findClubForJoin = async (clubInput) => {
+    const value = extractClubSearchText(clubInput);
+    if (!value) throw new Error("クラブIDを入力してください。");
+    try {
+      const rows = await rest("/rpc/find_club_for_join", { method: "POST", body: JSON.stringify({ p_club_code_or_id: value }) });
+      const club = Array.isArray(rows) ? rows[0] : rows;
+      if (club?.club_id) return club;
+      throw new Error("そのクラブは見つかりません。入力したID: " + value);
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("find_club_for_join") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+      log("RPC検索に失敗したため、直接検索へフォールバックします。", raw);
+    }
+    if (isUuid(value)) return value;
+    const normalized = value.toUpperCase();
+    const rows = await rest("/clubs?select=club_id,club_code,name&club_code=eq." + encodeURIComponent(normalized));
+    if (!rows.length) {
+      throw new Error(
+        "クラブIDが見つかりません。入力したID: " + normalized +
+        "\n別アカウントから検索する場合は、Supabase SQL Editorで patch_club_search_join_rpc.sql を実行してください。" +
+        "\nクラブ作成者の画面に表示される C-XXXXXX 形式のクラブIDをコピーして入力してください。"
+      );
+    }
+    return rows[0];
+  };
+  const resolveClubId = async (clubInput) => {
+    const club = await findClubForJoin(clubInput);
+    return club.club_id;
+  };
+  const renderClubSearchResult = (club) => {
+    if (!has("clubSearchResult")) return;
+    if (!club) {
+      $("clubSearchResult").textContent = "クラブIDを入力して検索してください。";
+      $("clubSearchResult").classList.add("muted");
+      return;
+    }
+    const isAlreadyMember = state.clubs.some((item) => item.club_id === club.club_id);
+    const existingRequest = state.joinRequests.find((request) => request.clubs?.club_id === club.club_id || request.club_id === club.club_id);
+    const statusText = existingRequest?.status === "approved" ? "承認済み" : existingRequest?.status === "rejected" ? "拒否されました" : existingRequest?.status === "pending" ? "承認待ち" : "";
+    const actionHtml = isAlreadyMember
+      ? `<button type="button" disabled>参加済み</button>`
+      : existingRequest?.status === "pending"
+        ? `<button type="button" disabled>申請済み</button>`
+        : existingRequest?.status === "rejected"
+          ? `<button type="button" id="requestJoinFromSearchButton">再申請</button>`
+          : `<button type="button" id="requestJoinFromSearchButton">加入申請</button>`;
+    $("clubSearchResult").classList.remove("muted");
+    $("clubSearchResult").innerHTML = [
+      "<strong>見つかりました</strong>",
+      `<br>クラブ名: ${club.name || "名称未設定"}`,
+      `<br>クラブID: ${club.club_code || club.club_id}`,
+      `<br>管理者: ${club.owner_user_id || "未取得"}`,
+      statusText ? `<br>状態: ${statusText}` : "",
+      `<div class="row">${actionHtml}</div>`,
+      `<div id="joinRequestStatus" class="muted"></div>`,
+    ].join("");
+    document.getElementById("requestJoinFromSearchButton")?.addEventListener("click", () => {
+      requestJoin(club).catch((error) => showError("加入申請に失敗しました", error));
+    });
+  };
+  const searchClubForJoin = async () => {
+    const club = await findClubForJoin($("clubId").value);
+    state.searchedClub = club;
+    await loadMyJoinRequests().catch(() => {});
+    renderClubSearchResult(club);
+    log("クラブを見つけました。", { clubId: club.club_id, clubCode: club.club_code, name: club.name });
+  };
+  const loadMyJoinRequests = async () => {
+    const user = requireUser();
+    try {
+      const rows = await rest("/rpc/list_my_join_requests", { method: "POST", body: JSON.stringify({}) });
+      state.joinRequests = (rows || []).map((row) => ({
+        ...row,
+        clubs: {
+          club_id: row.club_id,
+          club_code: row.club_code,
+          name: row.club_name,
+        },
+      }));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("list_my_join_requests") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("加入申請状態RPCの取得に失敗しました。直接取得へ切り替えます。", raw);
+      }
+      try {
+        state.joinRequests = await rest("/club_join_requests?select=club_id,status,created_at,updated_at,clubs(*)&user_id=eq." + encodeURIComponent(user.id) + "&order=created_at.desc");
+      } catch (fallbackError) {
+        state.joinRequests = [];
+        log("加入申請状態の取得に失敗しました。", rawErrorText(fallbackError));
+      }
+    }
+  };
+  const fetchClubById = async (clubId) => {
+    if (!clubId) return null;
+    const rows = await rest("/clubs?select=*&club_id=eq." + encodeURIComponent(clubId) + "&limit=1");
+    return rows[0] || null;
+  };
+  const addMembershipIfMissing = (membership) => {
+    const club = membership?.clubs;
+    if (!club?.club_id) return false;
+    if (state.clubs.some((item) => item.club_id === club.club_id)) return false;
+    state.memberships.push(membership);
+    state.clubs.push(club);
+    return true;
+  };
+  const applyApprovedJoinRequestsToClubList = async () => {
+    const approved = (state.joinRequests || []).filter((request) => request.status === "approved");
+    const knownClubIds = new Set(state.clubs.map((club) => club.club_id));
+    for (const request of approved) {
+      const clubId = request.clubs?.club_id || request.club_id;
+      if (isClubLeft(clubId)) continue;
+      if (!clubId || knownClubIds.has(clubId)) continue;
+      const club = request.clubs?.club_id ? request.clubs : await fetchClubById(clubId).catch(() => null);
+      if (club?.club_id) {
+        addMembershipIfMissing({ role: "member", point_balance: 0, clubs: club });
+        knownClubIds.add(club.club_id);
+      }
+    }
+  };
+  const findMyJoinRequestForClub = async (clubId) => {
+    const user = requireUser();
+    if (!clubId) throw new Error("加入申請先のclubIdが取得できません。");
+    const rows = await rest(
+      "/club_join_requests?select=request_id,club_id,user_id,status,created_at,updated_at,applicant_display_name,applicant_login_id,club_name" +
+      "&club_id=eq." + encodeURIComponent(clubId) +
+      "&user_id=eq." + encodeURIComponent(user.id) +
+      "&order=created_at.desc&limit=1"
+    );
+    return rows[0] || null;
+  };
+  const saveJoinRequestDirectly = async (clubId, clubName = "") => {
+    const user = requireUser();
+    const body = {
+      club_id: clubId,
+      user_id: user.id,
+      status: "pending",
+      applicant_display_name: state.profile?.display_name || state.profile?.login_id || user.email || "",
+      applicant_login_id: state.profile?.login_id || "",
+      club_name: clubName || "",
+    };
+    console.log("[JoinRequest] direct insert body =", body);
+    return rest("/club_join_requests?select=request_id,club_id,user_id,status,created_at,updated_at,applicant_display_name,applicant_login_id,club_name", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(body),
+    });
+  };
+  const joinRequestSqlSetupError = () => new Error("加入申請用RPCが申請を作成できませんでした。Supabase SQL Editorで patch_join_requests_reliable.sql を実行してください。");
+  const normalizeMembershipRows = (rows = []) => rows.map((row) => {
+    if (row?.clubs) return { ...row, clubs: mergeClubIcon(row.clubs) };
+    return {
+      role: row.role || "member",
+      point_balance: row.point_balance || 0,
+      clubs: {
+        club_id: row.club_id,
+        club_code: row.club_code,
+        name: row.name,
+        icon_url: row.icon_url || cachedClubIcon(row.club_id) || "",
+        owner_user_id: row.owner_user_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      },
+    };
+  }).filter((row) => row.clubs?.club_id);
+  const loadClubs = async () => {
+    const user = requireUser();
+    const rows = [];
+    try {
+      const repairedRows = await rest("/rpc/repair_my_approved_join_memberships", { method: "POST", body: JSON.stringify({}) });
+      rows.push(...normalizeMembershipRows(repairedRows || []));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("repair_my_approved_join_memberships") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("承認済みクラブ所属の修復に失敗しました。", raw);
+      }
+    }
+    try {
+      const visibleRows = await rest("/rpc/get_my_clubs_visible", { method: "POST", body: JSON.stringify({}) });
+      rows.push(...normalizeMembershipRows(visibleRows || []));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("get_my_clubs_visible") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("加入済みクラブ可視化RPC取得に失敗しました。別経路で取得します。", raw);
+      }
+    }
+    try {
+      const persistentRows = await rest("/rpc/get_my_clubs", { method: "POST", body: JSON.stringify({}) });
+      rows.push(...(persistentRows || []).map((row) => ({
+        role: row.role,
+        point_balance: row.point_balance || 0,
+        clubs: {
+          club_id: row.club_id,
+          club_code: row.club_code,
+          name: row.name,
+          icon_url: row.icon_url || cachedClubIcon(row.club_id) || "",
+          owner_user_id: row.owner_user_id,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        },
+      })));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("get_my_clubs") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("加入済みクラブRPC取得に失敗しました。別経路で取得します。", raw);
+      }
+    }
+    try {
+      const memberRows = await rest("/club_members?select=role,point_balance,clubs(*)&user_id=eq." + encodeURIComponent(user.id));
+      rows.push(...normalizeMembershipRows(memberRows));
+    } catch (error) {
+      log("club_members基準の加入済みクラブ取得に失敗しました。", rawErrorText(error));
+    }
+    try {
+      await rest("/rpc/repair_my_owner_memberships", { method: "POST", body: JSON.stringify({}) });
+      const repairedRows = await rest("/club_members?select=role,point_balance,clubs(*)&user_id=eq." + encodeURIComponent(user.id));
+      rows.push(...normalizeMembershipRows(repairedRows));
+    } catch (error) {
+      log("作成者クラブの自動修復はスキップしました。", rawErrorText(error));
+    }
+    try {
+      const ownedClubs = await rest("/clubs?select=*&owner_user_id=eq." + encodeURIComponent(user.id) + "&order=created_at.desc");
+      rows.push(...ownedClubs.map((club) => ({ role: "admin", point_balance: 0, clubs: mergeClubIcon(club) })));
+    } catch (error) {
+      log("作成したクラブの取得に失敗しました。", rawErrorText(error));
+    }
+    const leftClubIds = loadLeftClubIds();
+    const merged = uniqueMembershipRows(rows).filter((row) => !leftClubIds.has(row.clubs?.club_id));
+    if (!merged.length && state.memberships.length) {
+      log("クラブ取得が空だったため、直前の加入済みクラブ表示を維持します。");
+      await loadMyJoinRequests().catch(() => {});
+      state.memberships = state.memberships.filter((row) => !leftClubIds.has(row.clubs?.club_id));
+      state.clubs = state.clubs.filter((club) => !leftClubIds.has(club.club_id));
+      await applyApprovedJoinRequestsToClubList().catch((error) => log("承認済み申請の反映に失敗しました。", rawErrorText(error)));
+      render();
+      return;
+    }
+    state.memberships = merged;
+    state.clubs = merged.map((row) => mergeClubIcon(row.clubs)).filter(Boolean);
+    await loadMyJoinRequests();
+    await applyApprovedJoinRequestsToClubList();
+    render();
+  };
+  const createClub = async () => {
+    let result;
+    try {
+      result = await rest("/rpc/create_club_with_owner", { method: "POST", body: JSON.stringify({ p_name: $("clubName").value.trim() || "Test Club" }) });
+    } catch (error) {
+      const text = rawErrorText(error);
+      if (!text.includes("clubs_one_owner_idx") && !text.includes("owner_user_id")) throw error;
+      await loadClubs();
+      document.body.dataset.screen = "clubs";
+      render();
+      return;
+    }
+    const club = Array.isArray(result) ? result[0] : result;
+    $("clubId").value = club.club_code || club.club_id;
+    if (club?.club_id) clearClubLeft(club.club_id);
+    await loadClubs();
+    if (club?.club_id && !state.clubs.some((item) => item.club_id === club.club_id)) {
+      state.memberships = [{ role: "admin", point_balance: 0, clubs: club }, ...state.memberships];
+      state.clubs = [club, ...state.clubs];
+    }
+    document.body.dataset.screen = "clubs";
+    render();
+  };
+  const requestJoin = async (targetClub) => {
+    const user = requireUser();
+    const input = targetClub?.club_id || extractClubSearchText($("clubId").value);
+    if (!input) throw new Error("クラブIDを入力してください。");
+    const searched = targetClub || state.searchedClub;
+    const clubIdForRequest = searched?.club_id || await resolveClubId(input);
+    console.log("[JoinRequest] submit start");
+    console.log("[JoinRequest] clubId =", clubIdForRequest);
+    console.log("[JoinRequest] applicantUserId =", user.id);
+    if (clubIdForRequest && state.clubs.some((club) => club.club_id === clubIdForRequest)) {
+      throw new Error("すでにこのクラブに参加しています。");
+    }
+    if (clubIdForRequest && state.joinRequests.some((request) => (request.clubs?.club_id === clubIdForRequest || request.club_id === clubIdForRequest) && request.status === "pending")) {
+      throw new Error("すでに加入申請済みです。");
+    }
+    const targetInput = clubIdForRequest || input;
+    if (has("joinRequestStatus")) $("joinRequestStatus").textContent = "加入申請中...";
+    try {
+      let request;
+      try {
+        request = await rest("/rpc/submit_join_request", { method: "POST", body: JSON.stringify({ p_club_code_or_id: targetInput }) });
+      } catch (newRpcError) {
+        const rawNew = rawErrorText(newRpcError);
+        if (!rawNew.includes("submit_join_request") && !rawNew.includes("schema cache") && !rawNew.includes("Could not find the function")) throw newRpcError;
+        request = await rest("/rpc/request_join_club_by_code", { method: "POST", body: JSON.stringify({ p_club_code_or_id: targetInput }) });
+      }
+      console.log("[JoinRequest] insert result =", request);
+      const rpcRows = Array.isArray(request) ? request : (request ? [request] : []);
+      let savedRequest = rpcRows[0] || await findMyJoinRequestForClub(clubIdForRequest).catch(() => null);
+      if (!savedRequest || savedRequest.status !== "pending") {
+        console.warn("[JoinRequest] RPC did not create pending request.", { request, savedRequest });
+        const existing = await findMyJoinRequestForClub(clubIdForRequest).catch(() => null);
+        if (existing?.status === "pending") {
+          savedRequest = existing;
+        } else if (existing?.status === "approved") {
+          throw new Error("すでにこのクラブに参加しています。");
+        } else {
+          throw joinRequestSqlSetupError();
+        }
+      }
+      if (!savedRequest || savedRequest.status !== "pending") {
+        throw new Error("加入申請をDBに保存できませんでした。Supabaseの club_join_requests を確認してください。");
+      }
+      if (clubIdForRequest) clearClubLeft(clubIdForRequest);
+      console.log("[JoinRequest] verified pending request =", savedRequest);
+      log("加入申請を送信しました。管理者にこのユーザーIDを伝えて承認してもらってください。", { userId: user.id, club: searched || input, request });
+      await loadMyJoinRequests().catch(() => {});
+      if (searched) renderClubSearchResult(searched);
+      if (has("joinRequestStatus")) $("joinRequestStatus").textContent = "加入申請を送信しました。管理者の承認をお待ちください。";
+      render();
+      return;
+    } catch (error) {
+      console.log("[JoinRequest] error =", error);
+      const raw = rawErrorText(error);
+      if (!raw.includes("submit_join_request") && !raw.includes("request_join_club_by_code") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+      throw joinRequestSqlSetupError();
+    }
+  };
+  const approveJoin = async () => {
+    const user = requireUser();
+    const clubId = selectedClubId();
+    const applicantUserId = $("applicantUserId").value.trim();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!applicantUserId) throw new Error("申請者ユーザーIDを入力してください。");
+    await rest("/rpc/approve_club_join_request", { method: "POST", body: JSON.stringify({ p_club_id: clubId, p_user_id: applicantUserId, p_admin_user_id: user.id }) });
+    await loadAdminJoinRequests(clubId);
+    await loadClubs();
+  };
+  const normalizeJoinRequest = (row) => {
+    const userRow = row.users || row.user_accounts || {};
+    const applicantUserId = row.user_id || row.applicant_user_id;
+    return {
+      ...row,
+      user_id: applicantUserId,
+      applicant_user_id: applicantUserId,
+      request_id: row.request_id || row.id || null,
+      request_key: row.request_id || row.id || `${row.club_id}:${applicantUserId}`,
+      users: {
+        user_id: userRow.user_id || applicantUserId,
+        display_name: userRow.display_name || row.applicant_display_name || row.display_name || "",
+        login_id: userRow.login_id || row.applicant_login_id || row.login_id || "",
+      },
+    };
+  };
+  const enrichJoinRequestsWithUsers = async (rows) => {
+    const sourceRows = Array.isArray(rows) ? rows : rows ? [rows] : [];
+    const normalized = sourceRows.map(normalizeJoinRequest);
+    const userIds = [...new Set(normalized.map((row) => row.user_id).filter(Boolean))];
+    if (!userIds.length) return normalized;
+    try {
+      const filter = `(${userIds.map(encodeURIComponent).join(",")})`;
+      const users = await rest("/users?select=user_id,display_name,login_id&user_id=in." + filter);
+      const byId = new Map((users || []).map((user) => [user.user_id, user]));
+      return normalized.map((row) => ({
+        ...row,
+        users: {
+          ...row.users,
+          ...(byId.get(row.user_id) || {}),
+        },
+      }));
+    } catch (usersError) {
+      log("加入申請者情報の取得に失敗しました。申請IDだけで表示します。", rawErrorText(usersError));
+      return normalized;
+    }
+  };
+  const loadAdminJoinRequests = async (clubId = selectedClubId()) => {
+    if (!clubId) return [];
+    console.log("[JoinRequest] list start");
+    console.log("[JoinRequest] adminUserId =", state.user?.id);
+    console.log("[JoinRequest] clubId =", clubId);
+    let rows = [];
+    try {
+      rows = await rest("/rpc/list_join_requests_for_club", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("list_join_requests_for_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("加入申請RPC取得に失敗しました。直接取得へ切り替えます。", raw);
+      }
+      try {
+        rows = await rest("/club_join_requests?select=club_id,user_id,status,created_at&club_id=eq." + encodeURIComponent(clubId) + "&status=eq.pending&order=created_at.asc");
+      } catch (error) {
+        state.adminJoinRequests = [];
+        console.log("[JoinRequest] fetched count =", 0);
+        console.log("[JoinRequest] requests =", []);
+        console.log("[JoinRequest] error =", error);
+        log("加入申請一覧の取得に失敗しました。", rawErrorText(error));
+        return [];
+      }
+    }
+    try {
+      const enriched = await enrichJoinRequestsWithUsers(rows);
+      state.adminJoinRequests = enriched;
+      console.log("[JoinRequest] fetched count =", enriched.length);
+      console.log("[JoinRequest] requests =", enriched);
+      return enriched;
+    } catch (error) {
+      state.adminJoinRequests = [];
+      console.log("[JoinRequest] fetched count =", 0);
+      console.log("[JoinRequest] requests =", []);
+      console.log("[JoinRequest] error =", error);
+      log("加入申請一覧の取得に失敗しました。", rawErrorText(error));
+      return [];
+    }
+  };
+  const approveJoinRequest = async (request) => {
+    const user = requireUser();
+    const applicantUserId = request.user_id || request.applicant_user_id;
+    console.log("[JoinRequest] approve start");
+    console.log("[JoinRequest] requestId =", request.request_id);
+    console.log("[JoinRequest] applicantUserId =", applicantUserId);
+    console.log("[JoinRequest] clubId =", request.club_id);
+    try {
+      if (request.request_id) {
+        const result = await rest("/rpc/approve_join_request", { method: "POST", body: JSON.stringify({ p_request_id: request.request_id }) });
+        console.log("[JoinRequest] result =", result);
+      } else {
+        throw new Error("request_id unavailable");
+      }
+    } catch (newRpcError) {
+      const raw = rawErrorText(newRpcError);
+      if (!raw.includes("approve_join_request") && !raw.includes("request_id unavailable") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        console.log("[JoinRequest] error =", newRpcError);
+        throw newRpcError;
+      }
+      const result = await rest("/rpc/approve_club_join_request", { method: "POST", body: JSON.stringify({ p_club_id: request.club_id, p_user_id: applicantUserId, p_admin_user_id: user.id }) });
+      console.log("[JoinRequest] result =", result);
+    }
+    try {
+      const members = await rest("/rpc/list_club_members_for_admin", { method: "POST", body: JSON.stringify({ p_club_id: request.club_id }) });
+      const found = (members || []).some((member) => member.user_id === applicantUserId);
+      if (!found) log("承認後のメンバー確認ではまだ見つかりませんでした。数秒後の再取得で反映される場合があります。", { clubId: request.club_id, userId: applicantUserId });
+    } catch (verifyError) {
+      log("承認後のメンバー確認をスキップしました。", rawErrorText(verifyError));
+    }
+    state.adminJoinRequests = state.adminJoinRequests.filter((row) => (row.user_id || row.applicant_user_id) !== applicantUserId || row.club_id !== request.club_id);
+    await loadAdminJoinRequests(request.club_id).catch((error) => log("承認後の加入申請一覧再取得に失敗しました。", rawErrorText(error)));
+    log("加入申請を承認しました。", { clubId: request.club_id, userId: applicantUserId });
+  };
+  const rejectJoinRequest = async (request) => {
+    const user = requireUser();
+    const applicantUserId = request.user_id || request.applicant_user_id;
+    console.log("[JoinRequest] reject start");
+    console.log("[JoinRequest] requestId =", request.request_id);
+    console.log("[JoinRequest] applicantUserId =", applicantUserId);
+    console.log("[JoinRequest] clubId =", request.club_id);
+    try {
+      if (request.request_id) {
+        const result = await rest("/rpc/reject_join_request", { method: "POST", body: JSON.stringify({ p_request_id: request.request_id }) });
+        console.log("[JoinRequest] result =", result);
+      } else {
+        throw new Error("request_id unavailable");
+      }
+    } catch (newRpcError) {
+      const raw = rawErrorText(newRpcError);
+      if (!raw.includes("reject_join_request") && !raw.includes("request_id unavailable") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        console.log("[JoinRequest] error =", newRpcError);
+        throw newRpcError;
+      }
+      const result = await rest("/rpc/reject_club_join_request", { method: "POST", body: JSON.stringify({ p_club_id: request.club_id, p_user_id: applicantUserId, p_admin_user_id: user.id }) });
+      console.log("[JoinRequest] result =", result);
+    }
+    state.adminJoinRequests = state.adminJoinRequests.filter((row) => (row.user_id || row.applicant_user_id) !== applicantUserId || row.club_id !== request.club_id);
+    await loadAdminJoinRequests(request.club_id).catch((error) => log("拒否後の加入申請一覧再取得に失敗しました。", rawErrorText(error)));
+    log("加入申請を拒否しました。", { clubId: request.club_id, userId: applicantUserId });
+  };
+
+  const openClubHome = async (clubId) => {
+    setActiveClubId(clubId);
+    document.body.dataset.screen = "club-home";
+    ["settingsDrawer", "tableCreatePanel", "tableRoomPanel"].forEach((id) => has(id) && $(id).classList.remove("open"));
+    render();
+    await loadTables();
+    await loadClubStats();
+    if (isAdmin()) {
+      await loadAdminJoinRequests(clubId);
+      render();
+    }
+  };
+  const isCurrentUserSeatedAt = (seats) => {
+    if (!state.user?.id) return false;
+    return seats.some((seat) => seat.user_id === state.user.id);
+  };
+  const openPlayingTableIfNeeded = async (table, seatRows = null) => {
+    if (!table?.table_id || table.status !== "playing") return;
+    const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
+    if (!isCurrentUserSeatedAt(seats)) return;
+    if (state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
+    setActiveTableId(table.table_id);
+    const onlineGameState = { game_id: `socket-game-${table.table_id}`, version: 0 };
+    state.autoOpenedPlayingTableIds.add(table.table_id);
+    state.onlineGameOpened = true;
+    startLocalDebugMahjong(table.table_id, seats, onlineGameState);
+  };
+  const getOrCreateTableRecord = (tableId, seats = null) => {
+    let table = state.tables.find((item) => item?.table_id === tableId);
+    if (!table) {
+      table = {
+        table_id: tableId,
+        club_id: selectedClubId(),
+        status: "waiting",
+        is_debug: hasCpuSeat(seats || []),
+        table_seats: seats || [],
+      };
+      state.tables = [table, ...state.tables];
+    } else if (seats) {
+      table.table_seats = seats;
+    }
+    return table;
+  };
+  const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
+    tableId = requireTableId(tableId, "自動対局開始");
+    const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
+    if (filledSeatCount(seats) < 3) return null;
+
+    const table = getOrCreateTableRecord(tableId, seats);
+    const isDebugTable = hasCpuSeat(seats) || table.is_debug;
+
+    if (table.status === "playing") {
+      table.is_debug = isDebugTable;
+      await openPlayingTableIfNeeded(table, seats);
+      return state.activeGameState;
+    }
+
+    if (state.autoStartingTableIds.has(tableId)) return null;
+    state.autoStartingTableIds.add(tableId);
+    try {
+      const onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
+      table.status = "playing";
+      table.is_debug = isDebugTable;
+      table.table_seats = seats;
+      log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
+      await openPlayingTableIfNeeded(table, seats);
+      return onlineGameState;
+    } catch (error) {
+      showError("自動対局開始に失敗しました", error);
+      log("3人着席後の自動開始に失敗しました。", rawErrorText(error));
+      return null;
+    } finally {
+      state.autoStartingTableIds.delete(tableId);
+    }
+  };
+  const maybeAutoStartTables = async () => {
+    for (const table of state.tables || []) {
+      if (!table?.table_id || table.status === "ended") continue;
+      const seats = visibleTableSeats(table);
+      if (filledSeatCount(seats) < 3) continue;
+      await tryAutoStartTableFromSeats(table.table_id, seats).catch((error) => log("対局画面の自動表示に失敗しました。", rawErrorText(error)));
+    }
+  };
+  const scheduleAutoStartFromVisibleTables = () => {
+    if (state.autoStartRenderScheduled) return;
+    state.autoStartRenderScheduled = true;
+    window.setTimeout(async () => {
+      state.autoStartRenderScheduled = false;
+      for (const table of state.tables || []) {
+        if (!table?.table_id || table.status === "ended") continue;
+        const seats = visibleTableSeats(table);
+        if (filledSeatCount(seats) < 3) continue;
+        console.log("[AutoStart] visible table filled", { tableId: table.table_id, seats });
+        await tryAutoStartTableFromSeats(table.table_id, seats).catch((error) => {
+          console.error("[AutoStart] failed", error);
+          showError("自動対局開始に失敗しました", error);
+        });
+      }
+    }, 0);
+  };
+  const hasActiveGameForTable = async (tableId) => {
+    if (!tableId) return false;
+    const rows = await rest(
+      "/game_states?select=game_id&table_id=eq." + encodeURIComponent(tableId) + "&is_active=eq.true&limit=1"
+    ).catch((error) => {
+      log("進行中局面の確認に失敗しました。", rawErrorText(error));
+      return [{ unknown: true }];
+    });
+    return Array.isArray(rows) && rows.length > 0;
+  };
+  const markTableWaitingIfNoActiveGame = async (tableId) => {
+    if (!tableId) return false;
+    try {
+      const result = await rest("/rpc/mark_table_waiting_if_no_active_game", {
+        method: "POST",
+        body: JSON.stringify({ p_table_id: tableId }),
+      });
+      const updated = Array.isArray(result) ? result[0] : result;
+      if (!updated?.table_id) return false;
+      state.tables = state.tables.map((item) =>
+        item.table_id === tableId ? { ...item, ...(updated || {}), status: "waiting" } : item
+      );
+      return true;
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (raw.includes("table is currently playing")) return false;
+      if (!raw.includes("mark_table_waiting_if_no_active_game") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("卓状態の復帰RPCに失敗したため直接確認します。", raw);
+      }
+    }
+    if (await hasActiveGameForTable(tableId)) return false;
+    await rest("/games?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.playing", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
+    }).catch(() => {});
+    await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+      method: "PATCH",
+      body: JSON.stringify({ status: "waiting" }),
+    });
+    state.tables = state.tables.map((item) =>
+      item.table_id === tableId ? { ...item, status: "waiting" } : item
+    );
+    return true;
+  };
+  const syncTablePlayingStatus = async (tableId) => {
+    if (!tableId) return null;
+    try {
+      const result = await rest("/rpc/sync_table_playing_status", {
+        method: "POST",
+        body: JSON.stringify({ p_table_id: tableId }),
+      });
+      const updated = Array.isArray(result) ? result[0] : result;
+      if (!updated?.table_id) return null;
+      state.tables = state.tables.map((item) => (item.table_id === tableId ? { ...item, ...updated } : item));
+      return updated;
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("sync_table_playing_status") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("卓状態の自動同期RPCに失敗しました。", raw);
+      }
+      if (await hasActiveGameForTable(tableId)) {
+        state.tables = state.tables.map((item) => (item.table_id === tableId ? { ...item, status: "playing" } : item));
+        return state.tables.find((item) => item.table_id === tableId) || null;
+      }
+      await markTableWaitingIfNoActiveGame(tableId).catch(() => false);
+      return state.tables.find((item) => item.table_id === tableId) || null;
+    }
+  };
+  const reconcileTablePlayingStatuses = async () => {
+    for (const table of state.tables || []) {
+      if (!table?.table_id || table.status === "ended") continue;
+      await syncTablePlayingStatus(table.table_id).catch((error) =>
+        log("卓状態の自動同期に失敗しました。", rawErrorText(error))
+      );
+    }
+  };
+  const loadTables = async () => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    try {
+      state.tables = await rest("/rpc/shared_list_tables_for_club", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("shared_list_tables_for_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+      state.tables = await rest("/tables?select=*,table_seats(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+    }
+    await reconcileTablePlayingStatuses();
+    await maybeAutoStartTables();
+    render();
+  };
+  const createTable = async () => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) throw new Error("卓作成権限がありません。クラブ管理者のみ卓を作成できます。");
+    ensureTsumoLossless3maCreateUi();
+    const ruleId = selectedCreateRuleId();
+    const defaultName = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻卓" : "アンミカロケット卓";
+    const tableName = $("tableName").value.trim() || `${defaultName} ${String(state.tables.length + 1).padStart(3, "0")}`;
+    const rpcBody = {
+        p_club_id: clubId,
+        p_name: tableName,
+        p_rule_id: ruleId,
+        p_point_rate: has("pointRate") ? Number($("pointRate").value || 1) : 1,
+        p_rake_percent: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 0 : (has("rakePercent") ? Number($("rakePercent").value || 5) : 5),
+        p_rule_config: readCreateTableRuleConfig(),
+    };
+    let created;
+    try {
+      created = await rest("/rpc/create_table_with_seats", {
+        method: "POST",
+        body: JSON.stringify(rpcBody),
+      });
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("create_table_with_seats") && !raw.includes("schema cache") && !raw.includes("p_rule_config")) throw error;
+      if (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
+        throw new Error("ツモ損なし全赤三麻の卓設定保存に必要なDB関数が未更新です。Supabase SQL Editorで patch_tsumo_lossless_3ma_rule.sql を実行してください。");
+      }
+      created = await rest("/rpc/create_table_with_seats", {
+        method: "POST",
+        body: JSON.stringify({
+          p_club_id: rpcBody.p_club_id,
+          p_name: rpcBody.p_name,
+          p_rule_id: rpcBody.p_rule_id,
+          p_point_rate: rpcBody.p_point_rate,
+          p_rake_percent: rpcBody.p_rake_percent,
+        }),
+      });
+    }
+    const table = Array.isArray(created) ? created[0] : created;
+    if (!table?.table_id) throw new Error("卓作成に成功しましたが、tableId を取得できませんでした。卓一覧を更新してください。");
+    await loadTables();
+    setActiveTableId(table.table_id);
+    if (has("tableCreatePanel")) $("tableCreatePanel").classList.remove("open");
+    render();
+    startPolling();
+  };
+  const renderSeatRows = (rows, tableId = selectedTableId()) => {
+    const normalized = normalizeSeats(rows, tableId);
+    $("seatsOutput").textContent = JSON.stringify(normalized, null, 2);
+    if (!has("seatRows")) return normalized;
+    $("seatRows").innerHTML = "";
+    normalized.forEach((seat) => {
+      const row = document.createElement("div");
+      row.className = "seat-row";
+      row.innerHTML = `<span>席${Number(seat.seat_index) + 1}</span><strong>${formatSeatName(seat)}</strong><span>${seat.player_type || "empty"}</span>`;
+      $("seatRows").append(row);
+    });
+    return normalized;
+  };
+  const loadSeats = async () => {
+    const tableId = selectedTableId();
+    if (!tableId) throw new Error(JA_MESSAGES.selectTable);
+    try {
+      let rows;
+      try {
+        rows = await rest("/rpc/shared_get_table_seats", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("shared_get_table_seats") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        rows = await rest("/table_seats?select=*&table_id=eq." + encodeURIComponent(tableId) + "&order=seat_index.asc");
+      }
+      const normalizedFromDb = normalizeSeats(rows, tableId);
+      renderSeatRows(normalizedFromDb, tableId);
+      saveLocalSeats(tableId, normalizedFromDb);
+      renderDebug();
+      await tryAutoStartTableFromSeats(tableId, normalizedFromDb).catch((error) => log("席取得後の自動開始判定に失敗しました。", rawErrorText(error)));
+      return normalizedFromDb;
+    } catch (error) {
+      const rows = getLocalSeats(tableId);
+      renderSeatRows(rows, tableId);
+      log("DBの席取得に失敗したため、ローカルデバッグ席を表示しました。", rawErrorText(error));
+      renderDebug();
+      await tryAutoStartTableFromSeats(tableId, rows).catch((startError) => log("ローカル席での自動開始判定に失敗しました。", rawErrorText(startError)));
+      return rows;
+    }
+  };
+  const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
+    tableId = requireTableId(tableId, "着席");
+    setActiveTableId(tableId);
+    try {
+      try {
+        await rest("/rpc/shared_sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId, p_seat_index: Number.isInteger(seatIndex) ? Number(seatIndex) : null }) });
+      } catch (sharedError) {
+        const raw = rawErrorText(sharedError);
+        if (!raw.includes("shared_sit_at_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
+        try {
+          await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId, p_seat_index: seatIndex }) });
+        } catch (seatRpcError) {
+          if (seatIndex === undefined) throw seatRpcError;
+          await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+        }
+      }
+      await loadTables();
+      await loadSeats();
+      return;
+    } catch (error) {
+      log("DB着席に失敗したため、ローカルデバッグ着席に切り替えました。", rawErrorText(error));
+      const rows = getKnownSeats(tableId);
+      const target = Number.isInteger(seatIndex)
+        ? rows.find((seat) => Number(seat.seat_index) === Number(seatIndex))
+        : rows.find((seat) => !seat.user_id && seat.player_type !== "cpu") || rows.find((seat) => seat.player_type === "cpu") || rows.find((seat) => seat.user_id === state.user?.id);
+      if (!target) throw new Error("着席に失敗しました。原因: 指定された席が見つかりません。");
+      if (target.user_id && target.user_id !== state.user?.id && target.player_type !== "cpu") throw new Error("着席に失敗しました。原因: この席はすでに埋まっています。");
+      clearLocalUserSeatsExcept(tableId, target.seat_index);
+      target.user_id = requireUser().id;
+      target.player_type = "human";
+      target.display_name = requireUser().displayName || "あなた";
+      saveLocalSeats(tableId, rows);
+      renderSeatRows(rows, tableId);
+      await loadTables().catch(() => render());
+    }
+  };
+  const leave = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "退席");
+    setActiveTableId(tableId);
+    try {
+      await rest("/rpc/leave_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      await loadTables();
+      await loadSeats().catch(() => {});
+    } catch (error) {
+      log("DB退席に失敗したため、ローカル席状態を更新しました。", rawErrorText(error));
+      const rows = getKnownSeats(tableId).map((seat) =>
+        seat.user_id === state.user?.id
+          ? { ...seat, user_id: null, player_type: "empty", display_name: null, is_last_hand_declared: false }
+          : seat
+      );
+      saveLocalSeats(tableId, rows);
+      renderSeatRows(rows, tableId);
+      await loadTables().catch(() => render());
+    }
+  };
+  const addCpu = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "CPU追加");
+    setActiveTableId(tableId);
+    try {
+      try {
+        await rest("/rpc/shared_add_debug_cpu_to_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      } catch (sharedError) {
+        const raw = rawErrorText(sharedError);
+        if (!raw.includes("shared_add_debug_cpu_to_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
+        await rest("/rpc/add_debug_cpu_to_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      }
+      await loadTables();
+      await loadSeats();
+      return;
+    } catch (error) {
+      log("DBのCPU追加に失敗したため、ローカルデバッグCPUを追加しました。", rawErrorText(error));
+      const rows = getKnownSeats(tableId);
+      const target = rows.find((seat) => !seat.user_id && seat.player_type !== "cpu");
+      if (!target) throw new Error("CPU追加に失敗しました。原因: 空席がありません。");
+      const cpuNumber = rows.filter((seat) => seat.player_type === "cpu").length + 1;
+      target.user_id = null;
+      target.player_type = "cpu";
+      target.display_name = `CPU${cpuNumber}`;
+      saveLocalSeats(tableId, rows);
+      renderSeatRows(rows, tableId);
+      render();
+    }
+  };
+  const removeCpu = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "CPU削除");
+    setActiveTableId(tableId);
+    try {
+      try {
+        await rest("/rpc/shared_remove_debug_cpu_from_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      } catch (sharedError) {
+        const raw = rawErrorText(sharedError);
+        if (!raw.includes("shared_remove_debug_cpu_from_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
+        await rest("/rpc/remove_debug_cpu_from_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      }
+      await loadTables();
+      await loadSeats();
+      return;
+    } catch (error) {
+      log("DBのCPU削除に失敗したため、ローカルデバッグCPUを削除しました。", rawErrorText(error));
+      const rows = getKnownSeats(tableId);
+      const target = [...rows].reverse().find((seat) => seat.player_type === "cpu");
+      if (!target) throw new Error("CPU削除に失敗しました。原因: CPU席がありません。");
+      target.user_id = null;
+      target.player_type = "empty";
+      target.display_name = null;
+      saveLocalSeats(tableId, rows);
+      renderSeatRows(rows, tableId);
+      render();
+    }
+  };
+  const deleteTable = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "卓削除");
+    if (!isAdmin()) throw new Error("卓削除権限がありません。クラブ管理者のみ削除できます。");
+    const syncedTable = await syncTablePlayingStatus(tableId).catch(() => null);
+    const table = syncedTable || state.tables.find((item) => item.table_id === tableId);
+    const tableName = table?.name || "この卓";
+    const statusNote = table?.status === "playing" ? "\nこの卓が対局中表示の場合、対局状態も中断して削除します。" : "";
+    if (!window.confirm(`${tableName} を削除しますか？\n牌譜や履歴は削除しません。${statusNote}`)) return;
+    setActiveTableId(tableId);
+    try {
+      try {
+        const deleteResult = await rest("/rpc/delete_table_for_admin", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+        if (deleteResult && deleteResult.ok === false) {
+          throw new Error(deleteResult.message || "卓が見つからない、または削除権限がありません。");
+        }
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("delete_table_for_admin") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        try {
+          await rest("/rpc/delete_table_if_not_started", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+        } catch (legacyRpcError) {
+          const legacyRaw = rawErrorText(legacyRpcError);
+          if (
+            !legacyRaw.includes("delete_table_if_not_started") &&
+            !legacyRaw.includes("schema cache") &&
+            !legacyRaw.includes("Could not find the function") &&
+            !legacyRaw.includes("table already started") &&
+            !legacyRaw.includes("table is currently playing")
+          ) throw legacyRpcError;
+          await rest("/table_waiting_list?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" }).catch(() => {});
+          await rest("/table_seats?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" }).catch(() => {});
+          await rest("/game_events?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" }).catch(() => {});
+          await rest("/game_states?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" }).catch(() => {});
+          await rest("/games?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" }).catch(() => {});
+          await rest("/tables?table_id=eq." + encodeURIComponent(tableId), { method: "DELETE" });
+        }
+      }
+      if (state.activeTableId === tableId) setActiveTableId("");
+      state.tables = state.tables.filter((item) => item.table_id !== tableId);
+      delete state.localSeatsByTable[localSeatKey(tableId)];
+      saveLocalSeatsCache();
+      await loadTables();
+    } catch (error) {
+      const stillExists = await rest("/tables?select=table_id&table_id=eq." + encodeURIComponent(tableId))
+        .then((rows) => Array.isArray(rows) && rows.length > 0)
+        .catch(() => true);
+      if (!stillExists) {
+        if (state.activeTableId === tableId) setActiveTableId("");
+        state.tables = state.tables.filter((item) => item.table_id !== tableId);
+        delete state.localSeatsByTable[localSeatKey(tableId)];
+        saveLocalSeatsCache();
+        render();
+        log("卓を削除しました。", { tableId });
+        return;
+      }
+      throw new Error(`卓削除に失敗しました。原因: ${toJapaneseAuthError(rawErrorText(error))}`);
+    }
+  };
+  const leaveClub = async (clubId) => {
+    const user = requireUser();
+    if (!clubId) throw new Error("脱退するクラブを選択できませんでした。");
+    const club = state.clubs.find((item) => item.club_id === clubId);
+    const membership = state.memberships.find((row) => row.clubs?.club_id === clubId);
+    if (membership?.role === "admin") throw new Error("管理者のクラブからは脱退できません。先に管理者を変更してください。");
+    const clubName = club?.name || "このクラブ";
+    if (!window.confirm(`${clubName} から本当に脱退しますか？`)) return;
+    markClubLeft(clubId);
+    state.memberships = state.memberships.filter((row) => row.clubs?.club_id !== clubId);
+    state.clubs = state.clubs.filter((item) => item.club_id !== clubId);
+    state.joinRequests = state.joinRequests.filter((request) => (request.clubs?.club_id || request.club_id) !== clubId);
+    render();
+    try {
+      try {
+        const leaveResult = await rest("/rpc/leave_club", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+        if (leaveResult && leaveResult.ok === false) {
+          throw new Error(leaveResult.message || "クラブ脱退に失敗しました。");
+        }
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("leave_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        const clubTables = await rest("/tables?select=table_id&club_id=eq." + encodeURIComponent(clubId)).catch(() => []);
+        for (const row of clubTables || []) {
+          if (!row.table_id) continue;
+          await rest("/table_waiting_list?table_id=eq." + encodeURIComponent(row.table_id) + "&user_id=eq." + encodeURIComponent(user.id), { method: "DELETE" }).catch(() => {});
+          await rest("/table_seats?table_id=eq." + encodeURIComponent(row.table_id) + "&user_id=eq." + encodeURIComponent(user.id), { method: "DELETE" }).catch(() => {});
+        }
+        await rest("/club_members?club_id=eq." + encodeURIComponent(clubId) + "&user_id=eq." + encodeURIComponent(user.id), { method: "DELETE" });
+      }
+      await rest(
+        "/club_join_requests?club_id=eq." + encodeURIComponent(clubId) + "&user_id=eq." + encodeURIComponent(user.id),
+        { method: "PATCH", body: JSON.stringify({ status: "rejected", updated_at: new Date().toISOString() }) }
+      ).catch(() => {});
+      if (selectedClubId() === clubId) {
+        setActiveClubId("");
+        state.tables = [];
+        if (has("tableCards")) $("tableCards").innerHTML = "";
+      }
+      await loadClubs();
+      document.body.dataset.screen = "clubs";
+      render();
+    } catch (error) {
+      throw new Error(`クラブ脱退に失敗しました。原因: ${toJapaneseAuthError(rawErrorText(error))}`);
+    }
+  };
+  const updateClubName = async (clubId, name) => {
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) throw new Error("クラブ設定を変更できるのは管理者だけです。");
+    const nextName = String(name || "").trim();
+    if (!nextName) throw new Error("クラブ名を入力してください。");
+    try {
+      try {
+        await rest("/rpc/update_club_name", {
+          method: "POST",
+          body: JSON.stringify({ p_club_id: clubId, p_name: nextName }),
+        });
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("update_club_name") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        await rest("/clubs?club_id=eq." + encodeURIComponent(clubId), {
+          method: "PATCH",
+          body: JSON.stringify({ name: nextName, updated_at: new Date().toISOString() }),
+        });
+      }
+      state.clubs = state.clubs.map((club) => (club.club_id === clubId ? { ...club, name: nextName } : club));
+      state.memberships = state.memberships.map((row) =>
+        row.clubs?.club_id === clubId ? { ...row, clubs: { ...row.clubs, name: nextName } } : row
+      );
+      await loadClubs().catch(() => {});
+      render();
+      log("クラブ名を変更しました。", { clubId, name: nextName });
+    } catch (error) {
+      throw new Error(`クラブ名変更に失敗しました。原因: ${toJapaneseAuthError(rawErrorText(error))}`);
+    }
+  };
+  const updateUserIcon = async (file) => {
+    const user = requireUser();
+    const iconUrl = await fileToDataUrl(file);
+    try {
+      let latestProfile = null;
+      try {
+        const result = await rest("/rpc/update_my_icon", {
+          method: "POST",
+          body: JSON.stringify({ p_icon_url: iconUrl }),
+        });
+        const profile = Array.isArray(result) ? result[0] : result;
+        if (profile?.user_id) latestProfile = profile;
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("update_my_icon") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        await rest("/users?user_id=eq." + encodeURIComponent(user.id), {
+          method: "PATCH",
+          body: JSON.stringify({ icon_url: iconUrl, updated_at: new Date().toISOString() }),
+        });
+      }
+      latestProfile = latestProfile || await getProfile(user.id).catch(() => null);
+      state.user = latestProfile?.user_id ? profileToUser(latestProfile) : { ...state.user, iconUrl };
+      localStorage.setItem("anmikaDebugUser", JSON.stringify(state.user));
+      await loadClubs().catch(() => {});
+      render();
+      log("アカウントアイコンを変更しました。");
+    } catch (error) {
+      throw new Error(`アイコン変更に失敗しました。原因: ${toJapaneseAuthError(rawErrorText(error))}`);
+    }
+  };
+  const updateDisplayName = async (displayName) => {
+    const user = requireUser();
+    const nextName = String(displayName || "").trim();
+    if (!nextName) throw new Error("名前を入力してください。");
+    console.log("[Account] update display name start", { userId: user.id, displayName: nextName });
+    await request("/auth/v1/user", {
+      method: "PUT",
+      body: JSON.stringify({ data: { display_name: nextName } }),
+    }).catch((error) => log("Supabase Authの名前更新に失敗しました。プロフィール側は更新します。", rawErrorText(error)));
+    let profile = null;
+    try {
+      const result = await rest("/rpc/update_my_display_name", {
+        method: "POST",
+        body: JSON.stringify({ p_display_name: nextName }),
+      });
+      profile = Array.isArray(result) ? result[0] : result;
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("update_my_display_name") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+      await rest("/users?user_id=eq." + encodeURIComponent(user.id), {
+        method: "PATCH",
+        body: JSON.stringify({ display_name: nextName, updated_at: new Date().toISOString() }),
+      });
+    }
+    profile = profile?.user_id ? profile : await getProfile(user.id);
+    if (profile?.display_name !== nextName) {
+      throw new Error("名前変更用のDB関数が未適用です。Supabase SQL Editorで supabase/patch_account_display_name_rpc.sql を実行してください。");
+    }
+    saveSession({ access_token: state.accessToken, refresh_token: state.refreshToken }, profile);
+    await loadClubs().catch(() => {});
+    log("名前を変更しました。", profile);
+    console.log("[Account] update display name success", profile);
+    render();
+    return profile;
+  };
+  const updateEmailAddress = async (email) => {
+    const user = requireUser();
+    const nextEmail = String(email || "").trim();
+    if (!nextEmail) throw new Error("メールアドレスを入力してください。");
+    await request("/auth/v1/user", {
+      method: "PUT",
+      body: JSON.stringify({ email: nextEmail }),
+    });
+    await rest("/users?user_id=eq." + encodeURIComponent(user.id), {
+      method: "PATCH",
+      body: JSON.stringify({ auth_email: nextEmail, updated_at: new Date().toISOString() }),
+    }).catch((error) => log("プロフィール側メール更新に失敗しました。Auth側の変更は送信済みです。", rawErrorText(error)));
+    const profile = await getProfile(user.id).catch(() => state.profile);
+    saveSession({ access_token: state.accessToken, refresh_token: state.refreshToken }, profile);
+    log("メールアドレス変更を送信しました。確認メールが必要な設定の場合は、メール内のリンクを開いてください。");
+    render();
+    return profile;
+  };
+  const updatePassword = async (password) => {
+    const nextPassword = String(password || "");
+    if (!nextPassword) throw new Error("新しいパスワードを入力してください。");
+    if (nextPassword.length < 6) throw new Error(JA_MESSAGES.passwordTooShort);
+    await request("/auth/v1/user", {
+      method: "PUT",
+      body: JSON.stringify({ password: nextPassword }),
+    });
+    log("パスワードを変更しました。");
+  };
+  const updateClubIcon = async (clubId, file) => {
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) throw new Error("クラブアイコンを変更できるのは管理者だけです。");
+    const iconUrl = await fileToDataUrl(file);
+    let savedIconUrl = iconUrl;
+    try {
+      try {
+        const result = await rest("/rpc/update_club_icon", {
+          method: "POST",
+          body: JSON.stringify({ p_club_id: clubId, p_icon_url: iconUrl }),
+        });
+        const updatedClub = Array.isArray(result) ? result[0] : result;
+        if (!updatedClub?.club_id && !updatedClub?.icon_url) throw new Error("クラブアイコンの保存結果を取得できませんでした。");
+        savedIconUrl = updatedClub.icon_url || iconUrl;
+      } catch (rpcError) {
+        const raw = rawErrorText(rpcError);
+        if (!raw.includes("update_club_icon") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+        await rest("/clubs?club_id=eq." + encodeURIComponent(clubId), {
+          method: "PATCH",
+          body: JSON.stringify({ icon_url: iconUrl, updated_at: new Date().toISOString() }),
+        });
+      }
+      const latestClub = await fetchClubById(clubId).catch(() => null);
+      savedIconUrl = latestClub?.icon_url || savedIconUrl;
+      saveClubIconCache(clubId, savedIconUrl);
+      state.clubs = state.clubs.map((club) => (club.club_id === clubId ? { ...club, ...(latestClub || {}), icon_url: savedIconUrl } : club));
+      state.memberships = state.memberships.map((row) =>
+        row.clubs?.club_id === clubId ? { ...row, clubs: { ...row.clubs, ...(latestClub || {}), icon_url: savedIconUrl } } : row
+      );
+      await loadClubs().catch(() => {});
+      render();
+      log("クラブアイコンを変更しました。");
+    } catch (error) {
+      throw new Error(`クラブアイコン変更に失敗しました。原因: ${toJapaneseAuthError(rawErrorText(error))}`);
+    }
+  };
+  const setSeatLastHand = async (tableId, isLastHand) => {
+    tableId = requireTableId(tableId, "ラス半切替");
+    setActiveTableId(tableId);
+    await rest("/rpc/shared_set_last_hand", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId, p_is_last_hand: Boolean(isLastHand) }),
+    });
+    await loadTables();
+    if (selectedTableId() === tableId) await loadSeats();
+    log(isLastHand ? "ラス半を入れました。" : "ラス半を解除しました。", { tableId });
+  };
+  const getGameServerUrl = () => {
+    if (window.location.protocol === "file:") return "http://127.0.0.1:8787";
+    return window.location.origin;
+  };
+  const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null) => {
+    const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId);
+    if (filledSeatCount(rows) < 3) {
+      throw new Error("3席が埋まっていません。CPUを追加するか、プレイヤーが着席してください。");
+    }
+    const table = state.tables.find((item) => item.table_id === tableId) || {};
+    const tableRuleConfig = parseRuleConfig(table.rule_config);
+    const localTableId = `online-debug-${tableId}`;
+    const currentUser = requireUser();
+    const localUsers = JSON.parse(localStorage.getItem("anmikaRocket.users") || "[]");
+    const humanUser = {
+      id: currentUser.id,
+      displayName: currentUser.displayName || "プレイヤー1",
+      createdAt: Date.now(),
+      ownedClubIds: [],
+      joinedClubIds: [],
+    };
+    const remoteUsers = rows
+      .filter((seat) => seat.player_type !== "cpu" && seat.user_id && seat.user_id !== currentUser.id)
+      .map((seat) => ({
+        id: seat.user_id,
+        displayName: seat.display_name || `Player ${String(seat.user_id).slice(0, 8)}`,
+        createdAt: Date.now(),
+        ownedClubIds: [],
+        joinedClubIds: [],
+      }));
+    const launchUsers = [humanUser, ...remoteUsers];
+    const nextUsers = [...launchUsers, ...localUsers.filter((user) => !launchUsers.some((launchUser) => launchUser.id === user.id))];
+    const seats = rows.map((seat, index) => {
+      const isOwnHumanSeat = seat.player_type !== "cpu" && seat.user_id === currentUser.id;
+      const isRealPlayerSeat = seat.player_type !== "cpu" && seat.user_id;
+      return {
+        seatIndex: index,
+        playerId: isRealPlayerSeat ? seat.user_id : `cpu${index}`,
+        playerType: seat.player_type === "cpu" ? "cpu" : isOwnHumanSeat ? "human" : "remote",
+        isOccupied: true,
+        isReady: true,
+        isLastHandDeclared: Boolean(seat.is_last_hand_declared),
+      };
+    });
+    const localTable = {
+      id: localTableId,
+      sourceTableId: tableId,
+      clubId: selectedClubId() || "online-debug-club",
+      name: table.name || "オンラインデバッグ卓",
+      ruleId: table.rule_id || "anmika-rocket",
+      gameType: table.rule_id || "anmika-rocket",
+      pointRate: Number(table.point_rate || 1),
+      rakePercent: 0,
+      ruleConfig: table.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID ? tableRuleConfig : {
+        rocket19Enabled: Boolean(tableRuleConfig.rocket19Enabled),
+        baibaEnabled: Boolean(tableRuleConfig.baibaEnabled),
+        otokogiEnabled: tableRuleConfig.otokogiEnabled !== false,
+        feverRiichiEnabled: Boolean(tableRuleConfig.feverRiichiEnabled),
+        turquoise5pCount: Number(tableRuleConfig.turquoise5pCount ?? 0),
+      },
+      createdBy: currentUser.id,
+      seats,
+      waitingList: [],
+      status: "playing",
+      isDebug: hasCpuSeat(rows),
+      createdAt: Date.now(),
+    };
+    const storedTables = JSON.parse(localStorage.getItem("anmikaRocket.tables") || "[]");
+    const nextTables = [localTable, ...storedTables.filter((item) => item.id !== localTableId)];
+    localStorage.setItem("anmikaRocket.users", JSON.stringify(nextUsers));
+    localStorage.setItem("anmikaRocket.currentUserId", currentUser.id);
+    localStorage.setItem("anmikaRocket.currentUser", JSON.stringify(humanUser));
+    localStorage.setItem("anmikaRocket.tables", JSON.stringify(nextTables));
+    if (selectedClubId()) localStorage.setItem(DEBUG_RETURN_CLUB_KEY, selectedClubId());
+    const onlineSync = {
+      enabled: true,
+      transport: "socketio",
+      tableId,
+      localTableId,
+      gameId: onlineGameState?.game_id || `socket-game-${tableId}`,
+      version: onlineGameState?.version ?? 0,
+      userId: currentUser.id,
+      supabaseUrl: config.url,
+      anonKey: config.anonKey,
+      accessToken: state.accessToken,
+      socketUrl: getGameServerUrl(),
+      returnUrl: buildOnlineDebugReturnUrl(),
+    };
+    localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
+    window.name = JSON.stringify({
+      type: "anmika-debug-table-launch",
+      table: localTable,
+      users: nextUsers,
+      currentUser: humanUser,
+      onlineSync,
+    });
+    log("デバッグ対局を開始します。", localTable);
+    const tableHash = `#/table/${encodeURIComponent(localTableId)}`;
+    const targetUrl =
+      window.location.protocol === "file:"
+        ? new URL(`../index.html${tableHash}`, window.location.href).href
+        : `${window.location.origin}/${tableHash}`;
+    window.location.href = targetUrl;
+  };
+  const startDebugGame = async (tableId = selectedTableId()) => {
+    tableId = requireTableId(tableId, "デバッグ対局開始");
+    setActiveTableId(tableId);
+    let rows = [];
+    let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
+    try {
+      try {
+        await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      } catch (sharedError) {
+        const raw = rawErrorText(sharedError);
+        if (!raw.includes("shared_start_debug_table_game") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
+        await rest("/rpc/start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      }
+      rows = await loadSeats();
+      await loadTables();
+    } catch (error) {
+      log("DBのデバッグ対局開始に失敗しました。", rawErrorText(error));
+      throw error;
+    }
+    state.onlineGameOpened = true;
+    if (has("onlineGamePanel")) $("onlineGamePanel").classList.add("open");
+    renderOnlineGamePanel();
+    log("Socket.IO対局を開始します。局面はNode.jsゲームサーバーのメモリで同期します。", onlineGameState);
+    startLocalDebugMahjong(tableId, rows, onlineGameState);
+  };
+  const copyTableUrl = async () => {
+    const text = $("tableUrl").textContent;
+    if (!text || text === "なし") return;
+    await copyText(text, "卓URLをコピーしました");
+  };
+  const isMissingClubRakeLogsTableError = (error) => {
+    const raw = rawErrorText(error);
+    return raw.includes("club_rake_logs") && (raw.includes("schema cache") || raw.includes("Could not find the table") || raw.includes("PGRST205"));
+  };
+  const clubRakeLogsMissingMessage = "レーキ履歴テーブルがまだSupabaseに作成されていません。\nsupabase/patch_club_rake_logs.sql を実行してください。";
+  const restOptionalClubRakeLogs = async (path) => {
+    try {
+      return await rest(path);
+    } catch (error) {
+      if (isMissingClubRakeLogsTableError(error)) {
+        log(clubRakeLogsMissingMessage, rawErrorText(error));
+        return null;
+      }
+      throw error;
+    }
+  };
+  const loadClubMembersForView = async (clubId) => {
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    try {
+      const rows = await rest("/rpc/list_club_members_for_admin", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+      return (rows || []).map((member) => ({
+        ...member,
+        users: {
+          user_id: member.user_id,
+          display_name: member.display_name,
+          login_id: member.login_id,
+          icon_url: member.icon_url || "",
+        },
+      }));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("list_club_members_for_admin") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+      return rest("/club_members?select=role,point_balance,joined_at,users(user_id,display_name,login_id,icon_url)&club_id=eq." + encodeURIComponent(clubId) + "&order=joined_at.asc");
+    }
+  };
+  const loadClubStats = async () => {
+    const clubId = selectedClubId();
+    if (!clubId || !has("clubDetails")) return;
+    const members = await loadClubMembersForView(clubId);
+    const selectedClub = state.clubs.find((club) => club.club_id === clubId);
+    const pointSummary = clubPointSummaryFromMembers(members);
+    const adminCount = members.filter((member) => member.role === "admin").length;
+    let totalRake = "管理者のみ";
+    if (isAdmin()) {
+      const rows = await restOptionalClubRakeLogs("/club_rake_logs?select=amount,rake_amount&club_id=eq." + encodeURIComponent(clubId));
+      totalRake = rows ? String(rows.reduce((sum, row) => sum + Number(row.rake_amount || row.amount || 0), 0)) : "未作成";
+    }
+    $("clubDetails").innerHTML = [
+      `<strong>クラブID:</strong> ${selectedClub?.club_code || clubId}`,
+      `<br><strong>内部ID:</strong> ${clubId}`,
+      `<br><strong>あなたの権限:</strong> ${isAdmin() ? "管理者" : "メンバー"}`,
+      `<br><strong>会員数:</strong> ${members.length}`,
+      `<br><strong>管理者数:</strong> ${adminCount}`,
+      `<br><strong>クラブポイント固定総量:</strong> ${pointSummary.fixedTotal}`,
+      `<br><strong>クラブ保管ポイント:</strong> ${pointSummary.clubReserve}`,
+      `<br><strong>メンバー保有ポイント合計:</strong> ${pointSummary.memberTotal}`,
+      `<br><strong>累積レーキ:</strong> ${totalRake}`,
+    ].join("");
+    document.body.dataset.role = isAdmin() ? "admin" : "member";
+    renderDebug();
+  };
+  const loadRake = async () => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) {
+      $("rakeSummary").textContent = "権限がありません。";
+      $("rakeHistory").textContent = "";
+      return;
+    }
+    const rows = await restOptionalClubRakeLogs("/club_rake_logs?select=*,users(display_name,user_id),tables(name,table_id)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+    if (!rows) {
+      $("rakeSummary").textContent = "レーキ履歴: 未作成";
+      $("rakeHistory").textContent = clubRakeLogsMissingMessage;
+      return;
+    }
+    const total = rows.reduce((sum, row) => sum + Number(row.rake_amount || row.amount || 0), 0);
+    $("rakeSummary").textContent = "レーキ総額: " + total;
+    $("rakeHistory").textContent = JSON.stringify(rows, null, 2);
+  };
+  const ensureTsumoLossless3maCreateUi = () => {
+    if (!has("ruleId")) return;
+    const ruleSelect = $("ruleId");
+    if (![...ruleSelect.options].some((option) => option.value === TSUMO_LOSSLESS_3MA_RULE_ID)) {
+      const option = document.createElement("option");
+      option.value = TSUMO_LOSSLESS_3MA_RULE_ID;
+      option.textContent = TSUMO_LOSSLESS_3MA_LABEL;
+      const normal3ma = [...ruleSelect.options].find((item) => item.value === "normal-3ma");
+      ruleSelect.insertBefore(option, normal3ma || null);
+    }
+    const anmikaAnchor = has("turquoise5pCount") ? $("turquoise5pCount").closest(".row") : null;
+    if (!has("tsumoLossless3maSettings") && anmikaAnchor) {
+      anmikaAnchor.insertAdjacentHTML("afterend", `
+        <section id="tsumoLossless3maSettings" hidden>
+          <h4>ツモ損なし全赤三麻 詳細ルール</h4>
+          <div class="row">
+            <label>5p・5sの内訳
+              <select id="threeMaFiveComposition">
+                <option value="red3blue1">赤赤赤青</option>
+                <option value="red4">赤赤赤赤</option>
+                <option value="red2blue2">赤赤青青</option>
+                <option value="blackBlackRedRed">黒黒赤赤</option>
+              </select>
+            </label>
+            <label>華牌の構成
+              <select id="threeMaFlowerComposition">
+                <option value="red3blue1">赤赤赤青</option>
+                <option value="red4">赤赤赤赤</option>
+                <option value="red2blue2">赤赤青青</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label>開始時レーキ: <span id="threeMaEntryRakeValue">5.0</span>pt
+              <input id="threeMaEntryRake" type="range" min="0.1" max="10" step="0.1" value="5.0" />
+            </label>
+            <label>ウマ
+              <select id="threeMaUma">
+                <option value="20-0--20">20-0-▲20</option>
+                <option value="30-0--30">30-0-▲30</option>
+                <option value="20-10--30">20-10-▲30</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label>祝儀価値
+              <select id="threeMaChipValue">
+                <option value="2000">2000点</option>
+                <option value="5000" selected>5000点</option>
+                <option value="10000">10000点</option>
+              </select>
+            </label>
+            <label><input id="threeMaNorthNukiDora" type="checkbox" /> 北を抜きドラにする</label>
+          </div>
+        </section>
+      `);
+      if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
+    }
+    if (has("threeMaFiveComposition")) {
+      const selected = $("threeMaFiveComposition").value || "red3blue1";
+      $("threeMaFiveComposition").innerHTML = [
+        ["red3blue1", "赤赤赤青"],
+        ["red4", "赤赤赤赤"],
+        ["red2blue2", "赤赤青青"],
+        ["blackBlackRedRed", "黒黒赤赤"],
+      ].map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+      $("threeMaFiveComposition").value = ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(selected) ? selected : "red3blue1";
+    }
+    if (has("threeMaFlowerComposition")) {
+      const selected = $("threeMaFlowerComposition").value || "red3blue1";
+      $("threeMaFlowerComposition").innerHTML = [
+        ["red3blue1", "赤赤赤青"],
+        ["red4", "赤赤赤赤"],
+        ["red2blue2", "赤赤青青"],
+      ].map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+      $("threeMaFlowerComposition").value = ["red3blue1", "red4", "red2blue2"].includes(selected) ? selected : "red3blue1";
+    }
+  };
+  const selectedCreateRuleId = () => (has("ruleId") ? $("ruleId").value : "anmika-rocket");
+  const isTsumoLossless3maSelected = () => selectedCreateRuleId() === TSUMO_LOSSLESS_3MA_RULE_ID;
+  const readAnmikaRuleConfig = () => ({
+    rocket19Enabled: has("rocket19Enabled") ? $("rocket19Enabled").checked : false,
+    baibaEnabled: has("baibaEnabled") ? $("baibaEnabled").checked : false,
+    otokogiEnabled: has("otokogiEnabled") ? $("otokogiEnabled").checked : true,
+    feverRiichiEnabled: has("feverRiichiEnabled") ? $("feverRiichiEnabled").checked : false,
+    turquoise5pCount: has("turquoise5pCount") ? Number($("turquoise5pCount").value || 0) : 0,
+  });
+  const readTsumoLossless3maRuleConfig = () => ({
+    fiveTileComposition: has("threeMaFiveComposition") ? $("threeMaFiveComposition").value : "red3blue1",
+    flowerComposition: has("threeMaFlowerComposition") ? $("threeMaFlowerComposition").value : "red3blue1",
+    entryRakePoints: has("threeMaEntryRake") ? Number($("threeMaEntryRake").value || 5) : 5,
+    pointRateUnit: "per1000",
+    northNukiDoraEnabled: has("threeMaNorthNukiDora") ? $("threeMaNorthNukiDora").checked : false,
+    umaType: has("threeMaUma") ? $("threeMaUma").value : "20-0--20",
+    chipValuePoints: has("threeMaChipValue") ? Number($("threeMaChipValue").value || 5000) : 5000,
+    startingScore: 35000,
+    rounds: ["east1", "east2", "east3", "south1", "south2", "south3"],
+    noTsumoLoss: true,
+    settlementTiming: "hanchan",
+    disabledSpecialRules: ["otokogi", "rocket19", "feverRiichi"],
+  });
+  const readCreateTableRuleConfig = () => (
+    isTsumoLossless3maSelected() ? readTsumoLossless3maRuleConfig() : readAnmikaRuleConfig()
+  );
+  const parseRuleConfig = (value) => {
+    if (!value) return {};
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return {};
+      }
+    }
+    return value;
+  };
+  const formatRuleSummary = (table) => {
+    const ruleId = table.rule_id || "anmika-rocket";
+    const configValue = parseRuleConfig(table.rule_config);
+    if (ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID) {
+      const onOff = (value) => value ? "ON" : "OFF";
+      return [
+        `レート: 1点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
+        `レーキ: ${table.is_debug ? "無効" : (table.rake_percent ?? 0) + "%"}`,
+        `1・9牌ロケット ${onOff(Boolean(configValue.rocket19Enabled))}`,
+        `倍場 ${onOff(Boolean(configValue.baibaEnabled))}`,
+        `フィーバーリーチ ${onOff(Boolean(configValue.feverRiichiEnabled))}`,
+        `男気ルール ${onOff(configValue.otokogiEnabled !== false)}`,
+        `ターコイズ5p ${Number(configValue.turquoise5pCount ?? 0)}枚`,
+      ].join(" / ");
+    }
+    const entryRake = Number(table.entry_rake_points ?? configValue.entryRakePoints ?? 5).toFixed(1);
+    const chip = Number(configValue.chipValuePoints || 5000).toLocaleString();
+    const umaLabel = String(configValue.umaType || "20-0--20").replace("--", "-▲");
+    return [
+      `レート: 1000点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
+      `開始時レーキ: ${entryRake}pt`,
+      `祝儀: ${chip}点相当`,
+      `ウマ: ${umaLabel}`,
+    ].join(" / ");
+  };
+  const updateRangeLabels = () => {
+    ensureTsumoLossless3maCreateUi();
+    const tsumoLossless3ma = isTsumoLossless3maSelected();
+    const anmikaRow = has("turquoise5pCount") ? $("turquoise5pCount").closest(".row") : null;
+    if (anmikaRow) {
+      anmikaRow.hidden = tsumoLossless3ma;
+      anmikaRow.style.display = tsumoLossless3ma ? "none" : "";
+      if (anmikaRow.previousElementSibling?.tagName === "H4") anmikaRow.previousElementSibling.hidden = tsumoLossless3ma;
+      if (anmikaRow.previousElementSibling?.tagName === "H4") anmikaRow.previousElementSibling.style.display = tsumoLossless3ma ? "none" : "";
+    }
+    ["rocket19Enabled", "baibaEnabled", "otokogiEnabled", "feverRiichiEnabled", "turquoise5pCount"].forEach((id) => {
+      if (!has(id)) return;
+      const wrapper = $(id).closest("label");
+      if (!wrapper) return;
+      wrapper.hidden = tsumoLossless3ma;
+      wrapper.style.display = tsumoLossless3ma ? "none" : "";
+    });
+    if (has("tsumoLossless3maSettings")) $("tsumoLossless3maSettings").hidden = !tsumoLossless3ma;
+    if (has("tsumoLossless3maSettings")) $("tsumoLossless3maSettings").style.display = tsumoLossless3ma ? "" : "none";
+    if (has("rakePercent")) {
+      const rakeLabel = $("rakePercent").closest("label");
+      if (rakeLabel) {
+        rakeLabel.hidden = tsumoLossless3ma;
+        rakeLabel.style.display = tsumoLossless3ma ? "none" : "";
+      }
+    }
+    if (has("pointRate")) {
+      const pointRateLabel = $("pointRate").closest("label");
+      if (pointRateLabel?.childNodes?.length) {
+        pointRateLabel.childNodes[0].textContent = tsumoLossless3ma ? "レート: 1000点 = " : "レート: 1点 = ";
+      }
+    }
+    if (has("pointRateValue") && has("pointRate")) $("pointRateValue").textContent = Number($("pointRate").value || 1).toFixed(1);
+    if (has("rakePercentValue") && has("rakePercent")) $("rakePercentValue").textContent = Number($("rakePercent").value || 0).toFixed(1);
+    if (has("threeMaEntryRakeValue") && has("threeMaEntryRake")) $("threeMaEntryRakeValue").textContent = Number($("threeMaEntryRake").value || 5).toFixed(1);
+  };
+  const toggleSettings = async () => {
+    if (!has("settingsDrawer")) return;
+    uiLog("gear clicked");
+    const drawer = $("settingsDrawer");
+    drawer.classList.toggle("open");
+    drawer.style.display = drawer.classList.contains("open") ? "grid" : "";
+    if (drawer.classList.contains("open")) await loadClubStats().catch(() => {});
+  };
+  const renderClubPointsPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    const members = await loadClubMembersForView(clubId);
+    const pointSummary = clubPointSummaryFromMembers(members);
+    const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
+    body.innerHTML = `
+      <p class="muted">${isAdmin() ? "管理者用: クラブ保管ポイントの送信・回収ができます。" : "自分のポイント確認と他ユーザーへの送信ができます。"}</p>
+      <div class="card">
+        <div class="point-reserve">
+          <span class="muted">クラブ側の保有ポイント</span>
+          <strong>${pointSummary.clubReserve} pt</strong>
+        </div>
+        <span>クラブポイント固定総量: ${pointSummary.fixedTotal} pt</span><br>
+        <span>メンバー保有ポイント合計: ${pointSummary.memberTotal} pt</span><br>
+        <span class="muted">送る・回収では支払う側がマイナスになる操作はできません。ゲーム結果によるマイナスとは別扱いです。</span>
+      </div>
+      <div id="settingsPointUserRows" class="point-user-list"></div>
+    `;
+    const container = document.getElementById("settingsPointUserRows");
+    visibleMembers.forEach((member) => {
+      const userId = member.users?.user_id || "";
+      const name = member.users?.display_name || userId || "Player";
+      const row = document.createElement("div");
+      row.className = "point-user-row";
+      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+      row.querySelector('[data-action="send"]').addEventListener("click", async () => {
+        try {
+          const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
+          if (isAdmin() && pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+          const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
+          if (!isAdmin() && Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
+          await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
+            method: "POST",
+            body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
+          });
+          await renderClubPointsPage(body);
+        } catch (error) {
+          showError("ポイント送信に失敗しました", error);
+        }
+      });
+      const collectButton = row.querySelector('[data-action="collect"]');
+      if (collectButton) {
+        collectButton.addEventListener("click", async () => {
+          try {
+            const amount = readPointAmount(prompt(`${name}から回収するポイント数`, "100"), "回収ポイント");
+            if (Number(member.point_balance || 0) < amount) throw new Error("対象プレイヤーのポイントが不足しています。回収で残高をマイナスにはできません。");
+            await rest("/rpc/admin_collect_club_points", {
+              method: "POST",
+              body: JSON.stringify({ p_club_id: clubId, p_from_user_id: userId, p_amount: amount }),
+            });
+            await renderClubPointsPage(body);
+          } catch (error) {
+            showError("ポイント回収に失敗しました", error);
+          }
+        });
+      }
+      container.append(row);
+    });
+  };
+  const pointReasonLabel = (reason) => {
+    const labels = {
+      game_settlement: "対局精算",
+      game_win: "対局収入",
+      game_loss: "対局支払い",
+      rake: "レーキ",
+      rake_payment: "レーキ",
+      tip: "祝儀",
+      fly_bonus: "飛び賞",
+    };
+    return labels[reason] || reason || "対局収支";
+  };
+  const isGamePointReason = (reason) => {
+    const value = String(reason || "").toLowerCase();
+    if (["admin_grant", "admin_collect", "user_transfer"].includes(value)) return false;
+    return (
+      value.includes("game") ||
+      value.includes("settlement") ||
+      value.includes("rake") ||
+      value.includes("tip") ||
+      value.includes("bonus") ||
+      value.includes("mahjong") ||
+      value === "対局精算" ||
+      value === "レーキ" ||
+      value === "祝儀" ||
+      value === "飛び賞"
+    );
+  };
+  const renderPointHistoryChart = (series) => {
+    const width = 720;
+    const height = 280;
+    const pad = { left: 58, right: 24, top: 22, bottom: 44 };
+    const values = [0, ...series.map((item) => item.cumulative)];
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
+    const range = Math.max(1, maxValue - minValue);
+    const chartWidth = width - pad.left - pad.right;
+    const chartHeight = height - pad.top - pad.bottom;
+    const xFor = (index) => pad.left + (series.length <= 1 ? chartWidth / 2 : (chartWidth * index) / (series.length - 1));
+    const yFor = (value) => pad.top + chartHeight - ((value - minValue) / range) * chartHeight;
+    const zeroY = yFor(0);
+    const points = series.map((item, index) => `${xFor(index).toFixed(1)},${yFor(item.cumulative).toFixed(1)}`).join(" ");
+    const circles = series
+      .map((item, index) => `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(item.cumulative).toFixed(1)}" r="4"><title>${escapeHtml(item.dateLabel)} ${item.amount >= 0 ? "+" : ""}${item.amount}pt / 累計 ${item.cumulative}pt</title></circle>`)
+      .join("");
+    return `
+      <svg class="point-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="ゲーム収支の折れ線グラフ">
+        <rect x="0" y="0" width="${width}" height="${height}" rx="12" fill="rgba(255,255,255,.06)"></rect>
+        <line x1="${pad.left}" y1="${zeroY.toFixed(1)}" x2="${width - pad.right}" y2="${zeroY.toFixed(1)}" stroke="rgba(255,255,255,.35)" stroke-dasharray="5 5"></line>
+        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,.35)"></line>
+        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,.35)"></line>
+        <text x="10" y="${yFor(maxValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${maxValue}pt</text>
+        <text x="10" y="${yFor(minValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${minValue}pt</text>
+        <text x="${pad.left}" y="${height - 14}" fill="rgba(255,255,255,.7)" font-size="13">${escapeHtml(series[0]?.dateLabel || "")}</text>
+        <text x="${width - pad.right}" y="${height - 14}" fill="rgba(255,255,255,.7)" font-size="13" text-anchor="end">${escapeHtml(series[series.length - 1]?.dateLabel || "")}</text>
+        <polyline points="${points}" fill="none" stroke="#56d8ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        <g fill="#ffffff" stroke="#56d8ff" stroke-width="2">${circles}</g>
+      </svg>
+    `;
+  };
+  const renderPointHistoryPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    try {
+      const user = requireUser();
+      let rows;
+      try {
+        rows = await rest("/rpc/get_my_club_point_history", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+      } catch (error) {
+        const raw = rawErrorText(error);
+        if (!raw.includes("get_my_club_point_history") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+        rows = await rest("/club_points?select=*&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.asc&limit=500");
+      }
+      const gameRows = (rows || [])
+        .filter((row) => {
+          const rowUserId = row.user_id || row.userId || row.actor_user_id || row.actorUserId;
+          const isMine = !rowUserId || rowUserId === user.id;
+          return isMine && (isGamePointReason(row.reason) || Boolean(row.game_id || row.gameId));
+        })
+        .sort((a, b) => new Date(a.created_at || a.createdAt || 0).getTime() - new Date(b.created_at || b.createdAt || 0).getTime());
+      if (!gameRows.length) {
+        body.innerHTML = `
+          <section class="card">
+            <h4>ゲーム収支グラフ</h4>
+            <p class="muted">ゲーム由来のポイント収支はまだありません。</p>
+            <p class="muted">管理者の送る・回収、ユーザー間送信はこの画面では集計しません。</p>
+          </section>`;
+        return;
+      }
+      let cumulative = 0;
+      const series = gameRows.map((row) => {
+        const amount = Number(row.amount || 0);
+        cumulative += amount;
+        const createdAt = row.created_at || row.createdAt || Date.now();
+        return {
+          amount,
+          cumulative,
+          reason: row.reason,
+          dateLabel: new Date(createdAt).toLocaleDateString(),
+          dateTimeLabel: new Date(createdAt).toLocaleString(),
+        };
+      });
+      body.innerHTML = `
+        <section class="card">
+          <h4>ゲーム収支グラフ</h4>
+          <p class="muted">自分の対局精算・レーキ・祝儀など、ゲーム上で発生したポイントだけを累積表示しています。</p>
+          <p class="muted">管理者の送る・回収、ユーザー間送信は除外しています。</p>
+          <div class="point-summary">
+            <strong>累計収支: ${cumulative >= 0 ? "+" : ""}${cumulative} pt</strong>
+            <span>対象件数: ${series.length}件</span>
+          </div>
+          ${renderPointHistoryChart(series)}
+        </section>
+        <section class="card">
+          <h4>対象履歴</h4>
+          ${series
+            .slice()
+            .reverse()
+            .map((row) => `
+              <div class="table-seat-line">
+                <span>${escapeHtml(row.dateTimeLabel)}</span>
+                <strong>${row.amount >= 0 ? "+" : ""}${row.amount} pt</strong>
+                <span>${escapeHtml(pointReasonLabel(row.reason))}</span>
+                <span class="muted">累計 ${row.cumulative >= 0 ? "+" : ""}${row.cumulative} pt</span>
+              </div>`)
+            .join("")}
+        </section>`;
+    } catch (error) {
+      body.innerHTML = `<p class="muted">ポイント履歴テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
+    }
+  };
+  const renderReplayListPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    try {
+      let rows;
+      try {
+        rows = await rest("/rpc/get_my_club_replays", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+      } catch (error) {
+        const raw = rawErrorText(error);
+        if (!raw.includes("get_my_club_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+        rows = await rest("/replays?select=*&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc&limit=30");
+      }
+      if (!rows.length) {
+        body.innerHTML = `<p class="muted">牌譜はまだありません。</p>`;
+        return;
+      }
+      body.innerHTML = rows
+        .map((row) => {
+          const replayId = row.replay_id || row.id;
+          return `<div class="table-seat-line"><strong>${new Date(row.created_at || Date.now()).toLocaleString()}</strong><span>${row.table_name || row.table_id || "卓"}</span><button type="button" data-replay-id="${replayId}">再生</button></div>`;
+        })
+        .join("");
+      body.querySelectorAll("[data-replay-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          window.location.href = `${window.location.origin}/replay/${encodeURIComponent(button.dataset.replayId)}`;
+        });
+      });
+    } catch (error) {
+      body.innerHTML = `<p class="muted">牌譜テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
+    }
+  };
+  const renderJoinRequestsPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) {
+      body.innerHTML = `<p class="muted">権限がありません。クラブ管理者だけが加入申請を確認できます。</p>`;
+      return;
+    }
+    const rows = await loadAdminJoinRequests(clubId);
+    const managementHeader = `
+      <div class="primary-actions">
+        <button type="button" disabled>加入申請一覧</button>
+        <button type="button" class="secondary" id="openClubMembersButton">メンバー管理</button>
+        <button type="button" class="secondary" id="openClubSettingsButton">クラブ設定</button>
+      </div>
+      <h4>加入申請一覧</h4>
+      <p class="muted">現在のclubId: ${clubId}<br>取得した申請数: <span id="joinRequestCountDebug">${rows.length}</span></p>
+    `;
+    if (!rows.length) {
+      body.innerHTML = `${managementHeader}<p class="muted">現在、加入申請はありません。</p>`;
+      document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+      document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+      return;
+    }
+    body.innerHTML = `${managementHeader}<div id="joinRequestRows" class="point-user-list"></div>`;
+    document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    const container = document.getElementById("joinRequestRows");
+    rows.forEach((request) => {
+      const name = request.users?.display_name || request.user_id;
+      const loginId = request.users?.login_id || String(request.user_id || "").slice(0, 8);
+      const row = document.createElement("div");
+      row.className = "point-user-row";
+      row.innerHTML = `
+        <strong>${name}</strong>
+        <span>ID: ${loginId}</span>
+        <span>申請日時: ${new Date(request.created_at || Date.now()).toLocaleString()}</span>
+        <button type="button" data-action="approve">承認</button>
+        <button type="button" data-action="reject" class="secondary">拒否</button>
+      `;
+      row.querySelector('[data-action="approve"]').addEventListener("click", async () => {
+        const buttons = row.querySelectorAll("button");
+        try {
+          uiLog("approve clicked", { requestId: request.request_id, userId: request.user_id, clubId: request.club_id });
+          buttons.forEach((button) => (button.disabled = true));
+          await approveJoinRequest(request);
+          row.remove();
+          const remaining = container.querySelectorAll(".point-user-row").length;
+          const count = document.getElementById("joinRequestCountDebug");
+          if (count) count.textContent = String(remaining);
+          if (!remaining) await renderJoinRequestsPage(body);
+        } catch (error) {
+          buttons.forEach((button) => (button.disabled = false));
+          showError("承認に失敗しました", error);
+        }
+      });
+      row.querySelector('[data-action="reject"]').addEventListener("click", async () => {
+        const buttons = row.querySelectorAll("button");
+        try {
+          uiLog("reject clicked", { requestId: request.request_id, userId: request.user_id, clubId: request.club_id });
+          buttons.forEach((button) => (button.disabled = true));
+          await rejectJoinRequest(request);
+          row.remove();
+          const remaining = container.querySelectorAll(".point-user-row").length;
+          const count = document.getElementById("joinRequestCountDebug");
+          if (count) count.textContent = String(remaining);
+          if (!remaining) await renderJoinRequestsPage(body);
+        } catch (error) {
+          buttons.forEach((button) => (button.disabled = false));
+          showError("拒否に失敗しました", error);
+        }
+      });
+      container.append(row);
+    });
+  };
+  const renderClubMembersPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) {
+      body.innerHTML = `<p class="muted">権限がありません。クラブ管理者だけがメンバー管理できます。</p>`;
+      return;
+    }
+    let members = [];
+    try {
+      members = await loadClubMembersForView(clubId);
+    } catch (error) {
+      body.innerHTML = `<p class="muted">メンバー一覧の取得に失敗しました。</p><pre>${getErrorText(error)}</pre>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="primary-actions">
+        <button type="button" class="secondary" id="openJoinRequestsButton">加入申請一覧</button>
+        <button type="button" disabled>メンバー管理</button>
+        <button type="button" class="secondary" id="openClubSettingsButton">クラブ設定</button>
+      </div>
+      <h4>メンバー一覧</h4>
+      <p class="muted">現在のclubId: ${clubId}<br>メンバー数: ${members.length}</p>
+      <div id="clubMemberRows" class="point-user-list"></div>
+    `;
+    document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    const container = document.getElementById("clubMemberRows");
+    if (!members.length) {
+      container.innerHTML = `<p class="muted">メンバーはいません。</p>`;
+      return;
+    }
+    members.forEach((member) => {
+      const userInfo = member.users || {};
+      const memberIcon = member.icon_url || userInfo.icon_url || "";
+      const memberIconHtml = memberIcon
+        ? `<img class="club-list-icon" src="${escapeHtml(memberIcon)}" alt="メンバーアイコン" />`
+        : `<div class="club-list-icon club-list-icon-placeholder" aria-label="メンバーアイコン未設定">${escapeHtml((member.display_name || userInfo.display_name || "P").slice(0, 1))}</div>`;
+      const row = document.createElement("div");
+      row.className = "point-user-row";
+      row.innerHTML = `
+        ${memberIconHtml}
+        <strong>${member.display_name || userInfo.display_name || member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "名前未設定"}</strong>
+        <span>ID: ${member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "不明"}</span>
+        <span>権限: ${member.role === "admin" ? "管理者" : "メンバー"}</span>
+        <span>ポイント: ${Number(member.point_balance || 0)}</span>
+        <span>加入: ${new Date(member.joined_at || Date.now()).toLocaleString()}</span>
+      `;
+      container.append(row);
+    });
+  };
+  const renderClubSettingsPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) {
+      body.innerHTML = `<p class="muted">権限がありません。クラブ設定を変更できるのは管理者だけです。</p>`;
+      return;
+    }
+    const club = state.clubs.find((item) => item.club_id === clubId) || selectedMembership()?.clubs || {};
+    const clubIcon = club.icon_url || "";
+    body.innerHTML = `
+      <div class="primary-actions">
+        <button type="button" class="secondary" id="openJoinRequestsButton">加入申請一覧</button>
+        <button type="button" class="secondary" id="openClubMembersButton">メンバー管理</button>
+        <button type="button" disabled>クラブ設定</button>
+      </div>
+      <h4>クラブ設定</h4>
+      <div class="row">
+        ${clubIcon ? `<img src="${escapeHtml(clubIcon)}" alt="クラブアイコン" style="width:72px;height:72px;object-fit:cover;border-radius:12px;border:1px solid rgba(255,255,255,.35);" />` : `<span class="muted">クラブアイコン未設定</span>`}
+      </div>
+      <p class="muted">クラブID: ${club.club_code || club.club_id || clubId}</p>
+      <label>クラブ名
+        <input id="clubSettingsNameInput" value="${escapeHtml(club.name || "")}" />
+      </label>
+      <label>クラブアイコン変更
+        <input id="clubIconInput" type="file" accept="image/*" />
+      </label>
+      <div class="row">
+        <button type="button" id="saveClubNameButton">クラブ名を変更</button>
+        <button type="button" id="saveClubIconButton" class="secondary">クラブアイコンを変更</button>
+      </div>
+    `;
+    document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    document.getElementById("saveClubNameButton")?.addEventListener("click", async () => {
+      try {
+        await updateClubName(clubId, document.getElementById("clubSettingsNameInput")?.value || "");
+        await renderClubSettingsPage(body);
+      } catch (error) {
+        showError("クラブ名変更に失敗しました", error);
+      }
+    });
+    document.getElementById("saveClubIconButton")?.addEventListener("click", async () => {
+      try {
+        const file = document.getElementById("clubIconInput")?.files?.[0];
+        await updateClubIcon(clubId, file);
+        await renderClubSettingsPage(body);
+      } catch (error) {
+        showError("クラブアイコン変更に失敗しました", error);
+      }
+    });
+  };
+  const showSettingsPage = async (page) => {
+    if (has("settingsDrawer")) $("settingsDrawer").classList.remove("open");
+    if (!has("settingsPagePanel")) return;
+    const panel = $("settingsPagePanel");
+    const title = $("settingsPageTitle");
+    const body = $("settingsPageBody");
+    panel.classList.add("open");
+    if (page === "account") {
+      title.textContent = "アカウント設定";
+      const userIcon = state.user?.iconUrl || "";
+      body.innerHTML = `
+        <section class="card">
+          <h4>名前の変更</h4>
+          <label>プレイヤー名
+            <input id="settingsDisplayName" value="${escapeHtml(state.user?.displayName || "")}" autocomplete="name" />
+          </label>
+          <button type="button" id="saveDisplayNameButton">名前を変更</button>
+        </section>
+        <section class="card">
+          <h4>アイコンの設定</h4>
+          <div class="row">
+            ${userIcon ? `<img src="${escapeHtml(userIcon)}" alt="アカウントアイコン" style="width:64px;height:64px;object-fit:cover;border-radius:50%;border:1px solid rgba(255,255,255,.35);" />` : `<span class="muted">アイコン未設定</span>`}
+          </div>
+          <label>画像を選択
+            <input id="accountIconInput" type="file" accept="image/*" />
+          </label>
+          <button type="button" id="saveAccountIconButton">アイコンを変更</button>
+        </section>
+        <section class="card">
+          <h4>メールアドレスの変更</h4>
+          <label>新しいメールアドレス
+            <input id="settingsEmail" type="email" autocomplete="email" placeholder="mail@example.com" />
+          </label>
+          <button type="button" id="saveEmailButton">メールアドレスを変更</button>
+        </section>
+        <section class="card">
+          <h4>パスワードの変更</h4>
+          <label>新しいパスワード
+            <input id="settingsNewPassword" type="password" autocomplete="new-password" />
+          </label>
+          <button type="button" id="savePasswordButton">パスワードを変更</button>
+        </section>
+        <section class="card">
+          <h4>ログアウト</h4>
+          <button type="button" id="logoutFromSettings" class="secondary">ログアウト</button>
+        </section>
+      `;
+      document.getElementById("saveDisplayNameButton")?.addEventListener("click", async () => {
+        try {
+          await updateDisplayName(document.getElementById("settingsDisplayName")?.value);
+          await showSettingsPage("account");
+        } catch (error) {
+          showError("名前変更に失敗しました", error);
+        }
+      });
+      document.getElementById("saveAccountIconButton")?.addEventListener("click", async () => {
+        try {
+          const file = document.getElementById("accountIconInput")?.files?.[0];
+          await updateUserIcon(file);
+          await showSettingsPage("account");
+        } catch (error) {
+          showError("アイコン変更に失敗しました", error);
+        }
+      });
+      document.getElementById("saveEmailButton")?.addEventListener("click", async () => {
+        try {
+          await updateEmailAddress(document.getElementById("settingsEmail")?.value);
+          await showSettingsPage("account");
+        } catch (error) {
+          showError("メールアドレス変更に失敗しました", error);
+        }
+      });
+      document.getElementById("savePasswordButton")?.addEventListener("click", async () => {
+        try {
+          await updatePassword(document.getElementById("settingsNewPassword")?.value);
+          document.getElementById("settingsNewPassword").value = "";
+          log("パスワードを変更しました。");
+        } catch (error) {
+          showError("パスワード変更に失敗しました", error);
+        }
+      });
+      document.getElementById("logoutFromSettings")?.addEventListener("click", () => {
+        if (confirm("本当にログアウトしますか？")) signOut().catch((error) => showError("ログアウトに失敗しました", error));
+      });
+      return;
+    }
+    if (page === "points") {
+      title.textContent = "クラブポイント";
+      body.innerHTML = `<p class="muted">ポイント情報を読み込み中...</p>`;
+      await renderClubPointsPage(body);
+      return;
+    }
+    if (page === "joinRequests") {
+      title.textContent = "クラブ管理 - 加入申請";
+      body.innerHTML = `<p class="muted">加入申請を読み込み中...</p>`;
+      await renderJoinRequestsPage(body);
+      return;
+    }
+    if (page === "members") {
+      title.textContent = "クラブ管理 - メンバー管理";
+      body.innerHTML = `<p class="muted">メンバー一覧を読み込み中...</p>`;
+      await renderClubMembersPage(body);
+      return;
+    }
+    if (page === "clubSettings") {
+      title.textContent = "クラブ管理 - クラブ設定";
+      body.innerHTML = `<p class="muted">クラブ設定を読み込み中...</p>`;
+      await renderClubSettingsPage(body);
+      return;
+    }
+    if (page === "history") {
+      title.textContent = "ポイント収支";
+      await renderPointHistoryPage(body);
+      return;
+    }
+    if (page === "replays") {
+      title.textContent = "牌譜一覧";
+      await renderReplayListPage(body);
+    }
+  };
+  const openSettingsPage = showSettingsPage;
+  const showCreateTablePanel = () => {
+    if (!isAdmin()) throw new Error("卓作成権限がありません。");
+    if (has("tableCreatePanel")) $("tableCreatePanel").classList.add("open");
+  };
+  const hideCreateTablePanel = () => has("tableCreatePanel") && $("tableCreatePanel").classList.remove("open");
+  const closeOpenPanels = () => {
+    let closed = false;
+    ["settingsDrawer", "tableCreatePanel", "tableRoomPanel", "settingsPagePanel", "onlineGamePanel", "clubPointPanel"].forEach((id) => {
+      if (has(id) && $(id).classList.contains("open")) {
+        $(id).classList.remove("open");
+        closed = true;
+      }
+    });
+    if (closed) {
+      state.onlineGameOpened = false;
+    }
+    return closed;
+  };
+  const goBack = async () => {
+    clearError();
+    if (closeOpenPanels()) {
+      render();
+      return;
+    }
+    if (document.body.dataset.screen === "club-home") {
+      state.activeTableId = "";
+      state.activeGameState = null;
+      state.activeGameEvents = [];
+      state.onlineGameOpened = false;
+      sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+      document.body.dataset.screen = "clubs";
+      await loadClubs().catch(() => {});
+      render();
+      return;
+    }
+    if (document.body.dataset.screen === "clubs") {
+      log("すでにクラブ選択画面です。");
+      return;
+    }
+    if (state.user) {
+      document.body.dataset.screen = "clubs";
+      render();
+    }
+  };
+  const loadClubPoints = async () => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    const members = await loadClubMembersForView(clubId);
+    const pointSummary = clubPointSummaryFromMembers(members);
+    const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
+    if (has("pointSummary")) {
+      const lines = visibleMembers.map((member) => {
+        const userId = member.users?.user_id || "";
+        const name = member.users?.display_name || userId || "Player";
+        return `${name}\n  現在ポイント: ${Number(member.point_balance || 0)}\n  権限: ${member.role}`;
+      });
+      $("pointSummary").textContent = [
+        `クラブポイント固定総量: ${pointSummary.fixedTotal}`,
+        `クラブ保管ポイント: ${pointSummary.clubReserve}`,
+        `メンバー保有ポイント合計: ${pointSummary.memberTotal}`,
+        "",
+        lines.length ? lines.join("\n\n") : "ポイント情報がありません。",
+      ].join("\n");
+    }
+    if (has("pointUserRows")) {
+      $("pointUserRows").innerHTML = "";
+      visibleMembers.forEach((member) => {
+        const userId = member.users?.user_id || "";
+        const name = member.users?.display_name || userId || "Player";
+        const row = document.createElement("div");
+        row.className = "point-user-row";
+        row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+        row.querySelector('[data-action="send"]').addEventListener("click", async () => {
+          try {
+            const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
+            if (isAdmin() && pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+            const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
+            if (!isAdmin() && Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
+            await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
+              method: "POST",
+              body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
+            });
+            await loadClubPoints();
+          } catch (error) {
+            showError("ポイント送信に失敗しました", error);
+          }
+        });
+        const collectButton = row.querySelector('[data-action="collect"]');
+        if (collectButton) {
+          collectButton.addEventListener("click", async () => {
+            try {
+              const amount = readPointAmount(prompt(`${name}から回収するポイント数`, "100"), "回収ポイント");
+              if (Number(member.point_balance || 0) < amount) throw new Error("対象プレイヤーのポイントが不足しています。回収で残高をマイナスにはできません。");
+              await rest("/rpc/admin_collect_club_points", {
+                method: "POST",
+                body: JSON.stringify({ p_club_id: clubId, p_from_user_id: userId, p_amount: amount }),
+              });
+              await loadClubPoints();
+            } catch (error) {
+              showError("ポイント回収に失敗しました", error);
+            }
+          });
+        }
+        $("pointUserRows").append(row);
+      });
+    }
+  };
+  const showClubPoints = async () => {
+    if (!has("clubPointPanel")) return;
+    $("clubPointPanel").classList.toggle("open");
+    if ($("clubPointPanel").classList.contains("open")) await loadClubPoints();
+  };
+  const sendPoint = async () => {
+    const clubId = selectedClubId();
+    const targetUserId = $("pointTargetUserId").value.trim();
+    const amount = readPointAmount($("pointAmount").value, "送信ポイント");
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!targetUserId) throw new Error("対象ユーザーIDを入力してください。");
+    const members = await loadClubMembersForView(clubId);
+    const targetMember = members.find((item) => item.users?.user_id === targetUserId || item.user_id === targetUserId);
+    if (!targetMember) throw new Error("対象ユーザーはこのクラブのメンバーではありません。");
+    if (isAdmin()) {
+      const pointSummary = clubPointSummaryFromMembers(members);
+      if (pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+    } else {
+      const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
+      if (Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
+    }
+    await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
+      method: "POST",
+      body: JSON.stringify(isAdmin() ? { p_club_id: clubId, p_to_user_id: targetUserId, p_amount: amount } : { p_club_id: clubId, p_to_user_id: targetUserId, p_amount: amount }),
+    });
+    await loadClubPoints();
+  };
+  const collectPoint = async () => {
+    if (!isAdmin()) throw new Error("ポイント回収権限がありません。");
+    const clubId = selectedClubId();
+    const targetUserId = $("pointTargetUserId").value.trim();
+    const amount = readPointAmount($("pointAmount").value, "回収ポイント");
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!targetUserId) throw new Error("対象ユーザーIDを入力してください。");
+    const members = await loadClubMembersForView(clubId);
+    const targetMember = members.find((item) => item.users?.user_id === targetUserId || item.user_id === targetUserId);
+    if (!targetMember) throw new Error("対象ユーザーはこのクラブのメンバーではありません。");
+    if (Number(targetMember.point_balance || 0) < amount) throw new Error("対象プレイヤーのポイントが不足しています。回収で残高をマイナスにはできません。");
+    await rest("/rpc/admin_collect_club_points", { method: "POST", body: JSON.stringify({ p_club_id: clubId, p_from_user_id: targetUserId, p_amount: amount }) });
+    await loadClubPoints();
+  };
+  const startPolling = () => {
+    clearInterval(state.pollTimer);
+    state.pollTimer = setInterval(() => {
+      if (selectedTableId() && state.accessToken) loadSeats().catch(() => {});
+      if (selectedTableId() && state.accessToken) loadActiveGameState().catch(() => {});
+    }, 2500);
+    renderDebug("ポーリング中");
+  };
+  const startClubPolling = () => {
+    clearInterval(state.clubPollTimer);
+    state.clubPollTimer = setInterval(() => {
+      if (!state.accessToken || !state.user) return;
+      if (document.body.dataset.screen === "clubs") {
+        loadClubs().catch((error) => log("クラブ自動更新に失敗しました。", rawErrorText(error)));
+        return;
+      }
+      if (document.body.dataset.screen === "club-home") {
+        loadTables().catch((error) => log("卓状況の自動更新に失敗しました。", rawErrorText(error)));
+      }
+    }, 5000);
+  };
+  const render = () => {
+    const activeClubId = selectedClubId();
+    const activeTableId = state.activeTableId || selectedTableId();
+    $("currentUser").textContent = state.user ? `${state.user.displayName} / ${state.user.loginId || state.user.id}` : "未ログイン";
+    if (has("loginIdDisplay")) $("loginIdDisplay").textContent = state.user ? state.user.loginId || state.user.id : "未設定";
+    if (state.user && has("userId")) $("userId").value = state.user.loginId || state.user.id;
+    if (!state.user || !state.accessToken) document.body.dataset.screen = "auth";
+    else if (document.body.dataset.screen === "auth") document.body.dataset.screen = "clubs";
+    const selectedClub = state.clubs.find((club) => club.club_id === activeClubId) || null;
+    if (has("clubHomeTitle")) $("clubHomeTitle").textContent = selectedClub ? selectedClub.name : "クラブ";
+    if (has("createTableButton")) {
+      $("createTableButton").disabled = !isAdmin();
+      $("createTableButton").title = isAdmin() ? "" : "卓作成権限がありません。";
+    }
+    if (has("showCreateTableButton")) {
+      $("showCreateTableButton").disabled = !isAdmin();
+      $("showCreateTableButton").title = isAdmin() ? "" : "卓作成権限がありません。";
+    }
+    const joinRequestMenuButton = document.querySelector('[data-settings-page="joinRequests"]');
+    if (joinRequestMenuButton) {
+      const pendingCount = isAdmin() ? state.adminJoinRequests.length : 0;
+      joinRequestMenuButton.textContent = pendingCount ? `クラブ管理（加入申請 ${pendingCount}件）` : "クラブ管理";
+      joinRequestMenuButton.style.display = isAdmin() ? "" : "none";
+    }
+    $("clubSelect").innerHTML = "";
+    if (has("clubCards")) $("clubCards").innerHTML = "";
+    state.clubs.forEach((club) => {
+      const option = document.createElement("option");
+      option.value = club.club_id;
+      option.textContent = `${club.name} (${club.club_code || club.club_id})`;
+      $("clubSelect").append(option);
+      if (has("clubCards")) {
+        const membership = state.memberships.find((row) => row.clubs && row.clubs.club_id === club.club_id);
+        const card = document.createElement("div");
+        card.className = "card club-card";
+        const clubCode = club.club_code || club.club_id;
+        const leaveButtonHtml = membership?.role === "admin" ? "" : '<button type="button" class="danger" data-action="leave">脱退</button>';
+        const iconHtml = club.icon_url
+          ? `<img class="club-list-icon" src="${escapeHtml(club.icon_url)}" alt="クラブアイコン" />`
+          : `<div class="club-list-icon club-list-icon-placeholder" aria-label="クラブアイコン未設定">${escapeHtml((club.name || "C").slice(0, 1))}</div>`;
+        card.innerHTML = `
+          ${iconHtml}
+          <div class="club-card-body">
+            <strong>${escapeHtml(club.name)}</strong><br>
+            クラブID: <span class="muted">${escapeHtml(clubCode)}</span><br>
+            権限: ${membership?.role === "admin" ? "管理者" : "メンバー"}<br>
+            <div class="row"><button type="button" data-action="open">クラブに入る</button><button type="button" class="secondary" data-action="copy">クラブIDコピー</button>${leaveButtonHtml}</div>
+          </div>`;
+        card.querySelector('[data-action="open"]').addEventListener("click", () => openClubHome(club.club_id).catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+        card.querySelector('[data-action="copy"]').addEventListener("click", () => copyText(clubCode, "クラブIDをコピーしました").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+        card.querySelector('[data-action="leave"]')?.addEventListener("click", () => {
+          uiLog("leave club clicked", { clubId: club.club_id });
+          clearError();
+          leaveClub(club.club_id).catch((error) => showError("クラブ脱退に失敗しました", error));
+        });
+        $("clubCards").append(card);
+      }
+    });
+    if (has("clubCards")) {
+      const memberClubIds = new Set(state.clubs.map((club) => club.club_id));
+      state.joinRequests
+        .filter((request) => request.clubs && !memberClubIds.has(request.clubs.club_id))
+        .forEach((request) => {
+          const card = document.createElement("div");
+          card.className = "card";
+          const statusText = request.status === "approved" ? "承認済み" : request.status === "rejected" ? "拒否されました" : "承認待ち";
+          card.innerHTML = `<strong>${request.clubs.name}</strong><br>クラブID: <span class="muted">${request.clubs.club_code || request.clubs.club_id}</span><br>状態: ${statusText}<br><span class="muted">申請日時: ${new Date(request.created_at || Date.now()).toLocaleString()}</span>`;
+          $("clubCards").append(card);
+        });
+    }
+    if (activeClubId && state.clubs.some((club) => club.club_id === activeClubId)) $("clubSelect").value = activeClubId;
+    $("tableSelect").innerHTML = "";
+    if (has("tableCards")) $("tableCards").innerHTML = "";
+    const urlTableId = new URLSearchParams(location.search).get("tableId");
+    if (urlTableId && !state.tables.some((table) => table.table_id === urlTableId)) {
+      const option = document.createElement("option");
+      option.value = urlTableId;
+      option.textContent = `URL指定卓 (${urlTableId})`;
+      $("tableSelect").append(option);
+    }
+    state.tables.forEach((table) => {
+      const option = document.createElement("option");
+      option.value = table.table_id;
+      option.textContent = `${table.name} (${table.status})`;
+      $("tableSelect").append(option);
+      if (has("tableCards")) {
+        const seats = visibleTableSeats(table);
+        const filled = filledSeatCount(seats);
+        const hasCpu = hasCpuSeat(seats) || table.is_debug;
+        const card = document.createElement("div");
+        card.className = "card table-card";
+        const ruleLabel = RULE_LABELS[table.rule_id || "anmika-rocket"] || table.rule_id || "アンミカロケット";
+        card.innerHTML = `
+          <strong>${table.name || "アンミカロケット卓"}</strong>${hasCpu ? ' <span class="warn">デバッグ卓</span>' : ""}
+          <span class="muted">ルール: ${ruleLabel}</span>
+          <div>${formatRuleSummary({ ...table, is_debug: hasCpu })}</div>
+          <div>状態: ${table.status || "waiting"} / 参加人数: ${filled}/3</div>
+          <div class="table-seats"></div>
+          <div class="table-card-actions">
+            <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
+            <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
+            <button type="button" data-action="deleteTable" class="admin-only danger">卓削除</button>
+          </div>
+        `;
+        const seatContainer = card.querySelector(".table-seats");
+        seats.forEach((seat) => {
+          const line = document.createElement("div");
+          line.className = "table-seat-line";
+          const isOwnSeat = seat.user_id === state.user?.id;
+          const canSit = !seat.user_id || seat.player_type === "cpu";
+          line.innerHTML = `<strong>席${Number(seat.seat_index) + 1}</strong><span>${formatSeatName(seat)}</span>`;
+          if (seat.user_id || seat.player_type === "cpu") {
+            const lastHandLabel = document.createElement("span");
+            lastHandLabel.className = "last-hand-chip";
+            lastHandLabel.textContent = seat.is_last_hand_declared ? "ラス半ON" : "ラス半OFF";
+            line.append(lastHandLabel);
+          }
+          if (isOwnSeat) {
+            const lastHandControl = document.createElement("label");
+            lastHandControl.className = "inline-check";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = Boolean(seat.is_last_hand_declared);
+            checkbox.addEventListener("change", () => {
+              uiLog("last hand toggled", { tableId: table.table_id, checked: checkbox.checked });
+              clearError();
+              setSeatLastHand(table.table_id, checkbox.checked).catch((error) => showError("ラス半切替に失敗しました", error));
+            });
+            lastHandControl.append(checkbox, document.createTextNode("ラス半"));
+            line.append(lastHandControl);
+          }
+          if (isOwnSeat) {
+            const leaveButton = document.createElement("button");
+            leaveButton.type = "button";
+            leaveButton.textContent = "立つ";
+            leaveButton.className = "secondary";
+            leaveButton.addEventListener("click", () => {
+              uiLog("leave seat clicked", { tableId: table.table_id, seatIndex: Number(seat.seat_index) });
+              clearError();
+              leave(table.table_id).catch((error) => showError("退席に失敗しました", error));
+            });
+            line.append(leaveButton);
+          } else if (canSit) {
+            const sitButton = document.createElement("button");
+            sitButton.type = "button";
+            sitButton.textContent = "座る";
+            sitButton.addEventListener("click", () => {
+              uiLog("seat clicked", { tableId: table.table_id, seatIndex: Number(seat.seat_index) });
+              clearError();
+              sit(table.table_id, Number(seat.seat_index)).catch((error) => showError("着席に失敗しました", error));
+            });
+            line.append(sitButton);
+          }
+          seatContainer.append(line);
+        });
+        card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
+          uiLog("add cpu clicked", { tableId: table.table_id });
+          clearError();
+          addCpu(table.table_id).catch((error) => showError("CPU追加に失敗しました", error));
+        });
+        card.querySelector('[data-action="removeCpu"]').addEventListener("click", () => {
+          uiLog("remove cpu clicked", { tableId: table.table_id });
+          clearError();
+          removeCpu(table.table_id).catch((error) => showError("CPU削除に失敗しました", error));
+        });
+        card.querySelector('[data-action="deleteTable"]').addEventListener("click", () => {
+          uiLog("delete table clicked", { tableId: table.table_id });
+          clearError();
+          deleteTable(table.table_id).catch((error) => showError("卓削除に失敗しました", error));
+        });
+        $("tableCards").append(card);
+      }
+    });
+    const nextTableId = activeTableId || urlTableId || "";
+    if (nextTableId) setActiveTableId(nextTableId);
+    const tableId = selectedTableId();
+    $("tableUrl").textContent = tableId ? buildTableShareUrl(tableId) : "なし";
+    document.body.dataset.role = isAdmin() ? "admin" : "member";
+    updateRangeLabels();
+    scheduleAutoStartFromVisibleTables();
+    renderDebug();
+  };
+  const renderDebug = (realtimeStatus) => {
+    if (!has("debugSummary")) return;
+    $("debugSummary").textContent = [
+      `Supabase URL: ${config.url || "未設定"}`,
+      `Supabase: ${config.url && config.anonKey ? "OK" : "設定不足"}`,
+      `認証状態: ${state.user ? "ログイン済み" : "未ログイン"}`,
+      `現在ユーザー: ${state.user ? `${state.user.displayName} / ${state.user.id}` : "なし"}`,
+      `現在クラブ: ${selectedClubId() || "なし"}`,
+      `権限: ${selectedMembership() ? (selectedMembership().role === "admin" ? "管理者" : "メンバー") : "なし"}`,
+      `読み込み済み卓数: ${state.tables.length}`,
+      `現在卓: ${selectedTableId() || "なし"}`,
+      `現在gameId: ${state.activeGameState?.game_id || "なし"}`,
+      `現在version: ${state.activeGameState?.version ?? "なし"}`,
+      `イベント数: ${state.activeGameEvents.length}`,
+      `最終同期: ${state.lastGameSyncAt || "なし"}`,
+      `Realtime接続: 短周期ポーリングでGameState同期中`,
+      `ロビー共有: Supabase tables / table_seats`,
+      `複数アカウント検証: ロビー着席とGameState/versionは共有対象`,
+      `対局同期: game_states / game_events でイベント同期`,
+      `同期状態: ${realtimeStatus || (state.pollTimer ? "ポーリング中" : "未接続")}`,
+    ].join("\n");
+  };
+  const showLanHint = () => {
+    const pcUrl = `${pcOrigin()}/online-debug`;
+    const mobileUrl = buildAppUrl("/online-debug");
+    if (has("pcDebugUrl")) $("pcDebugUrl").textContent = pcUrl;
+    if (has("mobileDebugUrl")) $("mobileDebugUrl").textContent = mobileUrl;
+    if (isPublicOrigin()) {
+      $("lanHint").textContent = "公開URLで動作中です。スマホや別端末でもこのURLを開けます。";
+    } else if (location.protocol === "file:") {
+      $("lanHint").textContent = "fileで開いている画面はスマホ共有できません。PCで npm run dev を起動し、スマホでは下のスマホ用URLを開いてください。";
+    } else if (isLocalHostName(location.hostname)) {
+      $("lanHint").textContent = "スマホで開く場合は、PCとスマホを同じWi-Fiに接続してください。localhost のURLはスマホでは使えません。";
+    } else {
+      $("lanHint").textContent = "別端末では下のスマホ用URLを開いてください。";
+    }
+  };
+  const bind = (id, handler) => {
+    if (!has(id)) return;
+    $(id).addEventListener("click", () => {
+      uiLog(`${id} clicked`);
+      clearError();
+      handler().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+    });
+  };
+  const init = async () => {
+    await completeOAuthRedirectIfNeeded().catch((error) => showError("外部ログイン処理に失敗しました", error));
+    showLanHint();
+    ensureTsumoLossless3maCreateUi();
+    $("configStatus").textContent = config.url && config.anonKey ? "Supabase接続: OK" : "Supabase設定が不足しています。";
+    $("configStatus").className = config.url && config.anonKey ? "ok" : "warn";
+    bind("signUpButton", signUp);
+    bind("signInButton", signInWithEmail);
+    bind("debugSignInButton", createDebugAccount);
+    bind("signOutButton", async () => {
+      if (confirm("本当にログアウトしますか？")) await signOut();
+    });
+    bind("createClubButton", createClub);
+    bind("loadClubsButton", loadClubs);
+    bind("searchClubButton", searchClubForJoin);
+    if (has("requestJoinButton")) $("requestJoinButton").style.display = "none";
+    bind("changeLoginIdButton", changeLoginId);
+    bind("approveJoinButton", approveJoin);
+    bind("createTableButton", createTable);
+    bind("loadTablesButton", loadTables);
+    bind("loadSeatsButton", loadSeats);
+    bind("copyTableUrlButton", copyTableUrl);
+    bind("copyMobileUrlButton", async () => copyText(buildAppUrl("/online-debug"), "スマホ用URLをコピーしました"));
+    bind("sitButton", sit);
+    bind("leaveButton", leave);
+    bind("addCpuButton", addCpu);
+    bind("removeCpuButton", removeCpu);
+    bind("startDebugGameButton", startDebugGame);
+    bind("openOnlineGameButton", openOnlineGame);
+    document.querySelectorAll("[data-online-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        uiLog(`${button.getAttribute("data-online-action")} clicked`);
+        clearError();
+        sendOnlineActionFromUi(button.getAttribute("data-online-action")).catch((error) => showError("オンライン行動の送信に失敗しました", error));
+      });
+    });
+    bind("loadRakeButton", loadRake);
+    bind("settingsGearButton", toggleSettings);
+    bind("settingsToggleButton", toggleSettings);
+    bind("showCreateTableButton", async () => showCreateTablePanel());
+    bind("cancelCreateTableButton", async () => hideCreateTablePanel());
+    bind("showClubPointsButton", showClubPoints);
+    bind("sendPointButton", sendPoint);
+    bind("collectPointButton", collectPoint);
+    bind("globalBackButton", goBack);
+    bind("backToClubsButton", goBack);
+    bind("backFromCreateTableButton", goBack);
+    bind("backFromTableRoomButton", goBack);
+    bind("backFromOnlineGameButton", goBack);
+    bind("backFromSettingsPageButton", goBack);
+    document.querySelectorAll("[data-settings-page]").forEach((button) => {
+      button.addEventListener("click", () => {
+        uiLog(`${button.dataset.settingsPage} menu clicked`);
+        clearError();
+        showSettingsPage(button.dataset.settingsPage).catch((error) => showError(JA_MESSAGES.actionFailed, error));
+      });
+    });
+    bind("loadClubHomeButton", async () => {
+      await loadClubs();
+      await loadTables();
+      await loadClubStats();
+    });
+    if (has("tableSelect")) {
+      $("tableSelect").addEventListener("change", () => {
+        setActiveTableId($("tableSelect").value);
+        render();
+        loadSeats().catch(() => {});
+        startPolling();
+      });
+    }
+    if (has("clubSelect")) {
+      $("clubSelect").addEventListener("change", () => {
+        setActiveClubId($("clubSelect").value);
+        render();
+        loadClubStats().catch(() => {});
+      });
+    }
+    if (has("clubId")) {
+      $("clubId").addEventListener("input", () => {
+        state.searchedClub = null;
+        renderClubSearchResult(null);
+      });
+    }
+    if (has("ruleId")) $("ruleId").addEventListener("change", updateRangeLabels);
+    if (has("pointRate")) $("pointRate").addEventListener("input", updateRangeLabels);
+    if (has("rakePercent")) $("rakePercent").addEventListener("input", updateRangeLabels);
+    if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
+    updateRangeLabels();
+    render();
+    if (state.user && state.accessToken) {
+      await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+      startClubPolling();
+      const returnClubId = localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
+      if (returnClubId && state.clubs.some((club) => club.club_id === returnClubId)) {
+        setActiveClubId(returnClubId);
+        document.body.dataset.screen = "club-home";
+        await loadTables().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+      }
+      const tableIdFromUrl = new URLSearchParams(location.search).get("tableId");
+      if (tableIdFromUrl) {
+        document.body.dataset.screen = "club-home";
+        await loadSeats().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+        startPolling();
+      }
+    }
+    renderOnlineGamePanel();
+  };
+  init().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+})();

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>アンミカロケット ロビー</title>
+    <style>
+      :root {
+        --bg: #0f3028;
+        --panel: rgba(0, 0, 0, 0.24);
+        --panel-strong: rgba(0, 0, 0, 0.42);
+        --line: rgba(255, 255, 255, 0.18);
+        --accent: #f2b84b;
+        --text: #f4fff9;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        min-height: 100%;
+        margin: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 1100px;
+        min-height: calc(100dvh + 1px);
+        margin: 0 auto;
+        padding: 20px 20px 160px;
+      }
+      h1, h2, h3 { margin: 0 0 12px; }
+      .top, .club-main-header, .primary-actions, .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: flex-end;
+      }
+      .top, .club-main-header {
+        justify-content: space-between;
+        align-items: flex-start;
+      }
+      .signed-in-only { position: relative; }
+      .screen, .drawer, .modal-panel, .signed-in-only, .admin-only, .member-blocked { display: none !important; }
+      body[data-screen="auth"] .screen-auth,
+      body[data-screen="clubs"] .screen-clubs,
+      body[data-screen="club-home"] .screen-club-home,
+      body:not([data-screen="auth"]) .signed-in-only,
+      body[data-role="admin"] .admin-only,
+      body[data-role="member"] .member-blocked { display: block !important; }
+      body[data-role="admin"] .admin-only.row,
+      body[data-role="admin"] .admin-only.primary-actions { display: flex !important; }
+      section, .drawer.open, .modal-panel.open {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 14px 0;
+        background: var(--panel);
+      }
+      label { display: grid; gap: 6px; margin: 8px 0; }
+      input, select, button {
+        font: inherit;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        padding: 8px 10px;
+      }
+      input, select { background: #f8fffb; color: #10241e; }
+      button {
+        cursor: pointer;
+        background: var(--accent);
+        color: #1f1704;
+        font-weight: 700;
+        pointer-events: auto;
+        touch-action: manipulation;
+        position: relative;
+        z-index: 1;
+      }
+      button.secondary { background: rgba(255, 255, 255, 0.16); color: var(--text); }
+      button.danger { background: #b4232f; color: #fff; }
+      .row > label { flex: 1 1 220px; }
+      .muted { color: rgba(244, 255, 249, 0.72); }
+      .warn { color: #ffd77a; }
+      .error-box {
+        display: none;
+        white-space: pre-wrap;
+        border: 1px solid #ff8d8d;
+        border-radius: 10px;
+        background: rgba(114, 0, 0, 0.45);
+        padding: 12px;
+        margin: 12px 0;
+      }
+      .error-box.visible { display: block; }
+      .link-panel, .online-state-summary {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 13px;
+      }
+      .club-main-header { position: relative; z-index: 100; overflow: visible; }
+      .club-header-actions { display: flex; align-items: center; gap: 8px; position: relative; z-index: 120; }
+      .gear-button { width: 42px; height: 42px; padding: 0; border-radius: 50%; z-index: 130; }
+      .settings-menu {
+        position: absolute;
+        right: 0;
+        top: 50px;
+        z-index: 9999;
+        min-width: 190px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #123d33;
+        box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+        padding: 8px;
+      }
+      .settings-menu.open { display: grid !important; gap: 6px; }
+      .settings-menu button { width: 100%; text-align: left; background: rgba(255, 255, 255, 0.12); color: var(--text); }
+      .drawer:not(.open), .modal-panel:not(.open) { pointer-events: none; }
+      .drawer.open, .modal-panel.open { pointer-events: auto; }
+      .card-grid, .table-list, .online-player-list { display: grid; gap: 14px; }
+      .table-list { max-height: 80vh; overflow-y: auto; padding-right: 4px; }
+      .card, .table-card, .online-player-row {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel-strong);
+        padding: 14px;
+      }
+      .club-card { align-items: flex-start; display: flex; gap: 12px; }
+      .club-list-icon {
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 12px;
+        flex: 0 0 auto;
+        height: 56px;
+        object-fit: cover;
+        width: 56px;
+      }
+      .club-list-icon-placeholder {
+        align-items: center;
+        background: rgba(255, 209, 92, 0.18);
+        color: #fff2b8;
+        display: flex;
+        font-size: 22px;
+        font-weight: 800;
+        justify-content: center;
+      }
+      .club-card-body { min-width: 0; }
+      .table-card { width: 100%; max-width: 640px; }
+      .table-seat-line, .seat-row, .point-user-row, .online-player-row {
+        display: grid;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        padding: 8px 0;
+      }
+      .table-seat-line { grid-template-columns: 56px minmax(120px, 1fr) auto auto auto; }
+      .seat-row { grid-template-columns: 56px 1fr 96px; }
+      .point-user-row { grid-template-columns: minmax(120px, 1fr) 96px 72px 72px; }
+      .online-player-row { grid-template-columns: minmax(180px, 1fr) 100px 1.5fr; }
+      .point-summary { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 10px 0; }
+      .point-chart { width: 100%; max-width: 720px; height: auto; display: block; margin-top: 12px; }
+      .point-reserve {
+        display: inline-grid;
+        gap: 4px;
+        min-width: 220px;
+        margin-bottom: 10px;
+        padding: 10px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .point-reserve strong { font-size: 22px; }
+      .online-player-row.current { outline: 2px solid var(--accent); }
+      #tableCreatePanel.open, #settingsPagePanel.open, #onlineGamePanel.open { display: block !important; }
+      #tableRoomPanel { display: none !important; }
+      #tableCreatePanel.open { max-height: none; overflow: visible; background: rgba(10, 36, 30, 0.94); }
+      pre {
+        white-space: pre-wrap;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 72px;
+      }
+      .online-action-buttons button { margin: 3px; }
+      @media (max-width: 768px) {
+        main { padding: 14px 12px 140px; }
+        .top, .club-main-header, .row, .table-seat-line, .seat-row, .point-user-row, .online-player-row {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+        .table-card { max-width: none; }
+      }
+    </style>
+  </head>
+  <body data-screen="auth" data-role="member">
+    <main>
+      <div class="top">
+        <div>
+          <h1>アンミカロケット ロビー</h1>
+          <p id="configStatus">確認中...</p>
+          <p id="lanHint" class="warn"></p>
+          <div class="link-panel">
+            <div><strong>PC用URL:</strong> <span id="pcDebugUrl">確認中...</span></div>
+            <div><strong>スマホ用URL:</strong> <span id="mobileDebugUrl">確認中...</span></div>
+            <button id="copyMobileUrlButton" type="button">スマホ用URLをコピー</button>
+          </div>
+        </div>
+        <div class="signed-in-only">
+          <p>現在のユーザー: <strong id="currentUser">未ログイン</strong></p>
+          <div class="club-header-actions">
+            <button id="globalBackButton" type="button" class="secondary">戻る</button>
+            <button id="settingsToggleButton" class="gear-button" type="button" aria-label="設定">⚙</button>
+            <div id="settingsDrawer" class="settings-menu drawer">
+              <button type="button" data-settings-page="account">アカウント設定</button>
+              <button type="button" data-settings-page="joinRequests">加入申請</button>
+              <button type="button" data-settings-page="clubSettings">クラブ設定</button>
+              <button type="button" data-settings-page="points">クラブポイント</button>
+              <button type="button" data-settings-page="history">ポイント収支</button>
+              <button type="button" data-settings-page="replays">牌譜一覧</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="errorBox" class="error-box"></div>
+
+      <section class="screen screen-auth">
+        <h2>ログイン / アカウント作成</h2>
+        <p class="muted">メールアドレスとパスワードでログインします。ログインIDは識別用に自動発行されます。</p>
+        <div class="row">
+          <label>プレイヤー名 <input id="displayName" autocomplete="name" value="Player" /></label>
+          <label>メールアドレス <input id="email" type="email" autocomplete="email" placeholder="必須" required /></label>
+          <label>パスワード <input id="password" type="password" autocomplete="current-password" /></label>
+        </div>
+        <div class="row">
+          <button id="signUpButton">アカウント作成</button>
+          <button id="signInButton">ログイン</button>
+          <button id="debugSignInButton" class="secondary" type="button">デバッグログイン</button>
+        </div>
+        <p class="muted">デバッグログインは仮アカウントを自動作成してログインします。本番前に削除する機能です。</p>
+      </section>
+
+      <section class="screen screen-clubs">
+        <h2>クラブ選択</h2>
+        <div class="row">
+          <label>クラブ名 <input id="clubName" value="アンミカクラブ" /></label>
+          <button id="createClubButton">クラブ作成</button>
+          <button id="loadClubsButton" class="secondary">更新</button>
+        </div>
+        <div class="row">
+          <label>クラブID <input id="clubId" placeholder="C-XXXXXX" /></label>
+          <button id="searchClubButton" class="secondary">検索</button>
+          <button id="requestJoinButton">加入申請</button>
+        </div>
+        <div id="clubSearchResult" class="link-panel muted">クラブIDで検索してください。</div>
+        <h3>加入済みクラブ</h3>
+        <div id="clubCards" class="card-grid"></div>
+      </section>
+
+      <section class="screen screen-club-home">
+        <div class="club-main-header">
+          <div>
+            <h2 id="clubHomeTitle">クラブ</h2>
+            <p class="muted">卓作成と卓一覧をここで管理します。</p>
+          </div>
+          <div class="club-header-actions">
+            <button id="backToClubsButton" type="button" class="secondary">クラブ選択へ</button>
+            <button id="settingsGearButton" class="gear-button" type="button" aria-label="設定">⚙</button>
+          </div>
+        </div>
+
+        <div class="primary-actions admin-only">
+          <button id="showCreateTableButton">卓作成</button>
+          <button id="loadTablesButton" class="secondary">更新</button>
+        </div>
+        <p class="member-blocked muted">クラブメンバーは卓一覧を表示できます。</p>
+
+        <section id="tableCreatePanel" class="modal-panel">
+          <div class="row">
+            <button id="backFromCreateTableButton" type="button" class="secondary">戻る</button>
+          </div>
+          <h3>卓作成</h3>
+          <label>卓名 <input id="tableName" placeholder="アンミカロケット卓" /></label>
+          <label>ルール
+            <select id="ruleId">
+              <option value="anmika-rocket">アンミカロケット</option>
+              <option value="tsumo-lossless-3ma">ツモ損なし全赤三麻</option>
+              <option value="normal-4ma" disabled>ノーマル四麻（未実装）</option>
+              <option value="normal-3ma" disabled>ノーマル三麻（未実装）</option>
+              <option value="jewel" disabled>ジュエル（未実装）</option>
+            </select>
+          </label>
+          <div id="anmikaRuleCreateFields">
+            <div class="row">
+              <label>レート: 1点 = <span id="pointRateValue">1.0</span>ポイント
+                <input id="pointRate" type="range" min="0.1" max="10" step="0.1" value="1.0" />
+              </label>
+              <label>レーキ: <span id="rakePercentValue">5.0</span>%
+                <input id="rakePercent" type="range" min="0" max="10" step="0.5" value="5" />
+              </label>
+            </div>
+            <label><input id="rocket19Enabled" type="checkbox" /> 1・9牌ロケット</label>
+            <label><input id="baibaEnabled" type="checkbox" /> 倍場</label>
+            <label><input id="otokogiEnabled" type="checkbox" checked /> 男気ルール</label>
+            <label><input id="feverRiichiEnabled" type="checkbox" /> フィーバーリーチ</label>
+            <label>ターコイズ5p
+              <select id="turquoise5pCount">
+                <option value="0">0枚</option>
+                <option value="1">1枚</option>
+                <option value="2">2枚</option>
+              </select>
+            </label>
+          </div>
+          <div id="tsumoLossless3maFields"></div>
+          <div class="row">
+            <button id="createTableButton">作成</button>
+            <button id="cancelCreateTableButton" class="secondary">キャンセル</button>
+          </div>
+        </section>
+
+        <h3>卓一覧</h3>
+        <div id="tableCards" class="table-list"></div>
+
+        <section id="tableRoomPanel" class="modal-panel">
+          <button id="backFromTableRoomButton" type="button" class="secondary">戻る</button>
+          <div class="row">
+            <button id="copyTableUrlButton">卓URLコピー</button>
+            <button id="sitButton">座る</button>
+            <button id="leaveButton" class="secondary">立つ</button>
+            <button id="addCpuButton" class="admin-only">CPU追加</button>
+            <button id="removeCpuButton" class="admin-only secondary">CPU削除</button>
+            <button id="startDebugGameButton" class="admin-only">デバッグ対局開始</button>
+            <button id="openOnlineGameButton" class="secondary">オンライン対局を開く</button>
+            <button id="loadSeatsButton" class="secondary">更新</button>
+          </div>
+          <p id="tableUrl" class="muted"></p>
+          <div id="seatRows" class="seat-list"></div>
+          <pre id="seatsOutput">席情報を読み込みます</pre>
+        </section>
+
+        <section id="onlineGamePanel" class="modal-panel">
+          <button id="backFromOnlineGameButton" type="button" class="secondary">戻る</button>
+          <h3>オンライン対局</h3>
+          <label>牌 <input id="onlineTileLabel" placeholder="例: 3p / 東 / 白" /></label>
+          <div class="online-action-buttons">
+            <button type="button" data-online-action="draw">ツモ</button>
+            <button type="button" data-online-action="discard">打牌</button>
+            <button type="button" data-online-action="ron">ロン</button>
+            <button type="button" data-online-action="tsumo">ツモ和了</button>
+            <button type="button" data-online-action="pon">ポン</button>
+            <button type="button" data-online-action="kan">カン</button>
+            <button type="button" data-online-action="riichi">リーチ</button>
+            <button type="button" data-online-action="skip">スキップ</button>
+            <button type="button" data-online-action="flower">華</button>
+          </div>
+          <div id="onlineGameBoard"></div>
+        </section>
+      </section>
+
+      <section id="settingsPagePanel" class="settings-page modal-panel">
+        <button id="backFromSettingsPageButton" type="button" class="secondary">戻る</button>
+        <h3 id="settingsPageTitle">設定</h3>
+        <div id="settingsPageBody"></div>
+      </section>
+
+      <section id="legacyPanels" hidden>
+        <select id="clubSelect"></select>
+        <select id="tableSelect"></select>
+        <p>ログインID: <strong id="loginIdDisplay">未設定</strong></p>
+        <input id="newLoginId" />
+        <input id="confirmPassword" type="password" />
+        <button id="changeLoginIdButton">ログインID変更</button>
+        <button id="signOutButton">ログアウト</button>
+        <div id="clubDetails"></div>
+        <button id="loadClubHomeButton">開く</button>
+        <input id="applicantUserId" />
+        <button id="approveJoinButton">承認</button>
+        <button id="showClubPointsButton">クラブポイント表示</button>
+        <div id="clubPointPanel" class="modal-panel">
+          <pre id="pointSummary">未取得</pre>
+          <div id="pointUserRows" class="point-user-list"></div>
+          <input id="pointTargetUserId" />
+          <input id="pointAmount" type="number" value="100" />
+          <button id="sendPointButton">送る</button>
+          <button id="collectPointButton">回収</button>
+        </div>
+        <button id="loadRakeButton">レーキ履歴</button>
+        <pre id="rakeSummary">未取得</pre>
+        <pre id="rakeHistory">未取得</pre>
+        <pre id="debugSummary">確認中...</pre>
+        <pre id="logOutput">ログはここに表示されます</pre>
+      </section>
+    </main>
+
+    <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
+    <script src="../runtime/online-debug.js?v=20260615-deploy-same-origin-socket-a"></script>
+  </body>
+</html>

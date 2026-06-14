@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Supabase接続確認</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+        background: #0f3028;
+        color: #f4fff9;
+        min-height: 100vh;
+        overflow-y: auto;
+      }
+
+      html {
+        min-height: 100vh;
+        overflow-y: auto;
+      }
+
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      section {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        padding: 16px;
+        margin: 14px 0;
+        background: rgba(0, 0, 0, 0.22);
+      }
+
+      h1,
+      h2 {
+        margin: 0 0 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        margin: 10px 0;
+      }
+
+      input,
+      select,
+      button {
+        font: inherit;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        padding: 8px 10px;
+      }
+
+      input,
+      select {
+        background: #f8fffb;
+        color: #10241e;
+      }
+
+      button {
+        cursor: pointer;
+        background: #f2b84b;
+        color: #1f1704;
+        font-weight: 700;
+      }
+
+      button.secondary {
+        background: rgba(255, 255, 255, 0.16);
+        color: #f4fff9;
+      }
+
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: end;
+      }
+
+      .row > label {
+        flex: 1 1 220px;
+      }
+
+      pre {
+        white-space: pre-wrap;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 72px;
+      }
+
+      .ok {
+        color: #98f5b5;
+      }
+
+      .warn {
+        color: #ffd36a;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Supabase接続確認</h1>
+      <p id="configStatus">設定を確認中...</p>
+      <p id="lanHint" class="warn"></p>
+
+      <section>
+        <h2>1. ログイン / アカウント作成</h2>
+        <div class="row">
+          <label>プレイヤー名 <input id="displayName" autocomplete="name" value="Player" /></label>
+          <label>パスワード <input id="password" type="password" autocomplete="current-password" /></label>
+        </div>
+        <div class="row">
+          <label>ユーザーID <input id="userId" autocomplete="username" placeholder="ログイン時に入力" /></label>
+          <button id="signUpButton">作成</button>
+          <button id="signInButton">ログイン</button>
+          <button id="signOutButton" class="secondary">ログアウト</button>
+        </div>
+        <p>現在のユーザー: <strong id="currentUser">未ログイン</strong></p>
+      </section>
+
+      <section>
+        <h2>2. クラブ</h2>
+        <div class="row">
+          <label>クラブ名 <input id="clubName" value="テストクラブ" /></label>
+          <button id="createClubButton">クラブ作成</button>
+          <button id="loadClubsButton" class="secondary">自分のクラブを更新</button>
+        </div>
+        <div class="row">
+          <label>クラブID検索 / 加入申請 <input id="clubId" placeholder="club uuid" /></label>
+          <button id="requestJoinButton">加入申請</button>
+        </div>
+        <div class="row">
+          <label>承認するユーザーID <input id="applicantUserId" placeholder="申請者のユーザーID" /></label>
+          <button id="approveJoinButton">加入承認</button>
+        </div>
+        <label>操作対象クラブ
+          <select id="clubSelect"></select>
+        </label>
+      </section>
+
+      <section>
+        <h2>3. 卓</h2>
+        <div class="row">
+          <label>卓名 <input id="tableName" value="オンライン疎通テスト卓" /></label>
+          <button id="createTableButton">卓作成</button>
+          <button id="loadTablesButton" class="secondary">卓一覧を更新</button>
+        </div>
+        <label>操作対象卓
+          <select id="tableSelect"></select>
+        </label>
+        <div class="row">
+          <button id="copyTableUrlButton">卓URLコピー</button>
+          <button id="sitButton">空席に座る</button>
+          <button id="leaveButton" class="secondary">退席</button>
+          <button id="loadSeatsButton" class="secondary">席を更新</button>
+        </div>
+        <p>卓URL: <code id="tableUrl">未選択</code></p>
+        <pre id="seatsOutput"></pre>
+      </section>
+
+      <section>
+        <h2>オンライン対戦デバッグ</h2>
+        <p>Supabase接続、現在ユーザー、クラブ、卓、Realtimeの状態をここで確認できます。</p>
+        <pre id="debugSummary"></pre>
+        <pre id="logOutput"></pre>
+      </section>
+    </main>
+
+    <script src="/runtime/supabase-public-config.js"></script>
+    <script src="/runtime/online-debug.js"></script>
+  </body>
+</html>

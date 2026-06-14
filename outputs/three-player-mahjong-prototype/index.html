@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css?v=20260614-remote-viewer-discard-a" />
+    <title>三人麻雀</title>
+    <style>
+      .online-debug-page {
+        min-height: 100vh;
+        background: #0f3028;
+        color: #f4fff9;
+        font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+      }
+
+      .online-debug-page main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      .online-debug-page section {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        padding: 16px;
+        margin: 14px 0;
+        background: rgba(0, 0, 0, 0.22);
+      }
+
+      .online-debug-page label {
+        display: grid;
+        gap: 6px;
+        margin: 10px 0;
+      }
+
+      .online-debug-page input,
+      .online-debug-page select,
+      .online-debug-page button {
+        font: inherit;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        padding: 8px 10px;
+      }
+
+      .online-debug-page input,
+      .online-debug-page select {
+        background: #f8fffb;
+        color: #10241e;
+      }
+
+      .online-debug-page button {
+        cursor: pointer;
+        background: #f2b84b;
+        color: #1f1704;
+        font-weight: 700;
+      }
+
+      .online-debug-page button.secondary {
+        background: rgba(255, 255, 255, 0.16);
+        color: #f4fff9;
+      }
+
+      .online-debug-page .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: end;
+      }
+
+      .online-debug-page .row > label {
+        flex: 1 1 220px;
+      }
+
+      .online-debug-page .link-panel {
+        display: grid;
+        gap: 6px;
+        margin: 10px 0 14px;
+        padding: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 13px;
+      }
+
+      .online-debug-page .link-panel button {
+        justify-self: start;
+        padding: 6px 10px;
+      }
+
+      .online-debug-page pre {
+        white-space: pre-wrap;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 72px;
+      }
+
+      .online-debug-page .ok {
+        color: #98f5b5;
+      }
+
+      .online-debug-page .warn {
+        color: #ffd36a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="top-bar">
+        <h1>三人麻雀</h1>
+      </header>
+
+      <section id="game-root" class="game-root" aria-live="polite">
+        <section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
+          <h2>Loading...</h2>
+          <p>Preparing the mahjong table. If this stays here, return to the lobby and start again.</p>
+          <button type="button" onclick="location.href='online-debug/index.html'">Back to lobby</button>
+        </section>
+      </section>
+    </main>
+
+    <script>
+  (function () {
+    const showFatal = (message) => {
+      const root = document.querySelector("#game-root") || document.body;
+      const returnClubId = localStorage.getItem("anmikaOnlineDebug.returnClubId") || "";
+      const returnUrl = location.protocol === "file:"
+        ? new URL(`online-debug/index.html${returnClubId ? `?returnClubId=${encodeURIComponent(returnClubId)}` : ""}`, location.href).href
+        : `${location.origin}/online-debug/index.html${returnClubId ? `?returnClubId=${encodeURIComponent(returnClubId)}` : ""}`;
+      const safeMessage = String(message || "unknown error").replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]));
+      root.innerHTML = `<section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
+        <h2>麻雀画面を開けませんでした</h2>
+        <p>原因: ${safeMessage}</p>
+        <button type="button" onclick="location.href='${returnUrl}'">新しいロビーへ戻る</button>
+        <button type="button" onclick="location.reload()">再読み込み</button>
+      </section>`;
+    };
+    window.addEventListener("error", (event) => showFatal(event.message));
+    window.addEventListener("unhandledrejection", (event) => showFatal(event.reason?.message || event.reason));
+
+    const loadScript = (src) => new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error(`script load failed: ${src}`));
+      document.body.appendChild(script);
+    });
+
+    const hashTableMatch = location.hash.match(/^#\/table\/(.+)$/);
+    const hashReplayMatch = location.hash.match(/^#\/replay\/(.+)$/);
+    const hashTableId = hashTableMatch ? decodeURIComponent(hashTableMatch[1]) : "";
+    const isLocalDebugGameRoute = hashTableId.startsWith("online-debug-");
+
+    if (hashTableMatch && !isLocalDebugGameRoute) {
+      const tableId = hashTableId;
+      const nextUrl = location.protocol === "file:"
+        ? new URL(`online-debug/index.html?tableId=${encodeURIComponent(tableId)}`, location.href).href
+        : `${location.origin}/online-debug/index.html?tableId=${encodeURIComponent(tableId)}`;
+      location.replace(nextUrl);
+      return;
+    }
+    if (location.protocol === "file:" && !isLocalDebugGameRoute && !hashReplayMatch) {
+      location.replace(new URL("online-debug/index.html", location.href).href);
+      return;
+    }
+    if (location.pathname === "/online-debug" || location.pathname === "/online-debug/" || location.pathname.startsWith("/table/")) {
+      const tableId = location.pathname.startsWith("/table/") ? decodeURIComponent(location.pathname.split("/table/")[1] || "") : "";
+      const nextUrl = `${location.origin}/online-debug/index.html${tableId ? `?tableId=${encodeURIComponent(tableId)}` : ""}`;
+      location.replace(nextUrl);
+      return;
+    }
+    if (!hashTableMatch && !hashReplayMatch && !location.pathname.startsWith("/replay/")) {
+      const nextUrl = location.protocol === "file:"
+        ? new URL("online-debug/index.html", location.href).href
+        : `${location.origin}/online-debug/index.html`;
+      location.replace(nextUrl);
+      return;
+    }
+
+    const assetBase = location.protocol === "file:" ? "./" : "/";
+      const assetVersion = "20260615-last-hand-cpu-delay-a";
+    loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
+  })();
+</script>
+  </body>
+</html>

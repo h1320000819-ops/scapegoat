@@ -1,0 +1,533 @@
+Mahjong prototype: http://localhost:5173/
+LAN access: http://192.168.10.107:5173/
+[AnmikaGameServer] join {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  userId: '6ba5aa01-669d-4435-b521-6d19a31a27cb',
+  hasState: false,
+  version: 0
+}
+[AnmikaGameServer] join {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  userId: '3cda7884-9464-4b26-b7a2-bd79cc5ab65f',
+  hasState: false,
+  version: 0
+}
+[AnmikaGameServer] initState {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  userId: '3cda7884-9464-4b26-b7a2-bd79cc5ab65f',
+  alreadyInitialized: false
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 1,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 2,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] join {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  userId: '0aa71c7f-91b9-48dd-8cf9-e6436e6cf40e',
+  hasState: true,
+  version: 2
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 3,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 4,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 5,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 6,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 7,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 8,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 9,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 10,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 11,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 12,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 13,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 14,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 15,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 16,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 17,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 18,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 19,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 20,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 21,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 22,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 23,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 24,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 25,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 26,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 27,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 28,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 29,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 30,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 31,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 32,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 33,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 34,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 35,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 36,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 37,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 38,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 39,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 40,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 41,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 42,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 43,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 44,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 45,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 46,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 47,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 48,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 49,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 50,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 51,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 52,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 53,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 54,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 55,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 56,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 57,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 58,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 59,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 60,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 61,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 62,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 63,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 64,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 65,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 66,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 67,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 68,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 69,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 70,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 71,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 72,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 73,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 74,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 75,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 76,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 77,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 78,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 79,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 80,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 81,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 82,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 83,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}
+[AnmikaGameServer] persisted room {
+  tableId: '89fda77a-17df-47d3-9d35-a7d509049177',
+  gameId: 'socket-game-89fda77a-17df-47d3-9d35-a7d509049177',
+  version: 84,
+  file: 'C:\\Users\\h1320\\Documents\\Codex\\2026-06-04\\3-3-ai-ui-typescript-mvc\\outputs\\three-player-mahjong-prototype\\server\\game-state-store\\89fda77a-17df-47d3-9d35-a7d509049177.json'
+}

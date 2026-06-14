@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: anmika-rocket-online
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: VITE_REPOSITORY_BACKEND
+        value: supabase
+      - key: VITE_SUPABASE_URL
+        value: https://zotqxmnvtaxbduwphjjo.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
