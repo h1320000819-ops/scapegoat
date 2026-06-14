@@ -200,6 +200,16 @@
     table?.table_seats || table?.seats || table?.tableSeats || state.localSeatsByTable[localSeatKey(table?.table_id)] || [],
     table?.table_id
   );
+  const visibleTableWaiting = (table) => Array.isArray(table?.table_waiting_list)
+    ? [...table.table_waiting_list].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+    : [];
+  const waitingUserName = (row) => {
+    const profile = Array.isArray(row.users) ? row.users[0] : row.users;
+    if (row.user_id === state.user?.id) return state.user.displayName || "あなた";
+    return profile?.display_name || row.display_name || `Player ${String(row.user_id || "").slice(0, 8)}`;
+  };
+  const isCurrentUserWaitingForTable = (table) =>
+    Boolean(state.user?.id && visibleTableWaiting(table).some((row) => row.user_id === state.user.id));
   const formatSeatName = (seat) => {
     if (seat.player_type === "cpu") return seat.display_name || `CPU${Number(seat.seat_index) + 1}`;
     if (seat.user_id) {
@@ -1390,6 +1400,35 @@
       );
     }
   };
+  const loadWaitingForTables = async () => {
+    const tableIds = [...new Set((state.tables || []).map((table) => table?.table_id).filter(Boolean))];
+    state.tables = state.tables.map((table) => ({ ...table, table_waiting_list: table.table_waiting_list || [] }));
+    if (!tableIds.length) return;
+    const inClause = tableIds.join(",");
+    let rows = [];
+    try {
+      rows = await rest(
+        "/table_waiting_list?select=table_id,user_id,created_at,users(user_id,display_name,login_id)&table_id=in.(" +
+          inClause +
+          ")&order=created_at.asc"
+      );
+    } catch (joinError) {
+      log("ウェイティング一覧のユーザー情報取得に失敗したため、ID表示で取得します。", rawErrorText(joinError));
+      rows = await rest(
+        "/table_waiting_list?select=table_id,user_id,created_at&table_id=in.(" + inClause + ")&order=created_at.asc"
+      );
+    }
+    const byTable = new Map();
+    (rows || []).forEach((row) => {
+      const list = byTable.get(row.table_id) || [];
+      list.push(row);
+      byTable.set(row.table_id, list);
+    });
+    state.tables = state.tables.map((table) => ({
+      ...table,
+      table_waiting_list: byTable.get(table.table_id) || [],
+    }));
+  };
   const loadTables = async () => {
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
@@ -1398,8 +1437,9 @@
     } catch (error) {
       const raw = rawErrorText(error);
       if (!raw.includes("shared_list_tables_for_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
-      state.tables = await rest("/tables?select=*,table_seats(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+      state.tables = await rest("/tables?select=*,table_seats(*),table_waiting_list(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
     }
+    await loadWaitingForTables().catch((error) => log("ウェイティング一覧の取得に失敗しました。", rawErrorText(error)));
     await reconcileTablePlayingStatuses();
     await maybeAutoStartTables();
     render();
@@ -1464,6 +1504,38 @@
     });
     return normalized;
   };
+  const clearMyWaiting = async () => {
+    const user = requireUser();
+    try {
+      await rest("/rpc/clear_my_table_waiting", { method: "POST", body: JSON.stringify({}) });
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("clear_my_table_waiting") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+      await rest("/table_waiting_list?user_id=eq." + encodeURIComponent(user.id), { method: "DELETE" }).catch(() => {});
+    }
+  };
+  const toggleWaiting = async (tableId) => {
+    tableId = requireTableId(tableId, "ウェイティング切替");
+    requireUser();
+    try {
+      await rest("/rpc/toggle_table_waiting", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("toggle_table_waiting") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
+      const existing = await rest(
+        "/table_waiting_list?select=table_id&table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id) + "&limit=1"
+      );
+      if (Array.isArray(existing) && existing.length) {
+        await rest("/table_waiting_list?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id), { method: "DELETE" });
+      } else {
+        await rest("/table_waiting_list", {
+          method: "POST",
+          body: JSON.stringify({ table_id: tableId, user_id: state.user.id }),
+        });
+      }
+    }
+    await loadTables();
+  };
   const loadSeats = async () => {
     const tableId = selectedTableId();
     if (!tableId) throw new Error(JA_MESSAGES.selectTable);
@@ -1507,6 +1579,7 @@
           await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
         }
       }
+      await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
       await loadSeats();
       return;
@@ -1522,6 +1595,7 @@
       target.user_id = requireUser().id;
       target.player_type = "human";
       target.display_name = requireUser().displayName || "あなた";
+      await clearMyWaiting().catch(() => {});
       saveLocalSeats(tableId, rows);
       renderSeatRows(rows, tableId);
       await loadTables().catch(() => render());
@@ -3048,6 +3122,9 @@
         const seats = visibleTableSeats(table);
         const filled = filledSeatCount(seats);
         const hasCpu = hasCpuSeat(seats) || table.is_debug;
+        const waitingRows = visibleTableWaiting(table);
+        const isOwnWaiting = isCurrentUserWaitingForTable(table);
+        const isOwnSeatInTable = isCurrentUserSeatedAt(seats);
         const card = document.createElement("div");
         card.className = "card table-card";
         const ruleLabel = RULE_LABELS[table.rule_id || "anmika-rocket"] || table.rule_id || "アンミカロケット";
@@ -3057,7 +3134,9 @@
           <div>${formatRuleSummary({ ...table, is_debug: hasCpu })}</div>
           <div>状態: ${table.status || "waiting"} / 参加人数: ${filled}/3</div>
           <div class="table-seats"></div>
+          <div class="table-waiting-list"></div>
           <div class="table-card-actions">
+            <button type="button" data-action="toggleWaiting" class="secondary"></button>
             <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
             <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
             <button type="button" data-action="deleteTable" class="admin-only danger">卓削除</button>
@@ -3113,6 +3192,19 @@
             line.append(sitButton);
           }
           seatContainer.append(line);
+        });
+        const waitingContainer = card.querySelector(".table-waiting-list");
+        waitingContainer.textContent = waitingRows.length
+          ? `ウェイティング: ${waitingRows.map((row, index) => `${index + 1}. ${waitingUserName(row)}`).join(" / ")}`
+          : "ウェイティング: なし";
+        const waitingButton = card.querySelector('[data-action="toggleWaiting"]');
+        waitingButton.textContent = isOwnWaiting ? "ウェイティング解除" : "ウェイティング";
+        waitingButton.disabled = isOwnSeatInTable;
+        waitingButton.title = isOwnSeatInTable ? "着席中の卓ではウェイティングできません" : "";
+        waitingButton.addEventListener("click", () => {
+          uiLog("waiting toggled", { tableId: table.table_id });
+          clearError();
+          toggleWaiting(table.table_id).catch((error) => showError("ウェイティング切替に失敗しました", error));
         });
         card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });

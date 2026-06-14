@@ -476,6 +476,25 @@ const leaveOnlineTableForSync = async (sync) => {
     }).catch((error) => console.warn("[OnlineSync] table waiting update failed", error));
   };
   try {
+    const resolveResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_leavers`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ p_table_id: sync.tableId }),
+    });
+    if (resolveResponse.ok) return true;
+    const resolveText = await resolveResponse.text();
+    if (
+      resolveText &&
+      !resolveText.includes("resolve_last_hand_leavers") &&
+      !resolveText.includes("schema cache") &&
+      !resolveText.includes("Could not find the function")
+    ) {
+      console.warn("[OnlineSync] ラス半者の一括退席に失敗しました", resolveText);
+    }
+  } catch (error) {
+    console.warn("[OnlineSync] ラス半者の一括退席に失敗しました", error);
+  }
+  try {
     const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/leave_table`, {
       method: "POST",
       headers,
