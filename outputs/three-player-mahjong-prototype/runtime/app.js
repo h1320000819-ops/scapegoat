@@ -2477,6 +2477,9 @@ class GameController {
     this.isApplyingOnlineState = true;
     this.state = { ...this.state, ...next };
     this.isApplyingOnlineState = false;
+    if (next.handLog?.result && nextResultKey !== previousResultKey) {
+      this.saveReplayForCurrentHand();
+    }
     if (shouldLeaveOnlineTableAfterGameEnded(this.state, sync) && !this.onlineGameEndedReturnScheduled) {
       this.onlineGameEndedReturnScheduled = true;
       setTimeout(async () => {
@@ -3054,9 +3057,10 @@ class GameController {
     const tile = drawn ?? hand;
     if (!tile) return;
     if (!isCpuAction && isSocketAuthoritativeGame() && player.type !== "cpu") {
-      submitOnlineGameAction("discard", { tileId, tile, localPlayerId: player.id }).catch((error) => {
+      const onlineActionType = isRiichiDiscardPhase ? "riichi" : "discard";
+      submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id }).catch((error) => {
         console.warn("[SocketGame] discard action failed", error);
-        this.state.log.unshift(`オンライン打牌に失敗: ${error.message}`);
+        this.state.log.unshift(`${isRiichiDiscardPhase ? "オンラインリーチ" : "オンライン打牌"}に失敗: ${error.message}`);
         this.emit();
       });
       return;
@@ -3414,7 +3418,7 @@ class GameController {
       if (!explicitIsMenzen(player) && !hasTurquoise5pInTilesOrMelds(remaining, player.melds ?? [])) return false;
       const waits = getWinningTilesForTenpai(remaining, player.melds ?? []);
       console.log("[WaitAfterDiscard]", formatTile(discard), waits.map(formatTile).join(", "));
-      const discardedKinds = new Set(player.discardedTiles.map((entry) => tileKindKey(entry.tile)));
+      const discardedKinds = new Set([...player.discardedTiles.map((entry) => tileKindKey(entry.tile)), tileKindKey(discard)]);
       return waits.length > 0 && !waits.some((wait) => discardedKinds.has(tileKindKey(wait)));
     }).map((tile) => tile.id);
   }
@@ -3775,6 +3779,8 @@ class GameView {
       this.root.querySelectorAll(selector).forEach((button) => {
         let handledAt = 0;
         const run = (event) => {
+          if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 0) return;
+          if (event.type === "click" && event.button && event.button !== 0) return;
           event.preventDefault();
           event.stopPropagation();
           const now = Date.now();
@@ -4398,8 +4404,9 @@ class GameView {
   }
   assistControls(player) {
     const assist = player.assistSettings ?? {};
+    const autoWinChecked = Boolean(assist.autoWin || player.isRiichi);
     return `<div class="assist-controls">
-      <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${assist.autoWin ? "checked" : ""} /> 自動和了</label>
+      <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
       <label><input type="checkbox" data-last-hand ${this.currentStateForClock?.settings?.isLastHand ? "checked" : ""} /> ラス半</label>
     </div>`;
@@ -4524,8 +4531,13 @@ class GameView {
     const baibaMultiplier = Number(score.baibaMultiplier ?? 1);
     const pochiMultiplier = Number(score.pointMultiplier ?? 1);
     const multiplierTotal = baibaMultiplier * pochiMultiplier;
+    const pochiLabel = score.pochiColor ? (pochiText[score.pochiColor] ?? `${score.pochiColor}ぽっち`) : "";
+    const selectedWaitLine = score.pochiActivated && winningTile
+      ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(winningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
+      : "";
     return `<section class="score-result result-modal compact-score-result"><h2>和了結果</h2>
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
+      ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント・レーキ精算なし</p>` : ""}
       <div class="score-tile-section">
         <div><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
@@ -4653,6 +4665,18 @@ window.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   controller.handleContextMenuAction();
 });
+let lastTableTapAt = 0;
+window.addEventListener("touchend", (event) => {
+  if (event.target?.closest?.("button, a, input, textarea, select, label, [contenteditable='true'], .tile-button")) return;
+  const nowMs = Date.now();
+  if (nowMs - lastTableTapAt <= 360) {
+    event.preventDefault();
+    controller.handleContextMenuAction();
+    lastTableTapAt = 0;
+    return;
+  }
+  lastTableTapAt = nowMs;
+}, { passive: false });
 setInterval(() => controller.tickClock(), 500);
 setInterval(() => {
   refreshOnlineSyncFromServer().catch((error) => {

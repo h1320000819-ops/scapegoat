@@ -286,6 +286,199 @@ const getServerTripletKeys = (counts, melds = []) => {
   }
   return [...keys];
 };
+const serverTerminalHonorKeys = new Set([
+  "manzu:1", "manzu:9", "pinzu:1", "pinzu:9", "souzu:1", "souzu:9",
+  "honor:east", "honor:south", "honor:west", "honor:north", "honor:white", "honor:green", "honor:red",
+]);
+const isServerTerminalOrHonorTile = (tile) => serverTerminalHonorKeys.has(tileKindKey(tile));
+const isServerNagashiYakumanPlayer = (player) => {
+  const discards = ensureArray(player?.discardedTiles).map((entry) => entry?.tile || entry).filter(Boolean);
+  return discards.length > 0 && discards.every(isServerTerminalOrHonorTile);
+};
+const isServerWhitePochiTile = (tile) => tile?.suit === "honor" && tile?.kind === "white" && tile?.isPochi;
+const serverPochiMultiplier = (tile) => {
+  if (!isServerWhitePochiTile(tile)) return 1;
+  if (tile.pochiColor === "red") return -2;
+  if (tile.pochiColor === "yellow") return -1;
+  if (tile.pochiColor === "blue") return 2;
+  return 1;
+};
+const serverTileCloneWithColor = (tile, color) => ({ ...tile, id: `${tile.id || tileKindKey(tile)}-${color}-pochi`, color, isPochi: false, pochiColor: undefined });
+const parseServerNumberKey = (key) => {
+  const [suit, rawRank] = String(key || "").split(":");
+  const rank = Number(rawRank);
+  if (!["manzu", "pinzu", "souzu"].includes(suit) || !Number.isFinite(rank)) return null;
+  return { suit, rank };
+};
+const serverFixedMelds = (melds = []) => ensureArray(melds).map((meld) => ({
+  type: "triplet",
+  key: tileKindKey(meld?.tiles?.[0]),
+  source: meld?.type || "meld",
+}));
+const serverExtractMelds = (counts) => {
+  const first = [...counts.entries()].find(([, count]) => count > 0);
+  if (!first) return [[]];
+  const [key, count] = first;
+  const results = [];
+  if (count >= 3) {
+    const next = new Map(counts);
+    next.set(key, count - 3);
+    for (const rest of serverExtractMelds(next)) results.push([{ type: "triplet", key, source: "concealed" }, ...rest]);
+  }
+  const parsed = parseServerNumberKey(key);
+  if (parsed && parsed.suit !== "manzu" && parsed.rank <= 7) {
+    const key2 = `${parsed.suit}:${parsed.rank + 1}`;
+    const key3 = `${parsed.suit}:${parsed.rank + 2}`;
+    if ((counts.get(key2) || 0) > 0 && (counts.get(key3) || 0) > 0) {
+      const next = new Map(counts);
+      next.set(key, (next.get(key) || 0) - 1);
+      next.set(key2, (next.get(key2) || 0) - 1);
+      next.set(key3, (next.get(key3) || 0) - 1);
+      for (const rest of serverExtractMelds(next)) results.push([{ type: "sequence", suit: parsed.suit, start: parsed.rank, source: "concealed" }, ...rest]);
+    }
+  }
+  return results;
+};
+const serverFindStandardShapes = (counts, neededMelds = 4) => {
+  const shapes = [];
+  for (const [pairKey, count] of counts.entries()) {
+    if (count < 2) continue;
+    const next = new Map(counts);
+    next.set(pairKey, count - 2);
+    for (const melds of serverExtractMelds(next)) {
+      if (melds.length === neededMelds) shapes.push({ pairKey, melds });
+    }
+  }
+  return shapes;
+};
+const serverCountIipeikouPairs = (sequences) => {
+  const counts = new Map();
+  for (const sequence of sequences) {
+    const key = `${sequence.suit}:${sequence.start}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.values()].reduce((sum, count) => sum + Math.floor(count / 2), 0);
+};
+const serverHasSanshoku = (sequences) => {
+  for (let start = 1; start <= 7; start++) {
+    const suits = new Set(sequences.filter((meld) => meld.start === start).map((meld) => meld.suit));
+    if (suits.has("manzu") && suits.has("pinzu") && suits.has("souzu")) return true;
+  }
+  return false;
+};
+const serverHasIttsu = (sequences) => ["pinzu", "souzu"].some((suit) => {
+  const starts = new Set(sequences.filter((meld) => meld.suit === suit).map((meld) => meld.start));
+  return starts.has(1) && starts.has(4) && starts.has(7);
+});
+const serverIsHonroutou = (tiles) => ensureArray(tiles).every((tile) => serverTerminalHonorKeys.has(tileKindKey(tile)));
+const serverChantaOrJunchan = (tiles, shape, isOpen) => {
+  if (serverIsHonroutou(tiles)) return null;
+  if (!shape.melds.some((meld) => meld.type === "sequence")) return null;
+  const meldOk = (meld) => {
+    if (meld.type === "triplet") return serverTerminalHonorKeys.has(meld.key);
+    return meld.start === 1 || meld.start === 7;
+  };
+  if (!serverTerminalHonorKeys.has(shape.pairKey) && !parseServerNumberKey(shape.pairKey)) return null;
+  const pairParsed = parseServerNumberKey(shape.pairKey);
+  const pairOk = serverTerminalHonorKeys.has(shape.pairKey) || pairParsed?.rank === 1 || pairParsed?.rank === 9;
+  if (!pairOk || !shape.melds.every(meldOk)) return null;
+  const hasHonor = tiles.some((tile) => tile.suit === "honor");
+  return hasHonor ? { name: "チャンタ", han: isOpen ? 1 : 2 } : { name: "純チャン", han: isOpen ? 2 : 3 };
+};
+const serverColorYaku = (tiles, isClosed) => {
+  const numberTiles = ensureArray(tiles).filter((tile) => ["manzu", "pinzu", "souzu"].includes(tile.suit));
+  const suits = new Set(numberTiles.map((tile) => tile.suit));
+  const hasHonor = ensureArray(tiles).some((tile) => tile.suit === "honor");
+  if (suits.size === 1 && !hasHonor) return [{ name: "清一色", han: isClosed ? 6 : 5 }];
+  if (suits.size === 1 && hasHonor) return [{ name: "混一色", han: isClosed ? 3 : 2 }];
+  return [];
+};
+const serverIsChinitsuTiles = (tiles) => {
+  const filtered = ensureArray(tiles).filter((tile) => !isFlowerTile(tile));
+  const numberTiles = filtered.filter((tile) => ["manzu", "pinzu", "souzu"].includes(tile.suit));
+  return filtered.length > 0 && numberTiles.length === filtered.length && new Set(numberTiles.map((tile) => tile.suit)).size === 1;
+};
+const serverCountAnkou = (triplets, { isTsumo, winningKey }) => triplets.filter((triplet) => {
+  if (triplet.source === "ankan") return true;
+  if (triplet.source !== "concealed") return false;
+  if (!isTsumo && triplet.key === winningKey) return false;
+  return true;
+}).length;
+const serverIsRyanmen = (shape, winningKey) => {
+  const parsed = parseServerNumberKey(winningKey);
+  if (!parsed || shape.pairKey === winningKey) return false;
+  return shape.melds.some((meld) => {
+    if (meld.type !== "sequence" || meld.suit !== parsed.suit) return false;
+    if (parsed.rank === meld.start) return meld.start !== 7;
+    if (parsed.rank === meld.start + 2) return meld.start !== 1;
+    return false;
+  });
+};
+const serverIsPinfu = (shape, context) =>
+  shape.melds.every((meld) => meld.type === "sequence") &&
+  getServerYakuhaiHan(shape.pairKey, getServerSeatWind(context.state, context.player.id), context.state?.round?.roundWind || "east") === 0 &&
+  serverIsRyanmen(shape, context.winningKey);
+const serverShousangen = (shape, triplets) => {
+  const dragons = new Set(["honor:white", "honor:green", "honor:red"]);
+  return triplets.filter((meld) => dragons.has(meld.key)).length === 2 && dragons.has(shape.pairKey);
+};
+const serverIsManzuHonitsuYakuman = (tiles) =>
+  ensureArray(tiles).some((tile) => tile.suit === "manzu") &&
+  ensureArray(tiles).every((tile) => tile.suit === "manzu" || tile.suit === "honor");
+const serverIsRyuuiisou = (tiles) => {
+  const greenKeys = new Set(["souzu:2", "souzu:3", "souzu:4", "souzu:6", "souzu:8", "honor:green"]);
+  return ensureArray(tiles).length > 0 && ensureArray(tiles).every((tile) => greenKeys.has(tileKindKey(tile)));
+};
+const serverIsChuren = (tiles, isClosed) => {
+  if (!isClosed || ensureArray(tiles).length !== 14) return false;
+  const numberTiles = ensureArray(tiles).filter((tile) => ["manzu", "pinzu", "souzu"].includes(tile.suit));
+  if (numberTiles.length !== ensureArray(tiles).length) return false;
+  const suits = new Set(numberTiles.map((tile) => tile.suit));
+  if (suits.size !== 1) return false;
+  const counts = Array.from({ length: 10 }, (_, index) => index === 0 ? 0 : numberTiles.filter((tile) => Number(tile.rank) === index).length);
+  if (counts[1] < 3 || counts[9] < 3) return false;
+  for (let rank = 2; rank <= 8; rank++) if (counts[rank] < 1) return false;
+  return counts.slice(1).reduce((sum, count) => sum + count, 0) === 14;
+};
+const serverIsFirstTsumoYakumanEligible = (state, player, isTsumo) => {
+  if (!isTsumo || ensureArray(player?.melds).length > 0) return false;
+  const hasCallOrKan = ensureArray(state?.handLog?.events).some((event) => ["pon", "kan"].includes(event.type));
+  return !hasCallOrKan && Number(state?.turnIndex || 0) < ensureArray(state?.players).length;
+};
+const serverIsRenhouEligible = (state, player, isTsumo) => {
+  if (isTsumo || ensureArray(player?.melds).length > 0) return false;
+  const hasCallOrKan = ensureArray(state?.handLog?.events).some((event) => ["pon", "kan"].includes(event.type));
+  return !hasCallOrKan && Number(state?.turnIndex || 0) < ensureArray(state?.players).length;
+};
+const serverYakumanYaku = (context, shape, triplets) => {
+  const yaku = [];
+  const tripletKeys = new Set(triplets.map((meld) => meld.key));
+  const ankouCount = serverCountAnkou(triplets, { isTsumo: context.isTsumo, winningKey: context.winningKey });
+  const kanCount = ensureArray(context.player?.melds).filter((meld) => ["ankan", "minkan", "kakan"].includes(meld.type)).length;
+  if (serverIsManzuHonitsuYakuman(context.allTiles)) yaku.push({ name: "萬子混一色", han: 13, isYakuman: true });
+  if (serverIsRyuuiisou(context.allTiles)) yaku.push({ name: "緑一色", han: 13, isYakuman: true });
+  if (serverIsChuren(context.allTiles, context.isClosed)) yaku.push({ name: "九蓮宝燈", han: 13, isYakuman: true });
+  if (context.isClosed && ankouCount === 4) yaku.push({ name: "四暗刻", han: 13, isYakuman: true, detail: context.winningKey === shape.pairKey ? "単騎" : undefined });
+  if (["honor:white", "honor:green", "honor:red"].every((key) => tripletKeys.has(key))) yaku.push({ name: "大三元", han: 13, isYakuman: true });
+  if (ensureArray(context.allTiles).every((tile) => tile.suit === "honor")) yaku.push({ name: "字一色", han: 13, isYakuman: true });
+  const windTripletCount = ["honor:east", "honor:south", "honor:west", "honor:north"].filter((key) => tripletKeys.has(key)).length;
+  if (windTripletCount === 4) yaku.push({ name: "大四喜", han: 13, isYakuman: true });
+  else if (windTripletCount === 3 && new Set(["honor:east", "honor:south", "honor:west", "honor:north"]).has(shape.pairKey)) yaku.push({ name: "小四喜", han: 13, isYakuman: true });
+  if (ensureArray(context.allTiles).every((tile) => tile.suit !== "honor" && tile.rank && (Number(tile.rank) === 1 || Number(tile.rank) === 9))) yaku.push({ name: "清老頭", han: 13, isYakuman: true });
+  if (kanCount === 4) yaku.push({ name: "四槓子", han: 13, isYakuman: true });
+  return yaku;
+};
+const serverDedupeYaku = (yaku) => {
+  const result = [];
+  const seen = new Set();
+  for (const item of ensureArray(yaku)) {
+    const key = `${item.name}-${item.detail || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+};
 const isServerFuritenForWaits = (player, waits) => {
   const waitKeys = new Set(ensureArray(waits).map(tileKindKey));
   return ensureArray(player?.discardedTiles).some((discard) => waitKeys.has(tileKindKey(discard?.tile || discard)));
@@ -326,33 +519,100 @@ const countServerIndicatorDora = (indicators, tiles) => {
   return ensureArray(tiles).filter((tile) => doraKeys.has(tileKindKey(tile))).length;
 };
 const evaluateServerWin = (state, player, tile, winType) => {
-  const concealedTiles = [...ensureArray(player?.hand), ...(tile ? [tile] : player?.drawnTile ? [player.drawnTile] : [])].filter((item) => !isFlowerTile(item));
+  const winningTile = tile || player?.drawnTile || null;
+  const concealedTiles = [...ensureArray(player?.hand), ...(winningTile ? [winningTile] : [])].filter((item) => !isFlowerTile(item));
   const melds = ensureArray(player?.melds);
-  const allTiles = [...concealedTiles, ...melds.flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
-  if (!isWinningShapeServer(concealedTiles, melds)) return { canWin: false, reason: "和了形ではありません" };
-  const counts = countTilesForShape(concealedTiles);
+  const fixedMelds = serverFixedMelds(melds);
+  const meldCount = fixedMelds.length;
   const isClosed = isServerMenzen(player);
+  const isTsumo = winType === "tsumo";
+  const winningKey = winningTile ? tileKindKey(winningTile) : null;
+  const allTiles = [...concealedTiles, ...melds.flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
+  if (concealedTiles.length + meldCount * 3 !== 14) return { canWin: false, reason: "和了判定には14枚相当の牌が必要です" };
+  const counts = countTilesForShape(concealedTiles);
+
+  const rejectByRiichiRequirement = (yaku) => {
+    const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
+    if (!hasYakuman && state?.settings?.ruleConfig?.otokogiEnabled !== false && isClosed && !player.isRiichi) {
+      return { canWin: false, reason: "門前ダマテン和了は禁止です" };
+    }
+    return null;
+  };
+
+  if (meldCount === 0 && isKokushiShape(counts)) {
+    const yaku = [{ name: "国士無双", han: 13, isYakuman: true }];
+    return { canWin: true, yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
+  }
+
   const turquoiseOpenRiichi = player.isRiichi && !isClosed && hasTurquoise5pInHandOrMeldsServer(player);
-  const yaku = [];
-  if (melds.length === 0 && isKokushiShape(counts)) yaku.push({ name: "国士無双", han: 13, isYakuman: true });
-  if (melds.length === 0 && isSevenPairsShapeServer(counts)) yaku.push({ name: "七対子", han: 2 });
-  if ((isClosed || turquoiseOpenRiichi) && player.isRiichi) yaku.push({ name: "リーチ", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
-  if ((isClosed || turquoiseOpenRiichi) && player.isRiichi && player.ippatsu && !player.ippatsuOwnDrawStarted) yaku.push({ name: "一発", han: 1 });
-  if ((isClosed || turquoiseOpenRiichi) && winType === "tsumo") yaku.push({ name: "門前清自摸和", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
-  if (isServerTanyao(allTiles)) yaku.push({ name: "タンヤオ", han: 1 });
-  const seatWind = getServerSeatWind(state, player.id);
-  for (const key of getServerTripletKeys(counts, melds)) {
-    const han = getServerYakuhaiHan(key, seatWind, state?.round?.roundWind || "east");
-    if (han > 0) yaku.push({ name: `役牌 ${serverTileLabel(key)}`, han, detail: han === 2 ? "常時役牌 + 自風" : undefined });
+  const riichiYakuEnabled = isClosed || turquoiseOpenRiichi;
+  const baseYaku = [];
+  if (riichiYakuEnabled && player.isRiichi) baseYaku.push({ name: "リーチ", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
+  if (riichiYakuEnabled && player.isRiichi && player.ippatsu && !player.ippatsuOwnDrawStarted) baseYaku.push({ name: "一発", han: 1 });
+  if (riichiYakuEnabled && isTsumo) baseYaku.push({ name: "門前清自摸和", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
+  if (ensureArray(state?.liveWall).length === 0) {
+    baseYaku.push({ name: isTsumo ? "ハイテイ" : "ホウテイ", han: 1 });
   }
-  const tripletCount = getServerTripletKeys(counts, melds).length;
-  if (tripletCount >= 4) yaku.push({ name: "対々和", han: 2 });
-  const hasYakuman = yaku.some((item) => item.isYakuman);
-  if (!hasYakuman && state?.settings?.ruleConfig?.otokogiEnabled !== false && isClosed && !player.isRiichi) {
-    return { canWin: false, reason: "門前ダマテン和了は禁止です" };
+  if (serverIsFirstTsumoYakumanEligible(state, player, isTsumo)) {
+    baseYaku.push({ name: player.id === state.round?.dealerPlayerId ? "天和" : "地和", han: 13, isYakuman: true });
   }
-  if (yaku.length === 0) return { canWin: false, reason: "和了形ですが役がありません" };
-  return { canWin: true, yaku, winningTiles: allTiles, selectedWait: tile || player.drawnTile || allTiles.at(-1) };
+  if (serverIsRenhouEligible(state, player, isTsumo)) baseYaku.push({ name: "人和", han: 13, isYakuman: true });
+
+  if (meldCount === 0 && isSevenPairsShapeServer(counts)) {
+    let yaku = serverIsManzuHonitsuYakuman(allTiles)
+      ? [{ name: "萬子混一色", han: 13, isYakuman: true }]
+      : serverIsChinitsuTiles(allTiles)
+        ? [{ name: "大車輪", han: 13, isYakuman: true }]
+        : [...baseYaku, { name: "七対子", han: 2 }, ...serverColorYaku(allTiles, isClosed)];
+    if (!yaku.some((item) => item.isYakuman) && serverIsHonroutou(allTiles)) yaku.push({ name: "混老頭", han: 2 });
+    yaku = serverDedupeYaku(yaku);
+    const riichiError = rejectByRiichiRequirement(yaku);
+    if (riichiError) return riichiError;
+    if (yaku.length === 0) return { canWin: false, reason: "和了形ですが役がありません" };
+    return { canWin: true, yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
+  }
+
+  const shapes = serverFindStandardShapes(counts, 4 - meldCount);
+  if (shapes.length === 0) return { canWin: false, reason: "和了形ではありません" };
+  const candidates = shapes.map((shape) => {
+    const completeShape = { pairKey: shape.pairKey, melds: [...shape.melds, ...fixedMelds] };
+    const sequences = completeShape.melds.filter((meld) => meld.type === "sequence");
+    const triplets = completeShape.melds.filter((meld) => meld.type === "triplet");
+    const context = { state, player, allTiles, isClosed, isTsumo, winningKey };
+    let yaku = [...baseYaku, ...serverYakumanYaku(context, completeShape, triplets)];
+    if (!yaku.some((item) => item.isYakuman)) {
+      if (isServerTanyao(allTiles)) yaku.push({ name: "タンヤオ", han: 1 });
+      const seatWind = getServerSeatWind(state, player.id);
+      for (const triplet of triplets) {
+        const han = getServerYakuhaiHan(triplet.key, seatWind, state?.round?.roundWind || "east");
+        if (han > 0) yaku.push({ name: `役牌 ${serverTileLabel(triplet.key)}`, han, detail: han === 2 ? "常時役牌 + 自風" : undefined });
+      }
+      if (isClosed && serverIsPinfu(completeShape, { state, player, winningKey })) yaku.push({ name: "平和", han: 1 });
+      if (isClosed) {
+        const iipeikou = serverCountIipeikouPairs(sequences);
+        if (iipeikou >= 2) yaku.push({ name: "二盃口", han: 3 });
+        else if (iipeikou === 1) yaku.push({ name: "一盃口", han: 1 });
+      }
+      if (triplets.length === 4) yaku.push({ name: "対々和", han: 2 });
+      if (serverCountAnkou(triplets, { isTsumo, winningKey }) >= 3) yaku.push({ name: "三暗刻", han: 2 });
+      const kanCount = melds.filter((meld) => ["ankan", "minkan", "kakan"].includes(meld.type)).length;
+      if (kanCount >= 3) yaku.push({ name: "三槓子", han: 2 });
+      if (serverShousangen(completeShape, triplets)) yaku.push({ name: "小三元", han: 2 });
+      if (serverIsHonroutou(allTiles)) yaku.push({ name: "混老頭", han: 2 });
+      if (serverHasSanshoku(sequences)) yaku.push({ name: "三色同順", han: isClosed ? 2 : 1 });
+      if (serverHasIttsu(sequences)) yaku.push({ name: "一気通貫", han: isClosed ? 2 : 1 });
+      const terminalYaku = serverChantaOrJunchan(allTiles, completeShape, !isClosed);
+      if (terminalYaku) yaku.push(terminalYaku);
+      yaku.push(...serverColorYaku(allTiles, isClosed));
+    }
+    yaku = serverDedupeYaku(yaku);
+    return { yaku, han: yaku.reduce((sum, item) => sum + Number(item.han || 0), 0) };
+  });
+  const best = candidates.sort((a, b) => b.han - a.han)[0];
+  if (!best?.yaku.length) return { canWin: false, reason: "和了形ですが役がありません" };
+  const riichiError = rejectByRiichiRequirement(best.yaku);
+  if (riichiError) return riichiError;
+  return { canWin: true, yaku: best.yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
 };
 const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku) => {
   const winningTiles = [...ensureArray(player.hand), ...(tile ? [tile] : []), ...ensureArray(player.melds).flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
@@ -360,14 +620,20 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku)
   const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
   const yakuHan = hasYakuman ? 14 : ensureArray(yaku).reduce((sum, item) => sum + Number(item.han || 0), 0);
   const normalDora = hasYakuman ? 0 : countServerIndicatorDora(state.doraIndicators, winningTiles);
+  const uraDora = hasYakuman || !player.isRiichi ? 0 : countServerIndicatorDora(state.uraDoraIndicators, winningTiles);
   const colored = hasYakuman ? 0 : winningTiles.filter((tileItem) => ["red", "blue", "gold", "turquoise"].includes(tileItem.color)).length;
   const nuki = hasYakuman ? 0 : ensureArray(player.nukiDoraTiles).length;
   const doraHan = normalDora + colored + nuki;
   const totalHan = hasYakuman ? 14 : yakuHan + doraHan;
   const { basePoints, limitType } = getServerBaseScoreFromHan(totalHan, player.id === state.round?.dealerPlayerId);
-  const blueTileBonus = bonusSourceTiles.filter((tileItem) => tileItem.color === "blue" && !tileItem.isPochi).length * 20;
-  const goldTileBonus = bonusSourceTiles.filter((tileItem) => tileItem.color === "gold").length * 5;
-  const bonusPoints = blueTileBonus + goldTileBonus;
+  const blueTileBonus = bonusSourceTiles.filter((tileItem) => (tileItem.color === "blue" || tileItem.isRocket) && !tileItem.isPochi).length * 20;
+  const goldTileBonus = bonusSourceTiles.filter((tileItem) => tileItem.color === "gold" || tileItem.color === "turquoise").length * 5;
+  const uraDoraBonus = uraDora * 5;
+  const honbaBonus = Number(state.round?.honba ?? state.honba ?? 0) * 5;
+  const ippatsuBonus = ensureArray(yaku).some((item) => item.name === "一発") ? 5 : 0;
+  const countedYakumanBonus = !hasYakuman && totalHan >= 14 ? 20 : 0;
+  const realYakumanBonus = hasYakuman ? 40 : 0;
+  const bonusPoints = blueTileBonus + goldTileBonus + uraDoraBonus + honbaBonus + ippatsuBonus + countedYakumanBonus + realYakumanBonus;
   const baibaMultiplier = Number(state.settings?.ruleConfig?.baibaEnabled ? state.settings?.baibaMultiplier || 2 : 1);
   const beforeBaibaPoints = basePoints + bonusPoints;
   const totalPoints = beforeBaibaPoints * baibaMultiplier;
@@ -396,14 +662,86 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku)
       normalDora ? { name: "ドラ", han: normalDora } : null,
       colored ? { name: "色付き牌ドラ", han: colored } : null,
       nuki ? { name: "抜きドラ", han: nuki } : null,
+      uraDora ? { name: "裏ドラ", han: uraDora } : null,
     ].filter(Boolean),
-    dora: { normal: normalDora, colored, nuki, ura: 0 },
-    bonuses: { blueTile: blueTileBonus, rocket: blueTileBonus, goldTile: goldTileBonus, baiba: totalPoints - beforeBaibaPoints },
+    dora: { normal: normalDora, colored, nuki, ura: uraDora },
+    bonuses: {
+      blueTile: blueTileBonus,
+      rocket: blueTileBonus,
+      goldTile: goldTileBonus,
+      uraDora: uraDoraBonus,
+      honba: honbaBonus,
+      ippatsu: ippatsuBonus,
+      countedYakuman: countedYakumanBonus,
+      realYakuman: realYakumanBonus,
+      baiba: totalPoints - beforeBaibaPoints,
+    },
     baibaMultiplier,
     payments,
     paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
     winnerGain: payments[player.id] || 0,
+    winningTiles,
+    winningTile: tile || null,
+    selectedWait: tile || null,
+    pochiActivated: false,
+    pointMultiplier: 1,
+    isTsumo: winType === "tsumo",
   };
+};
+const serverPochiCandidateTiles = (waitTile, pochiTile) => {
+  const candidates = [];
+  const pushCandidate = (tile) => {
+    if (!tile) return;
+    const key = `${tileKindKey(tile)}:${tile.color || "normal"}:${tile.isPochi ? tile.pochiColor || "pochi" : ""}`;
+    if (candidates.some((item) => `${tileKindKey(item)}:${item.color || "normal"}:${item.isPochi ? item.pochiColor || "pochi" : ""}` === key)) return;
+    candidates.push(tile);
+  };
+  if ((waitTile.suit === "pinzu" || waitTile.suit === "souzu") && Number(waitTile.rank) === 5) {
+    pushCandidate(serverTileCloneWithColor(waitTile, pochiTile.pochiColor === "red" || pochiTile.pochiColor === "blue" ? "blue" : "red"));
+  } else {
+    pushCandidate({ ...waitTile, id: `${waitTile.id || tileKindKey(waitTile)}-normal-pochi`, color: waitTile.color || "normal", isPochi: false, pochiColor: undefined });
+  }
+  if (waitTile.suit === "honor" && waitTile.kind === "white") {
+    pushCandidate({ ...pochiTile, id: `${pochiTile.id || "white-pochi"}-as-white`, color: "normal", isPochi: false, pochiColor: undefined });
+  }
+  return candidates;
+};
+const resolveServerPochiWin = (state, player, pochiTile, winType = "tsumo", loserId = null) => {
+  if (!isServerWhitePochiTile(pochiTile) || !player?.isRiichi) return null;
+  const waits = getWinningTilesForServerTenpai(player);
+  const candidates = waits.flatMap((wait) => serverPochiCandidateTiles(wait, pochiTile));
+  let best = null;
+  for (const candidateTile of candidates) {
+    const winCheck = evaluateServerWin(state, player, candidateTile, winType);
+    if (!winCheck.canWin) continue;
+    const scoreResult = calculateServerScoreResult(state, player, winType, candidateTile, loserId, winCheck.yaku);
+    const multiplier = serverPochiMultiplier(pochiTile);
+    scoreResult.pochiActivated = true;
+    scoreResult.pointMultiplier = multiplier;
+    scoreResult.beforePochiPoints = scoreResult.totalPoints;
+    scoreResult.beforeMultiplierPoints = scoreResult.totalPoints;
+    scoreResult.totalPoints *= multiplier;
+    scoreResult.finalPoints = scoreResult.totalPoints;
+    scoreResult.afterMultiplierPoints = scoreResult.totalPoints;
+    scoreResult.selectedWait = candidateTile;
+    scoreResult.winningTile = candidateTile;
+    scoreResult.pochiTile = pochiTile;
+    scoreResult.pochiColor = pochiTile.pochiColor;
+    scoreResult.payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
+    if (winType === "tsumo") {
+      for (const p of ensureArray(state.players)) if (p.id !== player.id) scoreResult.payments[p.id] = -scoreResult.totalPoints;
+      scoreResult.payments[player.id] = scoreResult.totalPoints * Math.max(0, ensureArray(state.players).length - 1);
+    } else {
+      scoreResult.payments[player.id] = scoreResult.totalPoints;
+      if (loserId) scoreResult.payments[loserId] = -scoreResult.totalPoints;
+    }
+    scoreResult.paymentDeltas = Object.entries(scoreResult.payments).map(([playerId, delta]) => ({ playerId, delta }));
+    scoreResult.winnerGain = scoreResult.payments[player.id] || 0;
+    if (!best || Math.abs(scoreResult.totalPoints) > Math.abs(best.scoreResult.totalPoints)) {
+      best = { winCheck, scoreResult, selectedWait: candidateTile };
+    }
+  }
+  return best;
 };
 const getServerRiichiDiscardTileIds = (player) => {
   if (!player || player.type === "cpu" || player.isRiichi) return [];
@@ -419,11 +757,20 @@ const getServerRiichiDiscardTileIds = (player) => {
       drawnTile: null,
     };
     const waits = getWinningTilesForServerTenpai(testPlayer);
-    if (waits.length > 0 && !isServerFuritenForWaits({ ...player, hand: afterDiscard, drawnTile: null }, waits)) candidateIds.push(tile.id);
+    const afterDiscardPlayer = {
+      ...player,
+      hand: afterDiscard,
+      drawnTile: null,
+      discardedTiles: [...ensureArray(player.discardedTiles), { tile }],
+    };
+    if (waits.length > 0 && !isServerFuritenForWaits(afterDiscardPlayer, waits)) candidateIds.push(tile.id);
   }
   return [...new Set(candidateIds)];
 };
-const canServerTsumo = (state, player) => evaluateServerWin(state, player, player?.drawnTile, "tsumo").canWin;
+const canServerTsumo = (state, player) => {
+  if (isServerWhitePochiTile(player?.drawnTile) && resolveServerPochiWin(state, player, player.drawnTile, "tsumo")) return true;
+  return evaluateServerWin(state, player, player?.drawnTile, "tsumo").canWin;
+};
 const canServerRon = (state, player, sourceTile) => {
   const waits = getWinningTilesForServerTenpai(player);
   if (!waits.some((wait) => sameTileKind(wait, sourceTile))) return false;
@@ -453,11 +800,31 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
 };
 const hasServerFeverRiichiTriplet = (player) =>
   hasServerPureClosedTriplet(player, "pinzu", 7) || hasServerPureClosedTriplet(player, "souzu", 7);
+const beginServerRiichiAutoDiscard = (state, player) => {
+  if (!player?.isRiichi || !player.drawnTile || player.type === "cpu") return false;
+  state.pendingAction = null;
+  state.phase = "riichiAutoDiscard";
+  state.isWaitingForHumanAction = false;
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.pendingServerEffect = {
+    type: "riichiAutoDiscard",
+    playerId: player.id,
+    resumeAt: Date.now() + 850,
+  };
+  appendHandEvent(state, { type: "riichiAutoDiscardWait", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+  return true;
+};
 const queueServerSelfDrawOptions = (state, player) => {
   if (!player || player.type === "cpu") return false;
   const options = [];
   if (canServerTsumo(state, player)) {
-    options.push({ type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null });
+    const option = { type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null };
+    if (player.isRiichi) {
+      applyServerAction(state, { playerId: player.id, actionType: "tsumo", payload: { action: option, sourceTile: player.drawnTile || null } });
+      return true;
+    }
+    options.push(option);
   }
   if (!player.isRiichi && Number(state.kanCount || 0) < 4) {
     const kanTile = findFourOfAKindTile(combinedHandTiles(player).filter((tile) => !isFlowerTile(tile)));
@@ -468,6 +835,7 @@ const queueServerSelfDrawOptions = (state, player) => {
     player.riichiDiscardTileIds = riichiDiscardTileIds;
     options.push({ type: "riichi", playerId: player.id, options: { discardTileIds: riichiDiscardTileIds } });
   }
+  if (player.isRiichi && options.length === 0) return beginServerRiichiAutoDiscard(state, player);
   return setServerPendingActions(state, player.id, options, { type: "selfDraw" });
 };
 const findAutoFlowerTile = (player) => combinedHandTiles(player).find(isFlowerTile) || null;
@@ -535,7 +903,12 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
     const matchingCount = ensureArray(player.hand).filter((tile) => sameTileKind(tile, sourceTile)).length;
     const options = [];
     if (canServerRon(state, player, sourceTile)) {
-      options.push({ type: "ron", playerId: player.id, fromPlayerId, sourceTile });
+      const option = { type: "ron", playerId: player.id, fromPlayerId, sourceTile };
+      if (player.isRiichi) {
+        applyServerAction(state, { playerId: player.id, actionType: "ron", payload: { action: option, fromPlayerId, sourceTile } });
+        return true;
+      }
+      options.push(option);
     }
     if (!player.isRiichi) {
       if (matchingCount >= 3 && Number(state.kanCount || 0) < 4) {
@@ -805,13 +1178,15 @@ const applyServerAction = (state, event) => {
       ? player.drawnTile
       : (payload.tile || payload.action?.sourceTile || payload.sourceTile);
     const loserId = payload.action?.fromPlayerId || payload.discarderId || payload.fromPlayerId;
-    const winCheck = evaluateServerWin(state, player, winningTile, action);
+    const pochiResolution = action === "tsumo" ? resolveServerPochiWin(state, player, winningTile, action, loserId) : null;
+    const effectiveWinningTile = pochiResolution?.selectedWait || winningTile;
+    const winCheck = pochiResolution?.winCheck || evaluateServerWin(state, player, effectiveWinningTile, action);
     if (!winCheck.canWin) throw new Error(winCheck.reason || "和了できません");
     if (action === "ron") {
       const waits = getWinningTilesForServerTenpai(player);
       if (isServerFuritenForWaits(player, waits)) throw new Error("フリテンのためロンできません");
     }
-    const scoreResult = calculateServerScoreResult(state, player, action, winningTile, loserId, winCheck.yaku);
+    const scoreResult = pochiResolution?.scoreResult || calculateServerScoreResult(state, player, action, effectiveWinningTile, loserId, winCheck.yaku);
     for (const p of ensureArray(state.players)) {
       p.score = Number(p.score || 0) + Number(scoreResult.payments?.[p.id] || 0);
     }
@@ -823,10 +1198,11 @@ const applyServerAction = (state, event) => {
       winnerId: player.id,
       loserId,
       winType: action,
+      winningTile: effectiveWinningTile,
       scoreResult,
       payments: scoreResult.paymentDeltas,
     };
-    appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
+    appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
     return state;
   }
 
@@ -869,6 +1245,24 @@ const applyServerCpuDiscardEffect = (state) => {
   }
   state.phase = "playing";
   return autoDiscardForCpu(state, player);
+};
+
+const applyServerRiichiAutoDiscardEffect = (state) => {
+  const effect = state.pendingServerEffect;
+  if (!effect || effect.type !== "riichiAutoDiscard") return false;
+  const player = findPlayer(state, effect.playerId);
+  state.pendingServerEffect = null;
+  if (!player || !player.isRiichi) {
+    state.phase = "playing";
+    return false;
+  }
+  if (!player.drawnTile) {
+    state.phase = "waitingForHumanDiscard";
+    return false;
+  }
+  state.phase = "playing";
+  appendHandEvent(state, { type: "riichiAutoDiscard", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+  return Boolean(discardForServer(state, player, player.drawnTile.id));
 };
 
 const applyServerClockTimeout = (state) => {
@@ -1062,6 +1456,26 @@ const getWinningTilesForServerTenpai = (player) => {
   });
 };
 const calculateServerExhaustiveDraw = (state) => {
+  const nagashiWinner = ensureArray(state.players).find(isServerNagashiYakumanPlayer);
+  if (nagashiWinner) {
+    const lastDiscard = ensureArray(nagashiWinner.discardedTiles).at(-1)?.tile || ensureArray(nagashiWinner.discardedTiles).at(-1) || null;
+    const yaku = [{ name: "流し役満", han: 13, isYakuman: true }];
+    const scoreResult = calculateServerScoreResult(state, nagashiWinner, "tsumo", lastDiscard, null, yaku);
+    for (const player of ensureArray(state.players)) {
+      player.score = Number(player.score || 0) + Number(scoreResult.payments?.[player.id] || 0);
+    }
+    return {
+      type: "win",
+      winnerId: nagashiWinner.id,
+      loserId: null,
+      winType: "tsumo",
+      winningTile: lastDiscard,
+      scoreResult,
+      payments: scoreResult.paymentDeltas,
+      reason: "nagashiYakuman",
+      finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
+    };
+  }
   const tenpaiResults = ensureArray(state.players).map((player) => {
     const handTiles = getHand13ForServerTenpai(player);
     const waits = getWinningTilesForServerTenpai(player);
@@ -1362,6 +1776,7 @@ const scheduleRoomServerEffect = (room) => {
     if (!room.state?.pendingServerEffect) return;
     if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
     else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
+    else if (room.state.pendingServerEffect.type === "riichiAutoDiscard") applyServerRiichiAutoDiscardEffect(room.state);
     advanceServerCpuTurns(room.state);
     room.version = Number(room.version || 0) + 1;
     room.state.version = room.version;
