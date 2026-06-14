@@ -3681,7 +3681,7 @@ class GameController {
 
 const renderActionPrompt = (pending, state = null) => {
   if (!pending?.options?.length) return "";
-  const viewerId = state?.players?.find((player) => player.type === "human")?.id;
+  const viewerId = state ? getLocalHumanPlayerId(state) : null;
   if (viewerId && pending.playerId && pending.playerId !== viewerId) return "";
   const labels = { ron: "ロン", tsumo: "ツモ", riichi: "リーチ", pon: "ポン", kan: "カン" };
   const options = pending.options.map((option) => `<button type="button" data-confirm-action="${option.type}">${labels[option.type] ?? option.type}</button>`).join("");
@@ -3771,10 +3771,25 @@ class GameView {
     const current = getCurrentPlayer(state);
     const dealer = state.players.find((p) => p.id === state.round.dealerPlayerId);
     this.root.innerHTML = this.mahjongTableClean(state, current, dealer, getLocalHumanPlayerId(state));
-    this.root.querySelectorAll("[data-discard-tile-id]").forEach((b) => b.addEventListener("click", () => this.handlers.onDiscard(b.dataset.discardTileId)));
-    this.root.querySelectorAll("[data-nuki-tile-id]").forEach((b) => b.addEventListener("click", () => this.handlers.onNuki(b.dataset.nukiTileId)));
-    this.root.querySelectorAll("[data-confirm-action]").forEach((b) => b.addEventListener("click", () => this.handlers.onConfirmAction(b.dataset.confirmAction)));
-    this.root.querySelectorAll("[data-skip-action]").forEach((b) => b.addEventListener("click", () => this.handlers.onSkipAction()));
+    const bindFastButton = (selector, handler) => {
+      this.root.querySelectorAll(selector).forEach((button) => {
+        let handledAt = 0;
+        const run = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const now = Date.now();
+          if (now - handledAt < 450) return;
+          handledAt = now;
+          handler(button);
+        };
+        button.addEventListener("pointerdown", run);
+        button.addEventListener("click", run);
+      });
+    };
+    bindFastButton("[data-discard-tile-id]", (b) => this.handlers.onDiscard(b.dataset.discardTileId));
+    bindFastButton("[data-nuki-tile-id]", (b) => this.handlers.onNuki(b.dataset.nukiTileId));
+    bindFastButton("[data-confirm-action]", (b) => this.handlers.onConfirmAction(b.dataset.confirmAction));
+    bindFastButton("[data-skip-action]", () => this.handlers.onSkipAction());
     const handleResultOkPointer = (event) => {
       event.preventDefault();
       event.stopPropagation();

@@ -796,6 +796,7 @@ const applyServerAction = (state, event) => {
     state.pendingAction = null;
     state.phase = "waitingForHumanDiscard";
     appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
+    if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
     return state;
   }
 
@@ -1049,6 +1050,8 @@ const getHand13ForServerTenpai = (player) => {
 const getWinningTilesForServerTenpai = (player) => {
   const hand13 = getHand13ForServerTenpai(player);
   const melds = ensureArray(player.melds);
+  const expectedLength = 13 - melds.length * 3;
+  if (hand13.length !== expectedLength) return [];
   const seen = new Set();
   return allWinningCheckTiles().filter((tile) => {
     const key = tileKindKey(tile);
