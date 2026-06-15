@@ -414,6 +414,10 @@ button:hover {
   justify-content: flex-start;
 }
 
+.seat-top .hand-row {
+  transform: translateY(-38px);
+}
+
 .seat-right .hand-row {
   align-items: center;
   flex-direction: column;
@@ -1004,6 +1008,35 @@ button:hover {
   cursor: default;
   filter: grayscale(70%);
   opacity: 0.45;
+}
+
+.replay-hand-selector {
+  align-items: center;
+  bottom: 158px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  left: 50%;
+  max-width: min(92vw, 780px);
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 31;
+}
+
+.replay-hand-selector button {
+  background: rgba(18, 32, 36, 0.86);
+  border: 1px solid rgba(255, 209, 92, 0.45);
+  border-radius: 999px;
+  color: #fff4bf;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 12px;
+}
+
+.replay-hand-selector button.active {
+  background: #ffd15c;
+  color: #1c2529;
 }
 
 .replay-event-label {

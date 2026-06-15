@@ -136,6 +136,7 @@ const getTableIdFromHash = () => {
   const pathMatch = globalThis.location?.pathname?.match(/\/table\/([^/]+)$/);
   return pathMatch ? decodeURIComponent(pathMatch[1]) : null;
 };
+const isUuidString = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(String(value || ""));
 const isCpuPlayerId = (playerId) => typeof playerId === "string" && playerId.startsWith("cpu");
 const canDeleteTableRoom = (table) => {
   const humanCount = table.seats.filter((seat) => seat.playerType === "human" || (seat.playerId && !isCpuPlayerId(seat.playerId))).length;
@@ -870,6 +871,57 @@ const replayRepository = {
     return replay;
   },
 };
+const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
+  const sync = loadOnlineSync();
+  if (!sync?.supabaseUrl || !sync?.anonKey || !sync?.accessToken) return [];
+  if (replayId && !isUuidString(replayId)) return [];
+  const filters = [
+    "select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at",
+    "order=created_at.desc",
+    "limit=200",
+  ];
+  if (clubId) filters.push(`club_id=eq.${encodeURIComponent(clubId)}`);
+  if (replayId) filters.push(`replay_id=eq.${encodeURIComponent(replayId)}`);
+  const response = await fetch(`${sync.supabaseUrl}/rest/v1/replays?${filters.join("&")}`, {
+    headers: {
+      apikey: sync.anonKey,
+      Authorization: `Bearer ${sync.accessToken}`,
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : [];
+  if (!response.ok) throw new Error(data?.message || response.statusText || "牌譜の取得に失敗しました");
+  return Array.isArray(data) ? data : [];
+};
+const replayFromSupabaseRow = (row) => {
+  const replayId = row.replay_id || row.summary?.replayId;
+  return {
+    replayId,
+    summary: {
+      ...(row.summary || {}),
+      replayId,
+      replayUrl: replayUrlFor(replayId),
+      clubId: row.club_id || row.summary?.clubId,
+      tableId: row.table_id || row.summary?.tableId,
+      gameId: row.game_id || row.summary?.gameId,
+      endedAt: row.summary?.endedAt || Date.parse(row.created_at || "") || now(),
+    },
+    initialState: row.initial_state,
+    events: row.events || [],
+    snapshots: row.snapshots || [],
+  };
+};
+const mergeReplaysIntoLocalStore = (incoming = []) => {
+  if (!incoming.length) return replayRepository.listReplays();
+  const current = loadReplays();
+  const byId = new Map(current.map((replay) => [replay.replayId || replay.summary?.replayId, replay]));
+  for (const replay of incoming) {
+    if (!replay?.replayId) continue;
+    byId.set(replay.replayId, replay);
+  }
+  saveReplays([...byId.values()].slice(0, 200));
+  return replayRepository.listReplays();
+};
 const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType = ruleId, rakePercent = 0, pointRate = 1, ruleConfig = normalizeRuleConfigForRule(ruleId), createdBy } = {}) => ({
   id: id ?? `table-${now()}`,
   name: name ?? `卓 ${new Date().toLocaleTimeString("ja-JP")}`,
@@ -1324,6 +1376,7 @@ const createInitialGameState = (players) => {
     selectedReplayId: null,
     replayIndex: 0,
     replayViewerId: CURRENT_USER_ID,
+    replayRevealHands: false,
     replayInitialState: null,
     replaySnapshots: [],
     activeTableId: null,
@@ -2351,12 +2404,22 @@ class GameController {
     this.refreshStoredData();
     if (!this.state.currentUser && screen !== "auth" && screen !== "replayViewer") screen = "auth";
     this.state.screen = screen;
+    if (screen === "replayList") {
+      this.refreshReplaysFromSupabase().catch((error) => console.warn("[Replay] Supabase牌譜の取得に失敗しました", error));
+    }
     if (screen !== "replayViewer" && (globalThis.location?.hash?.startsWith("#/replay/") || /\/replay\/[^/]+$/.test(globalThis.location?.pathname ?? ""))) {
       const target = globalThis.location?.protocol === "file:" ? globalThis.location.pathname : "/";
       try { globalThis.history?.replaceState?.(null, "", target); } catch {}
     }
     if (screen !== "game") this.state.phase = this.state.phase === "playing" ? this.state.phase : this.state.phase;
     this.emit();
+  }
+  async refreshReplaysFromSupabase({ replayId = "" } = {}) {
+    const rows = await fetchSupabaseReplayRows({ clubId: replayId ? "" : this.state.selectedClubId, replayId });
+    const replays = rows.map(replayFromSupabaseRow);
+    this.state.replaySummaries = mergeReplaysIntoLocalStore(replays);
+    this.emit();
+    return replays;
   }
   selectClubHome(clubId) {
     const club = clubRepository.getClub(clubId);
@@ -3097,10 +3160,24 @@ class GameController {
   openReplay(replayId, { updateHash = true } = {}) {
     this.refreshStoredData();
     const replay = replayRepository.getReplay(replayId);
+    if (!replay) {
+      this.state.selectedReplayId = replayId;
+      this.state.replayIndex = 0;
+      this.state.screen = "replayViewer";
+      this.emit();
+      this.refreshReplaysFromSupabase({ replayId }).then(() => {
+        if (replayRepository.getReplay(replayId)) this.openReplay(replayId, { updateHash });
+      }).catch((error) => {
+        this.state.log.unshift(`牌譜取得に失敗しました: ${error.message}`);
+        this.emit();
+      });
+      return;
+    }
     const firstSnapshot = getCurrentReplaySnapshot(replay, 0);
     this.state.selectedReplayId = replayId;
     this.state.replayIndex = 0;
     this.state.replayViewerId = getValidReplayViewerId(firstSnapshot, this.state.replayViewerId ?? CURRENT_USER_ID, replay);
+    this.state.replayRevealHands = false;
     this.state.screen = "replayViewer";
     if (updateHash && globalThis.location) {
       const encoded = encodeURIComponent(replayId);
@@ -3119,6 +3196,12 @@ class GameController {
     this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     this.emit();
   }
+  setReplayIndex(index) {
+    const replay = replayRepository.getReplay(this.state.selectedReplayId);
+    const max = Math.max(0, getReplaySnapshots(replay).length - 1);
+    this.state.replayIndex = Math.max(0, Math.min(max, Number(index || 0)));
+    this.emit();
+  }
   goNextReplayStep() {
     this.stepReplay(1);
   }
@@ -3129,6 +3212,10 @@ class GameController {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
     const snapshot = getCurrentReplaySnapshot(replay, this.state.replayIndex);
     this.state.replayViewerId = getValidReplayViewerId(snapshot, viewerId, replay);
+    this.emit();
+  }
+  setReplayRevealHands(checked) {
+    this.state.replayRevealHands = Boolean(checked);
     this.emit();
   }
   async copyReplayUrl(replayId) {
@@ -4357,7 +4444,9 @@ class GameView {
     }));
     this.root.querySelectorAll("[data-copy-replay-url]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyReplayUrl(b.dataset.copyReplayUrl)));
     this.root.querySelectorAll("[data-replay-step]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayStep(Number(b.dataset.replayStep))));
+    this.root.querySelectorAll("[data-replay-index]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayIndex(Number(b.dataset.replayIndex))));
     this.root.querySelectorAll("[data-replay-viewer]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayViewer(select.value)));
+    this.root.querySelectorAll("[data-replay-reveal-hands]").forEach((input) => input.addEventListener("change", () => this.handlers.onReplayRevealHands(input.checked)));
     this.root.querySelectorAll("[data-replay-screen]").forEach((screen) => {
       screen.addEventListener("click", (event) => {
         if (event.target.closest("button, a, select, input, label, textarea, [data-replay-control]")) return;
@@ -4365,8 +4454,8 @@ class GameView {
       });
       screen.addEventListener("wheel", (event) => {
         event.preventDefault();
-        if (event.deltaY > 1) this.handlers.onReplayPrev();
-        else if (event.deltaY < -1) this.handlers.onReplayNext();
+        if (event.deltaY > 1) this.handlers.onReplayNext();
+        else if (event.deltaY < -1) this.handlers.onReplayPrev();
       }, { passive: false });
     });
     this.root.querySelectorAll("[data-club-search]").forEach((b) => b.addEventListener("click", () => {
@@ -4748,6 +4837,7 @@ class GameView {
       cpuThinkingMessage: "",
       settingsOpen: false,
       isReplayView: true,
+      isReplayRevealHands: Boolean(state.replayRevealHands),
       log: snapshot.log ?? [],
       handLog: snapshot.handLog ?? createEmptyHandLog(),
       settings: snapshot.settings ?? { isLastHand: false, rakePercent: 0, initialClockMs: INITIAL_TIME_MS },
@@ -4761,6 +4851,10 @@ class GameView {
     };
     const replayViewerId = getValidReplayViewerId(snapshot, state.replayViewerId, replay);
     const viewerOptions = (replay.summary?.players ?? displayState.players.map((player) => ({ playerId: player.id, name: player.name }))).map((player) => `<option value="${player.playerId}" ${replayViewerId === player.playerId ? "selected" : ""}>${player.name}</option>`).join("");
+    const handMarkers = replay.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
+    const handButtons = handMarkers.length > 1
+      ? `<div class="replay-hand-selector" data-replay-control>${handMarkers.map((marker) => `<button type="button" data-replay-index="${marker.index}" ${index >= marker.index && index < ((handMarkers[handMarkers.indexOf(marker) + 1]?.index) ?? snapshots.length) ? "class=\"active\"" : ""}>${escapeHtml(marker.label)}</button>`).join("")}</div>`
+      : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
     const event = (replay.events ?? [])[Math.max(0, index - 1)];
@@ -4772,8 +4866,11 @@ class GameView {
         <strong>${index + 1} / ${snapshots.length}</strong>
         <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
+        <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
+        <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
         <span class="replay-event-label">${event ? renderHandLog({ ...displayState, handLog: { ...displayState.handLog, events: [event] } }) : "開始状態"}</span>
       </div>
+      ${handButtons}
     </section>`;
   }
   clubListScreen(state) {
@@ -4807,6 +4904,13 @@ class GameView {
     viewerPlayerId ??= getLocalHumanPlayerId(state);
     const viewer = state.players.find((player) => player.id === viewerPlayerId) ?? state.players.find((player) => player.type !== "cpu") ?? state.players[0];
     const viewState = buildViewStateForPlayer(state, viewer.id);
+    if (state.isReplayRevealHands) {
+      for (const seatView of viewState.seats ?? []) {
+        seatView.handTiles = (seatView.handTiles ?? []).map((item) => ({ ...item, faceDown: false }));
+        if (seatView.drawnTile) seatView.drawnTile = { ...seatView.drawnTile, faceDown: false };
+        seatView.isViewer = true;
+      }
+    }
     const seats = viewState.seats;
     return `<section class="mahjong-table" style="${UI_ASSETS.tableBackground ? `background-image:url('${UI_ASSETS.tableBackground}')` : ""}">
       <div class="table-frame"></div>
@@ -5153,9 +5257,11 @@ view = new GameView(document.querySelector("#game-root"), {
   onCopyReplayUrl: (replayId) => controller.copyReplayUrl(replayId),
   onCopyTableUrl: (tableId) => controller.copyTableUrl(tableId),
   onReplayStep: (delta) => controller.stepReplay(delta),
+  onReplayIndex: (index) => controller.setReplayIndex(index),
   onReplayNext: () => controller.goNextReplayStep(),
   onReplayPrev: () => controller.goPrevReplayStep(),
   onReplayViewer: (viewerId) => controller.setReplayViewer(viewerId),
+  onReplayRevealHands: (checked) => controller.setReplayRevealHands(checked),
   onClubSearch: (clubId) => controller.searchClub(clubId),
   onOpenClub: (clubId) => controller.openClub(clubId),
   onApplyClub: (clubId) => controller.applyToClub(clubId),

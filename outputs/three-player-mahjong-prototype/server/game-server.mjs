@@ -150,6 +150,7 @@ const loadPersistedRoom = (tableId) => {
 
 const persistRoom = (room) => {
   if (!room?.tableId || !room.state) return;
+  appendServerReplaySnapshot(room.state);
   const payload = {
     tableId: room.tableId,
     gameId: room.gameId,
@@ -199,7 +200,7 @@ const getRoomTableContext = async (room) => {
 };
 const nonCpuPlayersForPointSettlement = (state) =>
   asArray(state?.players).filter((player) => player?.type !== "cpu" && isUuid(player?.id));
-const isDebugGameForPointSettlement = (state) => asArray(state?.players).some((player) => player?.type === "cpu");
+const pointSettlementPlayerById = (state) => new Map(asArray(state?.players).map((player) => [player.id, player]));
 const normalizePointDeltas = (payments = {}) => {
   const normalized = {};
   for (const [playerId, amount] of Object.entries(payments || {})) {
@@ -209,18 +210,49 @@ const normalizePointDeltas = (payments = {}) => {
   }
   return normalized;
 };
+const paymentEntries = (payments) => Array.isArray(payments)
+  ? payments.map((payment) => [payment.playerId, payment.delta])
+  : Object.entries(payments || {});
 const pointDeltasFromResultPayments = (payments, pointRate = 1) => {
-  const entries = Array.isArray(payments)
-    ? payments.map((payment) => [payment.playerId, payment.delta])
-    : Object.entries(payments || {});
   const rate = Number(pointRate || 1);
   const deltas = {};
-  for (const [playerId, delta] of entries) {
+  for (const [playerId, delta] of paymentEntries(payments)) {
     if (!isUuid(playerId)) continue;
     const value = Math.round(Number(delta || 0) * rate * 10) / 10;
     if (value) deltas[playerId] = value;
   }
   return deltas;
+};
+const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
+  const entries = Array.isArray(payments)
+    ? payments.map((payment) => [payment.playerId, payment.delta])
+    : Object.entries(payments || {});
+  const rate = Number(pointRate || 1);
+  const playerById = pointSettlementPlayerById(state);
+  const deltas = {};
+  const allDeltas = {};
+  const omittedAutoPlayerDeltas = {};
+  for (const [playerId, delta] of entries) {
+    const value = Math.round(Number(delta || 0) * rate * 10) / 10;
+    if (!value) continue;
+    allDeltas[playerId] = value;
+    const player = playerById.get(playerId);
+    if (player?.type === "cpu" || !isUuid(playerId)) {
+      omittedAutoPlayerDeltas[playerId] = value;
+      continue;
+    }
+    deltas[playerId] = value;
+  }
+  const realPlayerTotal = Math.round(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0) * 10) / 10;
+  return {
+    deltas,
+    metadata: {
+      allDeltas,
+      omittedAutoPlayerDeltas,
+      clubReserveDelta: Math.round(-realPlayerTotal * 10) / 10,
+      cpuCompensationApplied: Object.keys(omittedAutoPlayerDeltas).length > 0,
+    },
+  };
 };
 const applyClubPointDeltasToDb = async (room, reason, payments, metadata = {}) => {
   const deltas = normalizePointDeltas(payments);
@@ -265,17 +297,146 @@ const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}
   persistRoom(room);
   return true;
 };
+const makeHiddenWallForReplay = (length) => Array.from({ length: Math.max(0, Number(length || 0)) }, () => 0);
+const compactStateForReplay = (state) => {
+  if (!state) return state;
+  const snapshot = clone(state);
+  snapshot.liveWall = makeHiddenWallForReplay(asArray(state.liveWall).length);
+  snapshot.rinshanWall = makeHiddenWallForReplay(asArray(state.rinshanWall).length);
+  snapshot.replaySnapshots = undefined;
+  snapshot.hanchanReplaySnapshots = undefined;
+  snapshot.clubPointDbSync = undefined;
+  snapshot.replayDbSync = undefined;
+  return snapshot;
+};
+const appendServerReplaySnapshot = (state) => {
+  if (!state || state.screen !== "game" || !state.handLog?.handId) return;
+  const snapshot = compactStateForReplay(state);
+  state.replaySnapshots = asArray(state.replaySnapshots);
+  const last = state.replaySnapshots.at(-1);
+  if (last?.version !== snapshot.version || last?.phase !== snapshot.phase || last?.turnIndex !== snapshot.turnIndex) {
+    state.replaySnapshots.push(snapshot);
+    if (state.replaySnapshots.length > 420) state.replaySnapshots.shift();
+  }
+  if (isTsumoLossless3maState(state)) {
+    state.hanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
+    const lastHanchan = state.hanchanReplaySnapshots.at(-1);
+    if (lastHanchan?.version !== snapshot.version || lastHanchan?.phase !== snapshot.phase || lastHanchan?.turnIndex !== snapshot.turnIndex) {
+      state.hanchanReplaySnapshots.push(snapshot);
+      if (state.hanchanReplaySnapshots.length > 1200) state.hanchanReplaySnapshots.shift();
+    }
+  }
+};
+const handMarkersFromSnapshots = (snapshots) => {
+  const seen = new Set();
+  const markers = [];
+  asArray(snapshots).forEach((snapshot, index) => {
+    const handId = snapshot?.handLog?.handId;
+    if (!handId || seen.has(handId)) return;
+    seen.add(handId);
+    markers.push({
+      handId,
+      label: snapshot?.handLog?.roundLabel || `局${markers.length + 1}`,
+      index,
+    });
+  });
+  return markers;
+};
+const markReplaySyncApplied = (state, key, replayId = null) => {
+  state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
+  state.replayDbSync.appliedKeys = [...new Set([...(state.replayDbSync.appliedKeys || []), key])];
+  if (replayId) state.replayDbSync.replayIds = { ...(state.replayDbSync.replayIds || {}), [key]: replayId };
+};
+const hasReplaySyncApplied = (state, key) => asArray(state?.replayDbSync?.appliedKeys).includes(key);
+const saveReplayToDb = async (room, key, scope, { initialState, snapshots, result, summary = {} } = {}) => {
+  if (!room?.state || hasReplaySyncApplied(room.state, key)) return false;
+  if (!hasSupabaseServerWriter()) return false;
+  const table = await getRoomTableContext(room);
+  if (!table?.club_id) return false;
+  const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
+  const replayId = randomUUID();
+  const replaySummary = {
+    replayId,
+    clubId: table.club_id,
+    tableId: table.table_id,
+    gameId: room.gameId,
+    ruleId: room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket",
+    scope,
+    startedAt: compactSnapshots[0]?.handLog?.handId || room.state.handLog?.handId || now(),
+    endedAt: now(),
+    resultLabel: result?.type === "exhaustiveDraw" ? "流局" : result?.type === "win" ? "和了" : scope === "hanchan" ? "半荘牌譜" : "牌譜",
+    players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
+    handMarkers: handMarkersFromSnapshots(compactSnapshots),
+    ...summary,
+  };
+  await supabaseRest("/replays", {
+    method: "POST",
+    prefer: "return=minimal",
+    body: {
+      replay_id: replayId,
+      club_id: table.club_id,
+      table_id: table.table_id,
+      game_id: isUuid(room.gameId) ? room.gameId : null,
+      summary: replaySummary,
+      initial_state: compactStateForReplay(initialState || compactSnapshots[0] || room.state),
+      events: asArray(room.events),
+      snapshots: compactSnapshots,
+    },
+  });
+  markReplaySyncApplied(room.state, key, replayId);
+  console.log("[ReplaySync] saved", { tableId: room.tableId, gameId: room.gameId, replayId, scope, snapshots: compactSnapshots.length });
+  persistRoom(room);
+  return true;
+};
+const syncReplayEffects = async (room) => {
+  if (!room?.state || room.replaySyncInFlight) return room?.replaySyncInFlight;
+  room.replaySyncInFlight = (async () => {
+    const state = room.state;
+    const result = state.handLog?.result;
+    const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
+    if (!result) return;
+    if (isTsumoLossless3maState(state)) {
+      if (state.phase !== "gameEnded" || !state.finalResult) return;
+      await saveReplayToDb(room, `${room.gameId}:hanchanReplay`, "hanchan", {
+        initialState: state.hanchanReplayInitialState || state.replayInitialState || state,
+        snapshots: state.hanchanReplaySnapshots?.length ? state.hanchanReplaySnapshots : state.replaySnapshots,
+        result: state.finalResult,
+        summary: {
+          resultLabel: "全赤三麻 半荘牌譜",
+          finalResult: state.finalResult,
+        },
+      });
+      return;
+    }
+    if (!["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) return;
+    await saveReplayToDb(room, `${handId}:anmikaReplay`, "hand", {
+      initialState: state.replayInitialState || state,
+      snapshots: state.replaySnapshots,
+      result,
+      summary: {
+        resultLabel: result.type === "exhaustiveDraw" ? "アンミカロケット 流局" : "アンミカロケット 和了",
+        handId,
+        roundLabel: state.handLog?.roundLabel || "東場",
+      },
+    });
+  })().catch((error) => {
+    console.error("[ReplaySync] failed", { tableId: room?.tableId, gameId: room?.gameId, error });
+  }).finally(() => {
+    room.replaySyncInFlight = null;
+  });
+  return room.replaySyncInFlight;
+};
 const syncClubPointEffects = async (room) => {
   if (!room?.state) return;
-  if (isDebugGameForPointSettlement(room.state)) return;
   if (room.clubPointSyncInFlight) return room.clubPointSyncInFlight;
   room.clubPointSyncInFlight = (async () => {
     const state = room.state;
+    await syncReplayEffects(room);
     const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
     const result = state.handLog?.result;
     if (!isTsumoLossless3maState(state) && result?.payments && ["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) {
       const rate = Number(state.settings?.pointRate || 1);
-      const payments = pointDeltasFromResultPayments(result.payments, rate);
+      const { deltas: payments, metadata: compensationMetadata } = pointDeltasForRealPlayers(state, result.payments, rate);
       await syncOneClubPointEffect(room, `${handId}:anmikaSettlement`, "game_settlement", payments, {
         label: "アンミカロケット局精算",
         handId,
@@ -283,6 +444,7 @@ const syncClubPointEffects = async (room) => {
         winnerId: result.winnerId,
         winType: result.winType,
         pointRate: rate,
+        ...compensationMetadata,
       });
       if (result?.scoreResult?.rakePoints && result?.winnerId && isUuid(result.winnerId)) {
         await syncOneClubPointEffect(room, `${handId}:anmikaRake`, "rake", { [result.winnerId]: -Number(result.scoreResult.rakePoints || 0) }, {
@@ -304,30 +466,19 @@ const syncClubPointEffects = async (room) => {
         entryRakePoints: entryRake,
       });
     }
-    if (result?.chipSettlement?.payments) {
-      await syncOneClubPointEffect(room, `${handId}:chipSettlement`, "shugi", result.chipSettlement.payments, {
-        label: "祝儀",
-        handId,
-        resultType: result.type,
-        winnerId: result.winnerId,
-        winType: result.winType,
-        chipSettlement: result.chipSettlement,
-      });
-    }
-    if (result?.tobiPrize?.payments) {
-      await syncOneClubPointEffect(room, `${handId}:tobiPrize`, "tobi_prize", result.tobiPrize.payments, {
-        label: "飛び賞",
-        handId,
-        winnerId: result.winnerId,
-        winType: result.winType,
-        tobiPrize: result.tobiPrize,
-      });
-    }
     const finalSettlement = state.finalResult?.settlement;
     if (state.phase === "gameEnded" && finalSettlement?.settlements) {
-      await syncOneClubPointEffect(room, `${room.gameId}:hanchanSettlement`, "hanchan_settlement", finalSettlement.settlements, {
+      const accumulated = { ...(state.hanchanClubPointPayments || {}) };
+      const combined = { ...accumulated };
+      for (const [playerId, delta] of Object.entries(finalSettlement.settlements || {})) {
+        combined[playerId] = Math.round((Number(combined[playerId] || 0) + Number(delta || 0)) * 10) / 10;
+      }
+      const { deltas, metadata: compensationMetadata } = pointDeltasForRealPlayers(state, combined, 1);
+      await syncOneClubPointEffect(room, `${room.gameId}:hanchanSettlement`, "hanchan_settlement", deltas, {
         label: "半荘終了精算",
         finalResult: state.finalResult,
+        accumulatedInGamePayments: accumulated,
+        ...compensationMetadata,
       });
     }
   })().catch((error) => {
@@ -490,6 +641,15 @@ const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
     entries.push({ payerId: player.id, recipientId: recipient, points: prize });
   }
   return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
+};
+const accumulateTsumoLosslessClubPointPayments = (state, payments = {}) => {
+  if (!isTsumoLossless3maState(state)) return;
+  state.hanchanClubPointPayments ??= {};
+  for (const [playerId, delta] of Object.entries(payments || {})) {
+    const value = Number(delta || 0);
+    if (!value) continue;
+    state.hanchanClubPointPayments[playerId] = Math.round((Number(state.hanchanClubPointPayments[playerId] || 0) + value) * 10) / 10;
+  }
 };
 const applyTsumoLosslessRoundAdvance = (state, result) => {
   if (!isTsumoLossless3maState(state)) return;
@@ -1854,6 +2014,8 @@ const applyServerAction = (state, event) => {
     const tobiPrize = isTsumoLossless3maState(state)
       ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId)
       : null;
+    if (chipSettlement?.payments) accumulateTsumoLosslessClubPointPayments(state, chipSettlement.payments);
+    if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
     let isFeverContinuation = false;
     if (player.feverRiichiActive) {
       player.feverWinCount = Number(player.feverWinCount || 0) + 1;
@@ -2276,6 +2438,10 @@ const startNextServerHand = (state) => {
   state.replayInitialState = clone(state);
   state.replaySnapshots = [clone(state)];
   state.lastSavedReplayId = null;
+  if (isTsumoLossless) {
+    state.hanchanReplayInitialState ??= clone(state);
+    state.hanchanReplaySnapshots ??= [clone(state)];
+  }
   enterCurrentTurnOnServer(state);
   advanceServerCpuTurns(state);
   return state;
@@ -2382,6 +2548,9 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     log: [],
     replayInitialState: null,
     replaySnapshots: [],
+    hanchanReplayInitialState: null,
+    hanchanReplaySnapshots: [],
+    hanchanClubPointPayments: {},
     lastSavedReplayId: null,
   };
   for (const tile of state.doraIndicators) appendHandEvent(state, { type: "doraReveal", tile, doraIndicators: [...state.doraIndicators], turnIndex: state.turnIndex, reason: "initial" });
@@ -2390,6 +2559,10 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
   advanceServerCpuTurns(state);
   state.replayInitialState = clone(state);
   state.replaySnapshots = [clone(state)];
+  if (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
+    state.hanchanReplayInitialState = clone(state);
+    state.hanchanReplaySnapshots = [clone(state)];
+  }
   return state;
 };
 
