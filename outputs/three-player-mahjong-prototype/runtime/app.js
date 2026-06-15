@@ -42,10 +42,25 @@ const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
   feverRiichiEnabled: false,
   turquoise5pCount: 0,
 };
+const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
+const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
+  fiveTileComposition: "red3blue1",
+  flowerComposition: "red3blue1",
+  entryRakePoints: 5,
+  northNukiDoraEnabled: false,
+  umaType: "20-0--20",
+  chipValuePoints: 5000,
+  startingScore: 35000,
+  rounds: ["east1", "east2", "east3", "south1", "south2", "south3"],
+  pointRateUnit: "per1000",
+  noTsumoLoss: true,
+  settlementTiming: "hanchan",
+};
 const GAME_RULE_DEFINITIONS = [
   { id: "anmika-rocket", name: "アンミカロケット", implemented: true },
+  { id: TSUMO_LOSSLESS_3MA_RULE_ID, name: "ツモ損なし全赤三麻", implemented: true },
   { id: "normal-4ma", name: "ノーマル四麻", implemented: false },
-  { id: "normal-3ma", name: "ノーマル三麻", implemented: false },
+  { id: "normal-3ma", name: "三人麻雀", implemented: false },
   { id: "jewel", name: "ジュエル", implemented: false },
 ];
 const normalizeAnmikaRocketRuleConfig = (config = {}) => ({
@@ -53,6 +68,18 @@ const normalizeAnmikaRocketRuleConfig = (config = {}) => ({
   ...config,
   turquoise5pCount: [0, 1, 2].includes(Number(config.turquoise5pCount)) ? Number(config.turquoise5pCount) : DEFAULT_ANMIKA_ROCKET_RULE_CONFIG.turquoise5pCount,
 });
+const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
+  ...DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG,
+  ...(config || {}),
+  fiveTileComposition: ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.fiveTileComposition,
+  flowerComposition: ["red3blue1", "red4", "red2blue2"].includes(config?.flowerComposition) ? config.flowerComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.flowerComposition,
+  entryRakePoints: Math.max(0.1, Math.min(10, Number(config?.entryRakePoints ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.entryRakePoints))),
+  chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.chipValuePoints,
+  northNukiDoraEnabled: Boolean(config?.northNukiDoraEnabled),
+  umaType: ["20-0--20", "30-0--30", "20-10--30"].includes(config?.umaType) ? config.umaType : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.umaType,
+});
+const normalizeRuleConfigForRule = (ruleId = "anmika-rocket", config = {}) =>
+  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
 const createDefaultTableSettings = () => ({
   ruleId: "anmika-rocket",
   gameType: "anmika-rocket",
@@ -482,6 +509,21 @@ const leaveOnlineTableForSync = async (sync) => {
       headers: { ...headers, Prefer: "return=minimal" },
     }).catch((error) => console.warn("[OnlineSync] ラス半者のウェイティング解除に失敗しました", error));
   };
+  const clearOwnSeatDirectly = async () => {
+    if (!sync.userId) return false;
+    const fallbackResponse = await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?table_id=eq.${encodeURIComponent(sync.tableId)}&user_id=eq.${encodeURIComponent(sync.userId)}`, {
+      method: "PATCH",
+      headers: { ...headers, Prefer: "return=minimal" },
+      body: JSON.stringify({
+        user_id: null,
+        player_type: "empty",
+        display_name: null,
+        is_last_hand_declared: false,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+    return fallbackResponse.ok;
+  };
   try {
     await clearOwnWaiting();
     const resolveResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_leavers`, {
@@ -489,7 +531,12 @@ const leaveOnlineTableForSync = async (sync) => {
       headers,
       body: JSON.stringify({ p_table_id: sync.tableId }),
     });
-    if (resolveResponse.ok) return true;
+    if (resolveResponse.ok) {
+      await clearOwnWaiting();
+      await clearOwnSeatDirectly().catch((error) => console.warn("[OnlineSync] ラス半者の直接退席に失敗しました", error));
+      await markTableWaiting();
+      return true;
+    }
     const resolveText = await resolveResponse.text();
     if (
       resolveText &&
@@ -504,6 +551,7 @@ const leaveOnlineTableForSync = async (sync) => {
   }
   try {
     await clearOwnWaiting();
+    await clearOwnSeatDirectly().catch((error) => console.warn("[OnlineSync] ラス半者の直接退席に失敗しました", error));
     const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/leave_table`, {
       method: "POST",
       headers,
@@ -519,20 +567,10 @@ const leaveOnlineTableForSync = async (sync) => {
   }
   try {
     await clearOwnWaiting();
-    const fallbackResponse = await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?table_id=eq.${encodeURIComponent(sync.tableId)}&user_id=eq.${encodeURIComponent(sync.userId)}`, {
-      method: "PATCH",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({
-        user_id: null,
-        player_type: "empty",
-        display_name: null,
-        is_last_hand_declared: false,
-        updated_at: new Date().toISOString(),
-      }),
-    });
+    const fallbackOk = await clearOwnSeatDirectly();
     await markTableWaiting();
-    if (fallbackResponse.ok) return true;
-    console.warn("[OnlineSync] ラス半終了時の直接退席にも失敗しました", await fallbackResponse.text());
+    if (fallbackOk) return true;
+    console.warn("[OnlineSync] ラス半終了時の直接退席にも失敗しました");
   } catch (error) {
     console.warn("[OnlineSync] ラス半終了時の直接退席にも失敗しました", error);
   }
@@ -758,7 +796,7 @@ const replayRepository = {
     return replay;
   },
 };
-const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType = ruleId, rakePercent = 0, pointRate = 1, ruleConfig = normalizeAnmikaRocketRuleConfig(), createdBy } = {}) => ({
+const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType = ruleId, rakePercent = 0, pointRate = 1, ruleConfig = normalizeRuleConfigForRule(ruleId), createdBy } = {}) => ({
   id: id ?? `table-${now()}`,
   name: name ?? `卓 ${new Date().toLocaleTimeString("ja-JP")}`,
   clubId,
@@ -766,7 +804,7 @@ const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType 
   gameType,
   rakePercent,
   pointRate,
-  ruleConfig: normalizeAnmikaRocketRuleConfig(ruleConfig),
+  ruleConfig: normalizeRuleConfigForRule(ruleId, ruleConfig),
   createdBy,
   seats: [0, 1, 2].map((seatIndex) => ({ seatIndex, isOccupied: false, isReady: false, isLastHandDeclared: false })),
   waitingList: [],
@@ -1153,7 +1191,21 @@ const createInitialGameState = (players) => {
   };
 };
 
-const colorForNumberTile = (suit, rank, copy, ruleConfig = normalizeAnmikaRocketRuleConfig()) => {
+const colorByComposition = (composition, copy) => {
+  if (composition === "red4") return "red";
+  if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  if (composition === "blackBlackRedRed") return copy <= 2 ? "normal" : "red";
+  return copy <= 3 ? "red" : "blue";
+};
+const flowerColorByComposition = (composition, copy) => {
+  if (composition === "red4") return "red";
+  if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  return copy <= 3 ? "red" : "blue";
+};
+const colorForNumberTile = (suit, rank, copy, ruleConfig = normalizeAnmikaRocketRuleConfig(), ruleId = "anmika-rocket") => {
+  if (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && rank === 5 && (suit === "pinzu" || suit === "souzu")) {
+    return colorByComposition(ruleConfig.fiveTileComposition, copy);
+  }
   if (rank === 5 && suit === "pinzu") {
     if (ruleConfig.turquoise5pCount === 1) return copy === 1 ? "red" : copy === 2 ? "gold" : copy === 3 ? "blue" : "turquoise";
     if (ruleConfig.turquoise5pCount === 2) return copy <= 2 ? "turquoise" : copy === 3 ? "gold" : "blue";
@@ -1164,13 +1216,13 @@ const colorForNumberTile = (suit, rank, copy, ruleConfig = normalizeAnmikaRocket
   return "normal";
 };
 const isRocketTargetTile = (suit, rank) => (suit === "manzu" && (rank === 1 || rank === 9)) || ((suit === "pinzu" || suit === "souzu") && (rank === 1 || rank === 9));
-const createWallTiles = (ruleConfig = normalizeAnmikaRocketRuleConfig()) => {
-  ruleConfig = normalizeAnmikaRocketRuleConfig(ruleConfig);
+const createWallTiles = (ruleConfig = normalizeAnmikaRocketRuleConfig(), ruleId = "anmika-rocket") => {
+  ruleConfig = normalizeRuleConfigForRule(ruleId, ruleConfig);
   const tiles = [];
   for (const spec of [{ suit: "manzu", ranks: [1, 9] }, { suit: "pinzu", ranks: [1, 2, 3, 4, 5, 6, 7, 8, 9] }, { suit: "souzu", ranks: [1, 2, 3, 4, 5, 6, 7, 8, 9] }]) {
     for (const rank of spec.ranks) for (let copy = 1; copy <= 4; copy++) {
-      const isRocket = Boolean(ruleConfig.rocket19Enabled && copy === 4 && isRocketTargetTile(spec.suit, rank));
-      tiles.push({ id: `${spec.suit}-${rank}-${copy}${isRocket ? "-rocket" : ""}`, suit: spec.suit, rank, color: colorForNumberTile(spec.suit, rank, copy, ruleConfig), isPochi: false, isRocket });
+      const isRocket = Boolean(ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.rocket19Enabled && copy === 4 && isRocketTargetTile(spec.suit, rank));
+      tiles.push({ id: `${spec.suit}-${rank}-${copy}${isRocket ? "-rocket" : ""}`, suit: spec.suit, rank, color: colorForNumberTile(spec.suit, rank, copy, ruleConfig, ruleId), isPochi: false, isRocket });
     }
   }
   const pochiColors = ["red", "yellow", "green", "blue"];
@@ -1179,7 +1231,7 @@ const createWallTiles = (ruleConfig = normalizeAnmikaRocketRuleConfig()) => {
     if (kind === "white") tile.pochiColor = pochiColors[copy - 1];
     tiles.push(tile);
   }
-  for (let copy = 1; copy <= 4; copy++) tiles.push({ id: `flower-hua-${copy}`, suit: "flower", kind: "flower", color: copy <= 3 ? "red" : "blue", isPochi: false });
+  for (let copy = 1; copy <= 4; copy++) tiles.push({ id: `flower-hua-${copy}`, suit: "flower", kind: "flower", color: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? flowerColorByComposition(ruleConfig.flowerComposition, copy) : (copy <= 3 ? "red" : "blue"), isPochi: false });
   return tiles;
 };
 const shuffle = (items) => {
@@ -2154,10 +2206,12 @@ class GameController {
   }
   updateCreateTableSettings(partial) {
     const current = this.state.createTableSettings ?? createDefaultTableSettings();
+    const nextRuleId = partial.ruleId ?? current.ruleId ?? "anmika-rocket";
     this.state.createTableSettings = {
       ...current,
       ...partial,
-      ruleConfig: normalizeAnmikaRocketRuleConfig({ ...(current.ruleConfig ?? {}), ...(partial.ruleConfig ?? {}) }),
+      gameType: partial.gameType ?? partial.ruleId ?? current.gameType ?? nextRuleId,
+      ruleConfig: normalizeRuleConfigForRule(nextRuleId, { ...(current.ruleConfig ?? {}), ...(partial.ruleConfig ?? {}) }),
     };
     this.emit();
   }
@@ -2170,9 +2224,9 @@ class GameController {
       clubId: club.id,
       ruleId: settings.ruleId,
       gameType: settings.gameType ?? settings.ruleId,
-      rakePercent: Math.max(0, Math.min(10, Number(settings.rakePercent) || 0)),
+      rakePercent: settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 0 : Math.max(0, Math.min(10, Number(settings.rakePercent) || 0)),
       pointRate: Math.max(0.1, Math.min(10, Number(settings.pointRate) || 1)),
-      ruleConfig: normalizeAnmikaRocketRuleConfig(settings.ruleConfig),
+      ruleConfig: normalizeRuleConfigForRule(settings.ruleId, settings.ruleConfig),
       createdBy: this.state.currentUser.id,
     });
     this.syncTable(table);
@@ -2332,8 +2386,8 @@ class GameController {
       this.state.settings.pointRate = table.pointRate ?? 1;
       this.state.settings.ruleId = table.ruleId ?? "anmika-rocket";
       this.state.settings.gameType = table.gameType ?? table.ruleId ?? "anmika-rocket";
-      this.state.settings.ruleConfig = normalizeAnmikaRocketRuleConfig(table.ruleConfig);
-      this.state.settings.baibaMultiplier = this.state.settings.ruleConfig.baibaEnabled ? 2 : 1;
+      this.state.settings.ruleConfig = normalizeRuleConfigForRule(this.state.settings.ruleId, table.ruleConfig);
+      this.state.settings.baibaMultiplier = this.state.settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 1 : (this.state.settings.ruleConfig.baibaEnabled ? 2 : 1);
       for (const [index, seat] of normalizedSeats.entries()) {
         const player = this.state.players[index] ?? createPlayer(`cpu${index}`, `CPU${index}`, "cpu");
         this.state.players[index] = player;
@@ -2857,7 +2911,7 @@ class GameController {
   startGame({ preserveScores = false } = {}) {
     const ruleConfig = normalizeAnmikaRocketRuleConfig(this.state.settings?.ruleConfig);
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig))), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, this.state.settings?.ruleId || "anmika-rocket"))), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
     this.stopAllClocks();
@@ -2865,7 +2919,8 @@ class GameController {
       this.state.round.handNumber = 1;
       this.state.round.dealerPlayerId = this.state.players[0]?.id ?? "";
     }
-    for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : 0, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0 });
+    const startingScore = this.state.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0;
+    for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0 });
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
     this.state.handLog = { handId: `east-${this.state.round.handNumber}-${Date.now()}`, roundLabel: `東場`, dealerId: this.state.round.dealerPlayerId, events: [], initialHands: Object.fromEntries(this.state.players.map((p) => [p.id, [...p.hand]])), initialDoraIndicators: [...this.state.doraIndicators], initialScores: Object.fromEntries(this.state.players.map((p) => [p.id, p.score])) };
@@ -3878,8 +3933,16 @@ class GameView {
     }));
     this.root.querySelectorAll("[data-create-table-rake]").forEach((input) => input.addEventListener("input", () => this.handlers.onUpdateCreateTableSettings({ rakePercent: Number(input.value) })));
     this.root.querySelectorAll("[data-create-table-point-rate]").forEach((input) => input.addEventListener("input", () => this.handlers.onUpdateCreateTableSettings({ pointRate: Number(input.value) })));
-    this.root.querySelectorAll("[data-rule-config-key]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateCreateTableSettings({ ruleConfig: { [input.dataset.ruleConfigKey]: input.checked } })));
     this.root.querySelectorAll("[data-rule-config-turquoise]").forEach((select) => select.addEventListener("change", () => this.handlers.onUpdateCreateTableSettings({ ruleConfig: { turquoise5pCount: Number(select.value) } })));
+    this.root.querySelectorAll("[data-rule-config-key]").forEach((input) => input.addEventListener("change", () => {
+      const key = input.dataset.ruleConfigKey;
+      const value = input.type === "checkbox" ? input.checked : input.value;
+      this.handlers.onUpdateCreateTableSettings({ ruleConfig: { [key]: value } });
+    }));
+    this.root.querySelectorAll("[data-rule-config-number]").forEach((input) => input.addEventListener("input", () => {
+      const key = input.dataset.ruleConfigNumber;
+      this.handlers.onUpdateCreateTableSettings({ ruleConfig: { [key]: Number(input.value) } });
+    }));
     this.root.querySelectorAll("[data-create-table]").forEach((b) => b.addEventListener("click", () => this.handlers.onCreateTable()));
     this.root.querySelectorAll("[data-open-table]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenTable(b.dataset.openTable)));
     this.root.querySelectorAll("[data-rule-help]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenRuleHelp()));
@@ -4128,7 +4191,9 @@ class GameView {
     const club = this.selectedClub(state);
     if (!club || !state.currentUser || !canCreateTable(state.currentUser.id, club)) return `<section class="lobby-panel"><button type="button" data-nav="clubHome">戻る</button><p>卓作成は管理者だけができます。</p></section>`;
     const settings = state.createTableSettings ?? createDefaultTableSettings();
-    const ruleConfig = normalizeAnmikaRocketRuleConfig(settings.ruleConfig);
+    const isTsumoLossless = settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID;
+    const anmikaConfig = normalizeAnmikaRocketRuleConfig(settings.ruleConfig);
+    const threeMaConfig = normalizeTsumoLossless3maRuleConfig(settings.ruleConfig);
     return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="clubTables">卓一覧へ</button></div>
       <h3>卓作成</h3>
       <fieldset class="setting-row rule-choice-group">
@@ -4140,16 +4205,33 @@ class GameView {
       </fieldset>
       <section class="rule-config-panel">
         <h4>ルール設定</h4>
-        <label class="setting-row"><span>レート: 1点 = ${Number(settings.pointRate ?? 1).toFixed(1)}ポイント</span><input type="range" min="0.1" max="10" step="0.1" value="${settings.pointRate ?? 1}" data-create-table-point-rate /></label>
-        <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="rocket19Enabled" ${ruleConfig.rocket19Enabled ? "checked" : ""} /> 1・9牌ロケット</label>
-        <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${ruleConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
-        <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="otokogiEnabled" ${ruleConfig.otokogiEnabled ? "checked" : ""} /> 男気ルール</label>
-        <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="feverRiichiEnabled" ${ruleConfig.feverRiichiEnabled ? "checked" : ""} /> フィーバーリーチ</label>
-        <label class="setting-row"><span>ターコイズ5p: ${ruleConfig.turquoise5pCount}枚</span><select data-rule-config-turquoise>
-          ${[0, 1, 2].map((count) => `<option value="${count}" ${ruleConfig.turquoise5pCount === count ? "selected" : ""}>${count}枚</option>`).join("")}
-        </select></label>
+        <label class="setting-row"><span>${isTsumoLossless ? "レート: 1000点 = " : "レート: 1点 = "}${Number(settings.pointRate ?? 1).toFixed(1)}ポイント</span><input type="range" min="0.1" max="10" step="0.1" value="${settings.pointRate ?? 1}" data-create-table-point-rate /></label>
+        ${isTsumoLossless ? `
+          <label class="setting-row"><span>5p・5sの内訳</span><select data-rule-config-key="fiveTileComposition">
+            ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"], ["blackBlackRedRed", "黒黒赤赤"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.fiveTileComposition === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label class="setting-row"><span>華牌の構成</span><select data-rule-config-key="flowerComposition">
+            ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.flowerComposition === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt</span><input type="range" min="0.1" max="10" step="0.1" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
+          <label class="setting-row"><span>ウマ</span><select data-rule-config-key="umaType">
+            ${[["20-0--20", "20-0-▲20"], ["30-0--30", "30-0-▲30"], ["20-10--30", "20-10-▲30"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.umaType === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label class="setting-row"><span>祝儀価値</span><select data-rule-config-number="chipValuePoints">
+            ${[2000, 5000, 10000].map((value) => `<option value="${value}" ${threeMaConfig.chipValuePoints === value ? "selected" : ""}>${value.toLocaleString()}点</option>`).join("")}
+          </select></label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="northNukiDoraEnabled" ${threeMaConfig.northNukiDoraEnabled ? "checked" : ""} /> 北を抜きドラにする</label>
+        ` : `
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="rocket19Enabled" ${anmikaConfig.rocket19Enabled ? "checked" : ""} /> 1・9牌ロケット</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${anmikaConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="otokogiEnabled" ${anmikaConfig.otokogiEnabled ? "checked" : ""} /> 男気ルール</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="feverRiichiEnabled" ${anmikaConfig.feverRiichiEnabled ? "checked" : ""} /> フィーバーリーチ</label>
+          <label class="setting-row"><span>ターコイズ5p: ${anmikaConfig.turquoise5pCount}枚</span><select data-rule-config-turquoise>
+            ${[0, 1, 2].map((count) => `<option value="${count}" ${anmikaConfig.turquoise5pCount === count ? "selected" : ""}>${count}枚</option>`).join("")}
+          </select></label>
+        `}
       </section>
-      <label class="setting-row"><span>レーキ: ${Number(settings.rakePercent ?? 0).toFixed(1)}%</span><input type="range" min="0" max="10" step="0.5" value="${settings.rakePercent ?? 0}" data-create-table-rake /></label>
+      ${isTsumoLossless ? "" : `<label class="setting-row"><span>レーキ: ${Number(settings.rakePercent ?? 0).toFixed(1)}%</span><input type="range" min="0" max="10" step="0.5" value="${settings.rakePercent ?? 0}" data-create-table-rake /></label>`}
       <button type="button" class="primary-action" data-create-table-submit>作成</button>
     </section>`;
   }
@@ -4194,6 +4276,21 @@ class GameView {
     </section>`;
   }
   ruleConfigSummary(config) {
+    const maybeRuleId = config?.ruleId || config?.gameType;
+    if (maybeRuleId === TSUMO_LOSSLESS_3MA_RULE_ID || config?.fiveTileComposition || config?.flowerComposition) {
+      const ruleConfig = normalizeTsumoLossless3maRuleConfig(config);
+      const fiveLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青", blackBlackRedRed: "黒黒赤赤" }[ruleConfig.fiveTileComposition];
+      const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[ruleConfig.flowerComposition];
+      const umaLabel = String(ruleConfig.umaType).replace("--", "-▲");
+      return [
+        `5の内訳 ${fiveLabel}`,
+        `華牌 ${flowerLabel}`,
+        `開始時レーキ ${Number(ruleConfig.entryRakePoints).toFixed(1)}pt`,
+        `ウマ ${umaLabel}`,
+        `祝儀 ${Number(ruleConfig.chipValuePoints).toLocaleString()}点`,
+        ruleConfig.northNukiDoraEnabled ? "北抜きON" : "北抜きOFF",
+      ].join(" / ");
+    }
     const ruleConfig = normalizeAnmikaRocketRuleConfig(config);
     return [
       ruleConfig.rocket19Enabled ? "1・9牌ロケット" : null,
@@ -4514,6 +4611,7 @@ class GameView {
   scoreBreakdown(score, state) {
     const result = state.handLog.result;
     const winner = result?.type === "win" ? state.players.find((p) => p.id === result.winnerId) : null;
+    const playerName = (playerId) => state.players.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
     const bonus = score.bonuses ?? {};
     const yakuList = score.yakuList ?? score.yaku ?? [];
     const handTiles = (score.winningTiles ?? winner?.hand ?? []).filter((tile) => tile && !isFlowerTile(tile)).slice(0, 13);
@@ -4548,6 +4646,22 @@ class GameView {
     const selectedWaitLine = score.pochiActivated && winningTile
       ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(winningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
       : "";
+    const chipSettlement = result?.chipSettlement || score.chipSettlement;
+    const tobiPrize = result?.tobiPrize || score.tobiPrize;
+    const chipLines = chipSettlement ? `<section class="score-extra-settlement">
+      <h3>祝儀</h3>
+      <p>1枚 ${chipSettlement.chipPoint ?? 0}pt / 支払い ${chipSettlement.chipsPerPayer ?? 0}枚</p>
+      <ul>${state.players.map((player) => `<li>${player.name}: ${Number(chipSettlement.payments?.[player.id] || 0) >= 0 ? "+" : ""}${chipSettlement.payments?.[player.id] || 0}pt</li>`).join("")}</ul>
+    </section>` : "";
+    const tobiLines = tobiPrize ? `<section class="score-extra-settlement">
+      <h3>飛び賞</h3>
+      <p>2枚相当: ${tobiPrize.entries?.map((entry) => `${playerName(entry.payerId)} → ${playerName(entry.recipientId)} ${entry.points}pt`).join(" / ") || ""}</p>
+    </section>` : "";
+    const finalSettlement = result?.finalResult?.settlement;
+    const finalLines = finalSettlement ? `<section class="score-extra-settlement">
+      <h3>半荘精算</h3>
+      <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${item.pointDelta}pt</li>`).join("")}</ul>
+    </section>` : "";
     return `<section class="score-result result-modal compact-score-result"><h2>和了結果</h2>
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
@@ -4570,6 +4684,9 @@ class GameView {
       <ul class="score-payments">
         ${state.players.map((player) => `<li>${player.name} <strong>${player.score}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}
       </ul>
+      ${chipLines}
+      ${tobiLines}
+      ${finalLines}
       ${renderResultOkButton(state)}
     </section>`;
   }

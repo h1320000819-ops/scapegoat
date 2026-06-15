@@ -7,6 +7,8 @@ import { Server } from "socket.io";
 
 const PORT = Number(process.env.GAME_SERVER_PORT || 8787);
 const allowedOrigins = (process.env.GAME_SERVER_CORS || "*").split(",").map((item) => item.trim()).filter(Boolean);
+const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_STORE_DIR = path.join(__dirname, "game-state-store");
 fs.mkdirSync(STATE_STORE_DIR, { recursive: true });
@@ -26,6 +28,7 @@ let io = null;
 const gameRooms = new Map();
 
 const now = () => Date.now();
+const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
 const makeRoomKey = (tableId) => String(tableId || "");
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const safeStoreFileName = (tableId) => `${String(tableId || "").replace(/[^a-zA-Z0-9_.-]/g, "_")}.json`;
@@ -164,6 +167,141 @@ const persistRoom = (room) => {
   });
 };
 
+const hasSupabaseServerWriter = () => Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const supabaseRest = async (pathName, { method = "GET", body, prefer } = {}) => {
+  if (!hasSupabaseServerWriter()) throw new Error("SUPABASE_URL または SUPABASE_SERVICE_ROLE_KEY が未設定です");
+  const response = await fetch(`${SUPABASE_URL}/rest/v1${pathName}`, {
+    method,
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      "content-type": "application/json",
+      ...(prefer ? { prefer } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || `Supabase REST ${response.status}`);
+  }
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+};
+const getRoomTableContext = async (room) => {
+  if (!room?.tableId || !isUuid(room.tableId)) return null;
+  if (room.tableContext?.table_id === room.tableId) return room.tableContext;
+  const rows = await supabaseRest(`/tables?select=table_id,club_id&table_id=eq.${encodeURIComponent(room.tableId)}&limit=1`);
+  const table = Array.isArray(rows) ? rows[0] : null;
+  if (!table?.club_id) return null;
+  room.tableContext = table;
+  return table;
+};
+const nonCpuPlayersForPointSettlement = (state) =>
+  asArray(state?.players).filter((player) => player?.type !== "cpu" && isUuid(player?.id));
+const isDebugGameForPointSettlement = (state) => asArray(state?.players).some((player) => player?.type === "cpu");
+const normalizePointDeltas = (payments = {}) => {
+  const normalized = {};
+  for (const [playerId, amount] of Object.entries(payments || {})) {
+    if (!isUuid(playerId)) continue;
+    const value = Math.round(Number(amount || 0) * 10) / 10;
+    if (value) normalized[playerId] = value;
+  }
+  return normalized;
+};
+const applyClubPointDeltasToDb = async (room, reason, payments, metadata = {}) => {
+  const deltas = normalizePointDeltas(payments);
+  if (!Object.keys(deltas).length) return { skipped: true, reason: "empty" };
+  if (!hasSupabaseServerWriter()) {
+    if (!room.pointSyncMissingEnvLogged) {
+      console.warn("[ClubPointSync] SUPABASE_SERVICE_ROLE_KEY is not set. Point DB sync is skipped.");
+      room.pointSyncMissingEnvLogged = true;
+    }
+    return { skipped: true, reason: "missingEnv" };
+  }
+  const table = await getRoomTableContext(room);
+  if (!table?.club_id) return { skipped: true, reason: "missingClub" };
+  await supabaseRest("/rpc/apply_game_club_point_deltas", {
+    method: "POST",
+    body: {
+      p_club_id: table.club_id,
+      p_table_id: table.table_id,
+      p_game_key: String(room.gameId || room.tableId || ""),
+      p_reason: reason,
+      p_deltas: deltas,
+      p_metadata: {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        ...metadata,
+      },
+    },
+  });
+  console.log("[ClubPointSync] applied", { tableId: room.tableId, gameId: room.gameId, reason, deltas });
+  return { ok: true };
+};
+const markClubPointSyncApplied = (state, key) => {
+  state.clubPointDbSync ??= { appliedKeys: [] };
+  state.clubPointDbSync.appliedKeys = [...new Set([...(state.clubPointDbSync.appliedKeys || []), key])];
+};
+const hasClubPointSyncApplied = (state, key) => asArray(state?.clubPointDbSync?.appliedKeys).includes(key);
+const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}) => {
+  if (!room?.state || hasClubPointSyncApplied(room.state, key)) return false;
+  const result = await applyClubPointDeltasToDb(room, reason, payments, metadata);
+  if (!result?.ok) return false;
+  markClubPointSyncApplied(room.state, key);
+  persistRoom(room);
+  return true;
+};
+const syncClubPointEffects = async (room) => {
+  if (!room?.state || !isTsumoLossless3maState(room.state)) return;
+  if (isDebugGameForPointSettlement(room.state)) return;
+  if (room.clubPointSyncInFlight) return room.clubPointSyncInFlight;
+  room.clubPointSyncInFlight = (async () => {
+    const state = room.state;
+    const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
+    const entryRake = Number(state.settings?.ruleConfig?.entryRakePoints || 0);
+    if (entryRake > 0) {
+      const payments = Object.fromEntries(nonCpuPlayersForPointSettlement(state).map((player) => [player.id, -entryRake]));
+      await syncOneClubPointEffect(room, `${room.gameId}:entryRake`, "entry_rake", payments, {
+        label: "半荘開始時レーキ",
+        entryRakePoints: entryRake,
+      });
+    }
+    const result = state.handLog?.result;
+    if (result?.chipSettlement?.payments) {
+      await syncOneClubPointEffect(room, `${handId}:chipSettlement`, "shugi", result.chipSettlement.payments, {
+        label: "祝儀",
+        handId,
+        resultType: result.type,
+        winnerId: result.winnerId,
+        winType: result.winType,
+        chipSettlement: result.chipSettlement,
+      });
+    }
+    if (result?.tobiPrize?.payments) {
+      await syncOneClubPointEffect(room, `${handId}:tobiPrize`, "tobi_prize", result.tobiPrize.payments, {
+        label: "飛び賞",
+        handId,
+        winnerId: result.winnerId,
+        winType: result.winType,
+        tobiPrize: result.tobiPrize,
+      });
+    }
+    const finalSettlement = state.finalResult?.settlement;
+    if (state.phase === "gameEnded" && finalSettlement?.settlements) {
+      await syncOneClubPointEffect(room, `${room.gameId}:hanchanSettlement`, "hanchan_settlement", finalSettlement.settlements, {
+        label: "半荘終了精算",
+        finalResult: state.finalResult,
+      });
+    }
+  })().catch((error) => {
+    console.error("[ClubPointSync] failed", { tableId: room?.tableId, gameId: room?.gameId, error });
+  }).finally(() => {
+    room.clubPointSyncInFlight = null;
+  });
+  return room.clubPointSyncInFlight;
+};
+
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
 
 const DEFAULT_RULE_CONFIG = {
@@ -173,12 +311,178 @@ const DEFAULT_RULE_CONFIG = {
   feverRiichiEnabled: false,
   turquoise5pCount: 0,
 };
+const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
+const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
+  fiveTileComposition: "red3blue1",
+  flowerComposition: "red3blue1",
+  entryRakePoints: 5,
+  northNukiDoraEnabled: false,
+  umaType: "20-0--20",
+  chipValuePoints: 5000,
+  startingScore: 35000,
+  rounds: ["east1", "east2", "east3", "south1", "south2", "south3"],
+  pointRateUnit: "per1000",
+  noTsumoLoss: true,
+  settlementTiming: "hanchan",
+};
 
 const normalizeRuleConfig = (config = {}) => ({
   ...DEFAULT_RULE_CONFIG,
   ...(config || {}),
   turquoise5pCount: [0, 1, 2].includes(Number(config?.turquoise5pCount)) ? Number(config.turquoise5pCount) : 0,
 });
+const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
+  ...DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG,
+  ...(config || {}),
+  fiveTileComposition: ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : "red3blue1",
+  flowerComposition: ["red3blue1", "red4", "red2blue2"].includes(config?.flowerComposition) ? config.flowerComposition : "red3blue1",
+  entryRakePoints: Math.max(0.1, Math.min(10, Number(config?.entryRakePoints ?? 5))),
+  chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : 5000,
+  northNukiDoraEnabled: Boolean(config?.northNukiDoraEnabled),
+  umaType: ["20-0--20", "30-0--30", "20-10--30"].includes(config?.umaType) ? config.umaType : "20-0--20",
+});
+const normalizeRuleConfigForRule = (ruleId, config = {}) =>
+  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeRuleConfig(config);
+
+const isTsumoLossless3maState = (state) =>
+  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+const isNorthNukiTile = (state, tile) =>
+  isTsumoLossless3maState(state) && Boolean(state?.settings?.ruleConfig?.northNukiDoraEnabled) && tile?.suit === "honor" && tile?.kind === "north";
+const isNukiDoraTileForState = (state, tile) => isFlowerTile(tile) || isNorthNukiTile(state, tile);
+const TSUMO_LOSSLESS_ROUNDS = ["東1局", "東2局", "東3局", "南1局", "南2局", "南3局"];
+const parseUmaValues = (umaType = "20-0--20") => {
+  if (umaType === "30-0--30") return [30, 0, -30];
+  if (umaType === "20-10--30") return [20, 10, -30];
+  return [20, 0, -20];
+};
+const playerOrderIndex = (state, playerId) => {
+  const order = ensureArray(state?.round?.initialSeatOrder);
+  const index = order.indexOf(playerId);
+  return index >= 0 ? index : Math.max(0, ensureArray(state?.players).findIndex((player) => player.id === playerId));
+};
+const getTsumoLosslessRoundIndex = (state) => Math.max(0, Math.min(5, Number(state?.round?.hanchanRoundIndex ?? 0)));
+const getTsumoLosslessDealerIdForRound = (state, roundIndex = getTsumoLosslessRoundIndex(state)) => {
+  const order = ensureArray(state?.round?.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state?.players).map((player) => player.id);
+  return order[roundIndex % 3] || ensureArray(state?.players)[0]?.id || "";
+};
+const isTsumoLosslessHanchanFinished = (state) => {
+  if (!isTsumoLossless3maState(state)) return false;
+  if (ensureArray(state.players).some((player) => Number(player.score || 0) <= 0)) return true;
+  return getTsumoLosslessRoundIndex(state) >= TSUMO_LOSSLESS_ROUNDS.length - 1;
+};
+const rankTsumoLosslessPlayers = (state) =>
+  [...ensureArray(state.players)].sort((a, b) => {
+    const scoreDiff = Number(b.score || 0) - Number(a.score || 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return playerOrderIndex(state, a.id) - playerOrderIndex(state, b.id);
+  });
+const calculateTsumoLosslessFinalSettlement = (state) => {
+  const rate = Number(state?.settings?.pointRate || 1);
+  const uma = parseUmaValues(state?.settings?.ruleConfig?.umaType);
+  const ranked = rankTsumoLosslessPlayers(state);
+  const settlements = {};
+  const details = [];
+  let lowerTotal = 0;
+  ranked.forEach((player, rankIndex) => {
+    if (rankIndex === 0) return;
+    const raw = Number(player.score || 0) / 1000 - 40 + Number(uma[rankIndex] || 0);
+    const pointDelta = Math.round(raw * rate * 10) / 10;
+    settlements[player.id] = pointDelta;
+    lowerTotal += pointDelta;
+    details.push({ playerId: player.id, rank: rankIndex + 1, score: Number(player.score || 0), uma: uma[rankIndex] || 0, raw, pointDelta });
+  });
+  if (ranked[0]) {
+    settlements[ranked[0].id] = Math.round(-lowerTotal * 10) / 10;
+    details.unshift({ playerId: ranked[0].id, rank: 1, score: Number(ranked[0].score || 0), uma: uma[0] || 0, raw: null, pointDelta: settlements[ranked[0].id] });
+  }
+  return { type: "hanchanSettlement", rate, umaType: state?.settings?.ruleConfig?.umaType || "20-0--20", rankedPlayerIds: ranked.map((player) => player.id), settlements, details };
+};
+const getNextHanchanSeatOrder = (state) => {
+  const order = ensureArray(state?.round?.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state?.players).map((player) => player.id);
+  return order.length ? [...order.slice(1), order[0]] : [];
+};
+const getChipPointValue = (state) => {
+  const chipValuePoints = Number(state?.settings?.ruleConfig?.chipValuePoints || 5000);
+  const rate = Number(state?.settings?.pointRate || 1);
+  return Math.round((chipValuePoints / 1000) * rate * 10) / 10;
+};
+const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, scoreResult) => {
+  if (!isTsumoLossless3maState(state)) return null;
+  const yakuNames = new Set(ensureArray(scoreResult?.yakuList || scoreResult?.yaku).map((item) => item.name));
+  const blueChips = ensureArray(scoreResult?.winningTiles).filter((tile) => tile?.color === "blue" || tile?.isRocket).length + ensureArray(winner?.nukiDoraTiles).filter((tile) => tile?.color === "blue").length;
+  const ippatsuChips = yakuNames.has("一発") ? 1 : 0;
+  const uraChips = Number(scoreResult?.dora?.ura || 0);
+  const yakumanChips = ensureArray(scoreResult?.yakuList || scoreResult?.yaku).some((item) => item.isYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
+  const chipsPerPayer = blueChips + ippatsuChips + uraChips + yakumanChips;
+  const chipPoint = getChipPointValue(state);
+  const pointPerPayer = Math.round(chipsPerPayer * chipPoint * 10) / 10;
+  const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
+  if (pointPerPayer !== 0) {
+    if (winType === "tsumo") {
+      for (const player of ensureArray(state.players)) {
+        if (player.id === winner.id) continue;
+        payments[player.id] -= pointPerPayer;
+        payments[winner.id] += pointPerPayer;
+      }
+    } else if (loserId) {
+      payments[loserId] -= pointPerPayer;
+      payments[winner.id] += pointPerPayer;
+    }
+  }
+  return { type: "chipSettlement", chipPoint, chipsPerPayer, blueChips, ippatsuChips, uraChips, yakumanChips, pointPerPayer, payments };
+};
+const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
+  if (!isTsumoLossless3maState(state)) return null;
+  const chipPoint = getChipPointValue(state);
+  const prize = Math.round(chipPoint * 2 * 10) / 10;
+  if (prize <= 0) return null;
+  const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
+  const recipientFor = (payerId) => {
+    if (winnerId) return winnerId;
+    const order = ensureArray(state.round?.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state.players).map((player) => player.id);
+    const index = order.indexOf(payerId);
+    return order[(index + 1 + order.length) % order.length] || winnerId;
+  };
+  const entries = [];
+  for (const player of ensureArray(state.players)) {
+    if (Number(player.score || 0) > 0) continue;
+    const recipient = winType === "ron" && loserId === player.id ? winnerId : recipientFor(player.id);
+    if (!recipient || recipient === player.id) continue;
+    payments[player.id] -= prize;
+    payments[recipient] += prize;
+    entries.push({ payerId: player.id, recipientId: recipient, points: prize });
+  }
+  return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
+};
+const applyTsumoLosslessRoundAdvance = (state, result) => {
+  if (!isTsumoLossless3maState(state)) return;
+  state.round ??= {};
+  const dealerId = state.round.dealerPlayerId;
+  const isDealerWin = result?.type === "win" && result.winnerId === dealerId;
+  const isDraw = result?.type === "exhaustiveDraw";
+  state.round.honba = Number(state.round.honba || 0);
+  if (isDealerWin || isDraw) state.round.honba += 1;
+  else state.round.honba = 0;
+  state.round.hanchanRoundIndex = getTsumoLosslessRoundIndex(state) + 1;
+};
+const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
+  state.pendingAction = null;
+  state.phase = "gameEnded";
+  state.isWaitingForHumanAction = false;
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.finalResult = {
+    type: "hanchanEnd",
+    reason,
+    finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, Number(player.score || 0)])),
+    settlement: calculateTsumoLosslessFinalSettlement(state),
+    nextHanchanSeatOrder: getNextHanchanSeatOrder(state),
+  };
+  state.handLog ??= {};
+  state.handLog.result ??= { type: "gameEnded", reason };
+  state.handLog.result.finalResult = state.finalResult;
+  return state;
+};
 
 const isFlowerTile = (tile) => tile?.suit === "flower";
 const currentPlayer = (state) => state?.players?.[state.currentPlayerIndex ?? 0] ?? null;
@@ -504,6 +808,47 @@ const getServerBaseScoreFromHan = (han, isDealer) => {
   if (h <= 13) return { basePoints: 24, limitType: "三倍満" };
   return { basePoints: 32, limitType: "役満" };
 };
+const getTsumoLossless3maRonScoreFromHan = (han, isDealer) => {
+  const h = Math.max(1, Number(han) || 1);
+  if (isDealer) {
+    if (h <= 1) return { basePoints: 2000, limitType: "通常" };
+    if (h === 2) return { basePoints: 3000, limitType: "通常" };
+    if (h === 3) return { basePoints: 6000, limitType: "通常" };
+    if (h <= 5) return { basePoints: 12000, limitType: "満貫" };
+    if (h <= 7) return { basePoints: 18000, limitType: "跳満" };
+    if (h <= 10) return { basePoints: 24000, limitType: "倍満" };
+    if (h <= 13) return { basePoints: 36000, limitType: "三倍満" };
+    return { basePoints: 48000, limitType: "数え役満" };
+  }
+  if (h <= 1) return { basePoints: 1000, limitType: "通常" };
+  if (h === 2) return { basePoints: 2000, limitType: "通常" };
+  if (h === 3) return { basePoints: 4000, limitType: "通常" };
+  if (h <= 5) return { basePoints: 8000, limitType: "満貫" };
+  if (h <= 7) return { basePoints: 12000, limitType: "跳満" };
+  if (h <= 10) return { basePoints: 16000, limitType: "倍満" };
+  if (h <= 13) return { basePoints: 24000, limitType: "三倍満" };
+  return { basePoints: 32000, limitType: "数え役満" };
+};
+const getTsumoLossless3maTsumoScoreFromHan = (han, isDealer) => {
+  const h = Math.max(1, Number(han) || 1);
+  if (isDealer) {
+    if (h <= 1) return { childPay: 1000, dealerPay: 1000, limitType: "通常" };
+    if (h === 2) return { childPay: 2000, dealerPay: 2000, limitType: "通常" };
+    if (h === 3) return { childPay: 3000, dealerPay: 3000, limitType: "通常" };
+    if (h <= 5) return { childPay: 6000, dealerPay: 6000, limitType: "満貫" };
+    if (h <= 7) return { childPay: 9000, dealerPay: 9000, limitType: "跳満" };
+    if (h <= 10) return { childPay: 12000, dealerPay: 12000, limitType: "倍満" };
+    if (h <= 13) return { childPay: 18000, dealerPay: 18000, limitType: "三倍満" };
+    return { childPay: 24000, dealerPay: 24000, limitType: "数え役満" };
+  }
+  if (h <= 2) return { childPay: 1000, dealerPay: 1000, limitType: "通常" };
+  if (h === 3) return { childPay: 1000, dealerPay: 3000, limitType: "通常" };
+  if (h <= 5) return { childPay: 3000, dealerPay: 5000, limitType: "満貫" };
+  if (h <= 7) return { childPay: 4000, dealerPay: 8000, limitType: "跳満" };
+  if (h <= 10) return { childPay: 6000, dealerPay: 10000, limitType: "倍満" };
+  if (h <= 13) return { childPay: 8000, dealerPay: 16000, limitType: "三倍満" };
+  return { childPay: 12000, dealerPay: 20000, limitType: "数え役満" };
+};
 const countServerIndicatorDora = (indicators, tiles) => {
   const doraKeys = new Set(ensureArray(indicators).map((indicator) => {
     if (indicator.suit === "pinzu" || indicator.suit === "souzu") return `${indicator.suit}:${Number(indicator.rank) === 9 ? 1 : Number(indicator.rank) + 1}`;
@@ -625,6 +970,69 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku)
   const nuki = hasYakuman ? 0 : ensureArray(player.nukiDoraTiles).length;
   const doraHan = normalDora + colored + nuki;
   const totalHan = hasYakuman ? 14 : yakuHan + doraHan;
+  const isTsumoLossless3ma = state.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+  if (isTsumoLossless3ma) {
+    const isDealer = player.id === state.round?.dealerPlayerId;
+    const honba = Number(state.round?.honba ?? state.honba ?? 0);
+    const payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
+    let basePoints = 0;
+    let limitType = "通常";
+    let childPay = 0;
+    let dealerPay = 0;
+    if (winType === "tsumo") {
+      const tsumoScore = getTsumoLossless3maTsumoScoreFromHan(totalHan, isDealer);
+      limitType = tsumoScore.limitType;
+      childPay = tsumoScore.childPay + honba * 1000;
+      dealerPay = tsumoScore.dealerPay + honba * 1000;
+      for (const p of ensureArray(state.players)) {
+        if (p.id === player.id) continue;
+        const pay = p.id === state.round?.dealerPlayerId ? dealerPay : childPay;
+        payments[p.id] = -pay;
+        payments[player.id] += pay;
+      }
+      basePoints = isDealer ? childPay : Math.max(childPay, dealerPay);
+    } else {
+      const ronScore = getTsumoLossless3maRonScoreFromHan(totalHan, isDealer);
+      limitType = ronScore.limitType;
+      basePoints = ronScore.basePoints + honba * 1000;
+      payments[player.id] = basePoints;
+      if (loserId) payments[loserId] = -basePoints;
+    }
+    return {
+      yakuHan,
+      doraHan,
+      totalHan,
+      han: totalHan,
+      basePoints,
+      bonusPoints: honba * 1000,
+      beforeBaibaPoints: basePoints,
+      totalPoints: basePoints,
+      finalPoints: basePoints,
+      limitType,
+      yaku,
+      yakuList: yaku,
+      doraDetails: [
+        normalDora ? { name: "ドラ", han: normalDora } : null,
+        colored ? { name: "色付き牌ドラ", han: colored } : null,
+        nuki ? { name: "抜きドラ", han: nuki } : null,
+        uraDora ? { name: "裏ドラ", han: uraDora } : null,
+      ].filter(Boolean),
+      dora: { normal: normalDora, colored, nuki, ura: uraDora },
+      bonuses: { honba: honba * 1000, chipPending: false },
+      chipSettlement,
+      baibaMultiplier: 1,
+      payments,
+      paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
+      winnerGain: payments[player.id] || 0,
+      winningTiles,
+      winningTile: tile || null,
+      selectedWait: tile || null,
+      pochiActivated: false,
+      pointMultiplier: 1,
+      isTsumo: winType === "tsumo",
+      tsumoPayments: winType === "tsumo" ? { childPay, dealerPay } : null,
+    };
+  }
   const { basePoints, limitType } = getServerBaseScoreFromHan(totalHan, player.id === state.round?.dealerPlayerId);
   const blueTileBonus = bonusSourceTiles.filter((tileItem) => (tileItem.color === "blue" || tileItem.isRocket) && !tileItem.isPochi).length * 20;
   const goldTileBonus = bonusSourceTiles.filter((tileItem) => tileItem.color === "gold" || tileItem.color === "turquoise").length * 5;
@@ -1002,6 +1410,14 @@ const applyServerAction = (state, event) => {
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
     const allOk = requiredOkPlayerIds.length === 0 || requiredOkPlayerIds.every((id) => state.resultOkPlayerIds.includes(id));
     if (!allOk) return state;
+    if (isTsumoLossless3maState(state)) {
+      const result = state.handLog?.result;
+      if (isTsumoLosslessHanchanFinished(state)) {
+        return prepareTsumoLosslessGameEnd(state, ensureArray(state.players).some((p) => Number(p.score || 0) <= 0) ? "tobi" : "south3End");
+      }
+      applyTsumoLosslessRoundAdvance(state, result);
+      return startNextServerHand(state);
+    }
     if (state.settings?.isLastHand) {
       state.pendingAction = null;
       state.phase = "gameEnded";
@@ -1093,7 +1509,7 @@ const applyServerAction = (state, event) => {
     const actionTile = payload.action?.sourceTile || payload.action?.tile || payload.sourceTile || payload.tile;
     const tileId = payload.tileId || actionTile?.id;
     const tile = tileId === player.drawnTile?.id ? player.drawnTile : removeTileById(player.hand, tileId);
-    if (!tile || !isFlowerTile(tile)) throw new Error("抜きドラにできる華牌がありません");
+    if (!tile || !isNukiDoraTileForState(state, tile)) throw new Error("抜きドラにできる牌がありません");
     if (player.drawnTile?.id === tileId) player.drawnTile = null;
     player.nukiDoraTiles ??= [];
     player.nukiDoraTiles.push(tile);
@@ -1191,6 +1607,12 @@ const applyServerAction = (state, event) => {
     for (const p of ensureArray(state.players)) {
       p.score = Number(p.score || 0) + Number(scoreResult.payments?.[p.id] || 0);
     }
+    const chipSettlement = isTsumoLossless3maState(state)
+      ? (scoreResult.chipSettlement || calculateTsumoLosslessChipSettlement(state, player, action, loserId, scoreResult))
+      : null;
+    const tobiPrize = isTsumoLossless3maState(state)
+      ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId)
+      : null;
     state.pendingAction = null;
     state.phase = "handEnded";
     state.handLog ??= {};
@@ -1202,6 +1624,8 @@ const applyServerAction = (state, event) => {
       winningTile: effectiveWinningTile,
       scoreResult,
       payments: scoreResult.paymentDeltas,
+      chipSettlement,
+      tobiPrize,
     };
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
     return state;
@@ -1289,7 +1713,22 @@ const applyServerClockTimeout = (state) => {
 
 const isRocketTargetTile = (suit, rank) => (suit === "manzu" && (rank === 1 || rank === 9)) || ((suit === "pinzu" || suit === "souzu") && (rank === 1 || rank === 9));
 
-const colorForNumberTile = (suit, rank, copy, ruleConfig = DEFAULT_RULE_CONFIG) => {
+const colorByComposition = (composition, copy) => {
+  if (composition === "red4") return "red";
+  if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  if (composition === "blackBlackRedRed") return copy <= 2 ? "normal" : "red";
+  return copy <= 3 ? "red" : "blue";
+};
+const flowerColorByComposition = (composition, copy) => {
+  if (composition === "red4") return "red";
+  if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  return copy <= 3 ? "red" : "blue";
+};
+
+const colorForNumberTile = (suit, rank, copy, ruleConfig = DEFAULT_RULE_CONFIG, ruleId = "anmika-rocket") => {
+  if (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && rank === 5 && (suit === "pinzu" || suit === "souzu")) {
+    return colorByComposition(ruleConfig.fiveTileComposition, copy);
+  }
   if (rank === 5 && suit === "pinzu") {
     if (ruleConfig.turquoise5pCount === 1) return copy === 1 ? "red" : copy === 2 ? "gold" : copy === 3 ? "blue" : "turquoise";
     if (ruleConfig.turquoise5pCount === 2) return copy <= 2 ? "turquoise" : copy === 3 ? "gold" : "blue";
@@ -1300,18 +1739,18 @@ const colorForNumberTile = (suit, rank, copy, ruleConfig = DEFAULT_RULE_CONFIG) 
   return "normal";
 };
 
-const createWallTiles = (ruleConfigInput = {}) => {
-  const ruleConfig = normalizeRuleConfig(ruleConfigInput);
+const createWallTiles = (ruleConfigInput = {}, ruleId = "anmika-rocket") => {
+  const ruleConfig = normalizeRuleConfigForRule(ruleId, ruleConfigInput);
   const tiles = [];
   for (const spec of [{ suit: "manzu", ranks: [1, 9] }, { suit: "pinzu", ranks: [1, 2, 3, 4, 5, 6, 7, 8, 9] }, { suit: "souzu", ranks: [1, 2, 3, 4, 5, 6, 7, 8, 9] }]) {
     for (const rank of spec.ranks) {
       for (let copy = 1; copy <= 4; copy++) {
-        const isRocket = Boolean(ruleConfig.rocket19Enabled && copy === 4 && isRocketTargetTile(spec.suit, rank));
+        const isRocket = Boolean(ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.rocket19Enabled && copy === 4 && isRocketTargetTile(spec.suit, rank));
         tiles.push({
           id: `${spec.suit}-${rank}-${copy}${isRocket ? "-rocket" : ""}`,
           suit: spec.suit,
           rank,
-          color: colorForNumberTile(spec.suit, rank, copy, ruleConfig),
+          color: colorForNumberTile(spec.suit, rank, copy, ruleConfig, ruleId),
           isPochi: false,
           isRocket,
         });
@@ -1327,7 +1766,7 @@ const createWallTiles = (ruleConfigInput = {}) => {
     }
   }
   for (let copy = 1; copy <= 4; copy++) {
-    tiles.push({ id: `flower-hua-${copy}`, suit: "flower", kind: "flower", color: copy <= 3 ? "red" : "blue", isPochi: false });
+    tiles.push({ id: `flower-hua-${copy}`, suit: "flower", kind: "flower", color: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? flowerColorByComposition(ruleConfig.flowerComposition, copy) : (copy <= 3 ? "red" : "blue"), isPochi: false });
   }
   return tiles;
 };
@@ -1341,9 +1780,9 @@ const shuffle = (items) => {
   return copied;
 };
 
-const splitStartingWalls = (wall) => {
+const splitStartingWalls = (wall, rinshanCount = 8) => {
   const copied = [...wall];
-  return { rinshanWall: copied.splice(-8), doraIndicators: copied.splice(-1), uraDoraIndicators: copied.splice(-1), liveWall: copied };
+  return { rinshanWall: copied.splice(-Math.max(8, Number(rinshanCount) || 8)), doraIndicators: copied.splice(-1), uraDoraIndicators: copied.splice(-1), liveWall: copied };
 };
 
 const sortHandTiles = (hand) => {
@@ -1484,7 +1923,13 @@ const calculateServerExhaustiveDraw = (state) => {
   });
   const tenpaiPlayerIds = tenpaiResults.filter((item) => item.isTenpai).map((item) => item.playerId);
   const paymentMap = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
-  if (tenpaiPlayerIds.length === 1) {
+  if (isTsumoLossless3maState(state)) {
+    const notenPlayerIds = ensureArray(state.players).filter((player) => !tenpaiPlayerIds.includes(player.id)).map((player) => player.id);
+    if (tenpaiPlayerIds.length > 0 && notenPlayerIds.length > 0) {
+      for (const notenId of notenPlayerIds) paymentMap[notenId] = -1000 * tenpaiPlayerIds.length;
+      for (const tenpaiId of tenpaiPlayerIds) paymentMap[tenpaiId] = 1000 * notenPlayerIds.length;
+    }
+  } else if (tenpaiPlayerIds.length === 1) {
     paymentMap[tenpaiPlayerIds[0]] = 30;
     for (const player of ensureArray(state.players)) if (!tenpaiPlayerIds.includes(player.id)) paymentMap[player.id] = -15;
   } else if (tenpaiPlayerIds.length === 2) {
@@ -1505,10 +1950,15 @@ const calculateServerExhaustiveDraw = (state) => {
 
 const startNextServerHand = (state) => {
   const result = state.handLog?.result;
-  const nextDealerId = result?.type === "win" ? result.winnerId : state.round?.dealerPlayerId || state.players?.[0]?.id || "";
-  const handNumber = Number(state.round?.handNumber || 1) + 1;
-  const ruleConfig = normalizeRuleConfig(state.settings?.ruleConfig);
-  const walls = splitStartingWalls(shuffle(createWallTiles(ruleConfig)));
+  const ruleId = state.settings?.ruleId || state.settings?.gameType || "anmika-rocket";
+  const isTsumoLossless = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID;
+  const nextRoundIndex = isTsumoLossless ? getTsumoLosslessRoundIndex(state) : 0;
+  const nextDealerId = isTsumoLossless
+    ? getTsumoLosslessDealerIdForRound(state, nextRoundIndex)
+    : (result?.type === "win" ? result.winnerId : state.round?.dealerPlayerId || state.players?.[0]?.id || "");
+  const handNumber = isTsumoLossless ? nextRoundIndex + 1 : Number(state.round?.handNumber || 1) + 1;
+  const ruleConfig = normalizeRuleConfigForRule(ruleId, state.settings?.ruleConfig);
+  const walls = splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8);
   Object.assign(state, {
     ...walls,
     kanCount: 0,
@@ -1528,8 +1978,10 @@ const startNextServerHand = (state) => {
     lastClockRenderTick: null,
   });
   state.round ??= {};
-  state.round.roundWind = "east";
+  state.round.initialSeatOrder = ensureArray(state.round.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state.players).map((player) => player.id);
+  state.round.roundWind = isTsumoLossless && nextRoundIndex >= 3 ? "south" : "east";
   state.round.handNumber = handNumber;
+  state.round.hanchanRoundIndex = nextRoundIndex;
   state.round.dealerPlayerId = nextDealerId;
   for (const player of ensureArray(state.players)) {
     Object.assign(player, {
@@ -1561,7 +2013,7 @@ const startNextServerHand = (state) => {
   if (state.players[dealerIndex]) state.players[dealerIndex].status = "active";
   state.handLog = {
     handId: `socket-${state.activeTableId || "table"}-${Date.now()}`,
-    roundLabel: "譚ｱ蝣ｴ",
+    roundLabel: isTsumoLossless ? (TSUMO_LOSSLESS_ROUNDS[nextRoundIndex] || "南3局") : "東場",
     dealerId: nextDealerId,
     events: [],
     initialHands: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, [...player.hand]])),
@@ -1578,12 +2030,13 @@ const startNextServerHand = (state) => {
 };
 
 const createServerInitialState = ({ tableId, gameId, players = [], settings = {}, ruleConfig = {} }) => {
-  const normalizedRuleConfig = normalizeRuleConfig(ruleConfig || settings.ruleConfig);
+  const ruleId = settings.ruleId || settings.gameType || "anmika-rocket";
+  const normalizedRuleConfig = normalizeRuleConfigForRule(ruleId, ruleConfig || settings.ruleConfig);
   const normalizedPlayers = players.slice(0, 3).map((player, index) => ({
     id: player.id || `cpu${index}`,
     name: player.name || (player.type === "cpu" ? `CPU${index}` : `プレイヤー${index + 1}`),
     type: player.type === "cpu" ? "cpu" : "remote",
-    score: Number(player.score ?? 0),
+    score: Number(player.score ?? (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0)),
     hand: [],
     drawnTile: null,
     discardedTiles: [],
@@ -1606,7 +2059,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       id: `cpu${index}`,
       name: `CPU${index}`,
       type: "cpu",
-      score: 0,
+      score: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0,
       hand: [],
       drawnTile: null,
       discardedTiles: [],
@@ -1625,7 +2078,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     });
   }
 
-  const walls = splitStartingWalls(shuffle(createWallTiles(normalizedRuleConfig)));
+  const walls = splitStartingWalls(shuffle(createWallTiles(normalizedRuleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && normalizedRuleConfig.northNukiDoraEnabled ? 12 : 8);
   for (let i = 0; i < 13; i++) {
     for (const player of normalizedPlayers) {
       const tile = walls.liveWall.shift();
@@ -1635,12 +2088,13 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
   for (const player of normalizedPlayers) player.hand = sortHandTiles(player.hand);
 
   const dealerId = normalizedPlayers[0]?.id ?? "";
+  const initialSeatOrder = normalizedPlayers.map((player) => player.id);
   const state = {
     players: normalizedPlayers,
     version: 0,
     ...walls,
     kanCount: 0,
-    round: { roundWind: "east", handNumber: 1, dealerPlayerId: dealerId },
+    round: { roundWind: "east", handNumber: 1, hanchanRoundIndex: 0, honba: 0, dealerPlayerId: dealerId, initialSeatOrder },
     currentPlayerIndex: 0,
     turnIndex: 0,
     isWaitingForHumanAction: false,
@@ -1652,10 +2106,10 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     flowerAnnouncement: null,
     settings: {
       ...settings,
-      ruleId: settings.ruleId || "anmika-rocket",
-      gameType: settings.gameType || settings.ruleId || "anmika-rocket",
+      ruleId,
+      gameType: settings.gameType || ruleId,
       ruleConfig: normalizedRuleConfig,
-      baibaMultiplier: normalizedRuleConfig.baibaEnabled ? 2 : 1,
+      baibaMultiplier: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 1 : (normalizedRuleConfig.baibaEnabled ? 2 : 1),
     },
     activeTableId: tableId,
     screen: "game",
@@ -1666,7 +2120,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     resultOkPlayerIds: [],
     handLog: {
       handId: `socket-${gameId || tableId}-${Date.now()}`,
-      roundLabel: "譚ｱ蝣ｴ",
+      roundLabel: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "東1局" : "東場",
       dealerId,
       events: [],
       initialHands: Object.fromEntries(normalizedPlayers.map((player) => [player.id, [...player.hand]])),
@@ -1763,6 +2217,7 @@ const scheduleRoomResultTimeout = (room) => {
     };
     room.updatedAt = now();
     persistRoom(room);
+    syncClubPointEffects(room);
     broadcastState(room);
     scheduleRoomServerEffect(room);
     scheduleRoomClockTimeout(room);
@@ -1783,6 +2238,7 @@ const scheduleRoomServerEffect = (room) => {
     room.state.version = room.version;
     room.updatedAt = now();
     persistRoom(room);
+    syncClubPointEffects(room);
     broadcastState(room);
     scheduleRoomServerEffect(room);
     scheduleRoomClockTimeout(room);
@@ -1816,6 +2272,7 @@ const scheduleRoomClockTimeout = (room) => {
     };
     room.updatedAt = now();
     persistRoom(room);
+    syncClubPointEffects(room);
     broadcastState(room);
     scheduleRoomServerEffect(room);
     scheduleRoomClockTimeout(room);
@@ -1837,6 +2294,7 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
   room.state = next;
   room.updatedAt = now();
   persistRoom(room);
+  syncClubPointEffects(room);
   broadcastState(room);
   scheduleRoomServerEffect(room);
   scheduleRoomClockTimeout(room);
@@ -1933,6 +2391,7 @@ io.on("connection", (socket) => {
       room.state = nextState;
       room.updatedAt = now();
       persistRoom(room);
+      syncClubPointEffects(room);
       io.to(`table:${room.tableId}`).emit("game:event", event);
       broadcastState(room);
       scheduleRoomServerEffect(room);

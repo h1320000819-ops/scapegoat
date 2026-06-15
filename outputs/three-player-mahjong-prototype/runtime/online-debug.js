@@ -194,6 +194,21 @@
     });
     saveLocalSeatsCache();
   };
+  const clearLocalUserSeatsForTable = (tableId, userId = state.user?.id) => {
+    if (!userId || !tableId) return;
+    const key = localSeatKey(tableId);
+    state.localSeatsByTable[key] = normalizeSeats(state.localSeatsByTable[key] || [], tableId).map((seat) => {
+      if (seat.user_id !== userId) return seat;
+      return {
+        ...seat,
+        user_id: null,
+        player_type: "empty",
+        display_name: null,
+        is_last_hand_declared: false,
+      };
+    });
+    saveLocalSeatsCache();
+  };
   const filledSeatCount = (rows) => rows.filter((seat) => seat.user_id || seat.player_type === "cpu").length;
   const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
   const visibleTableSeats = (table) => normalizeSeats(
@@ -2172,9 +2187,9 @@
       const normal3ma = [...ruleSelect.options].find((item) => item.value === "normal-3ma");
       ruleSelect.insertBefore(option, normal3ma || null);
     }
-    const anmikaAnchor = has("turquoise5pCount") ? $("turquoise5pCount").closest(".row") : null;
-    if (!has("tsumoLossless3maSettings") && anmikaAnchor) {
-      anmikaAnchor.insertAdjacentHTML("afterend", `
+    const settingsHost = has("tsumoLossless3maFields") ? $("tsumoLossless3maFields") : null;
+    if (!has("tsumoLossless3maSettings") && settingsHost) {
+      settingsHost.innerHTML = `
         <section id="tsumoLossless3maSettings" hidden>
           <h4>ツモ損なし全赤三麻 詳細ルール</h4>
           <div class="row">
@@ -2217,7 +2232,7 @@
             <label><input id="threeMaNorthNukiDora" type="checkbox" /> 北を抜きドラにする</label>
           </div>
         </section>
-      `);
+      `;
       if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
     }
     if (has("threeMaFiveComposition")) {
@@ -2295,11 +2310,16 @@
     const entryRake = Number(table.entry_rake_points ?? configValue.entryRakePoints ?? 5).toFixed(1);
     const chip = Number(configValue.chipValuePoints || 5000).toLocaleString();
     const umaLabel = String(configValue.umaType || "20-0--20").replace("--", "-▲");
+    const fiveLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青", blackBlackRedRed: "黒黒赤赤" }[configValue.fiveTileComposition || "red3blue1"];
+    const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[configValue.flowerComposition || "red3blue1"];
     return [
       `レート: 1000点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
       `開始時レーキ: ${entryRake}pt`,
+      `5の内訳: ${fiveLabel}`,
+      `華牌: ${flowerLabel}`,
       `祝儀: ${chip}点相当`,
       `ウマ: ${umaLabel}`,
+      configValue.northNukiDoraEnabled ? "北抜きON" : "北抜きOFF",
     ].join(" / ");
   };
   const updateRangeLabels = () => {
