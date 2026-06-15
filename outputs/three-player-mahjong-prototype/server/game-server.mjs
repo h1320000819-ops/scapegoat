@@ -3005,7 +3005,10 @@ io.on("connection", (socket) => {
         });
       }
       if (!recoveredClientState && allowCreateInitialState === false) {
-        throw new Error("保存済み局面を復元できませんでした。新しい配牌は作成しません。ゲームサーバーを再起動した場合は、サーバーの保存ファイルを確認してください。");
+        console.warn("[AnmikaGameServer] persisted room was unavailable; creating a fresh initial state", {
+          tableId: room.tableId,
+          gameId: room.gameId,
+        });
       }
       const serverState = recoveredClientState || createServerInitialState({
         tableId: room.tableId,
