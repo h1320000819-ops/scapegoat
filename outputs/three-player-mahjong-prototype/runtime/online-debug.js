@@ -225,6 +225,14 @@
     });
     saveLocalSeatsCache();
   };
+  const clearLocalUserLastHandFlagForTable = (tableId, userId = state.user?.id) => {
+    if (!userId || !tableId) return;
+    const key = localSeatKey(tableId);
+    state.localSeatsByTable[key] = normalizeSeats(state.localSeatsByTable[key] || [], tableId).map((seat) =>
+      seat.user_id === userId ? { ...seat, is_last_hand_declared: false } : seat
+    );
+    saveLocalSeatsCache();
+  };
   const filledSeatCount = (rows) => rows.filter((seat) => seat.user_id || seat.player_type === "cpu").length;
   const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
   const visibleTableSeats = (table) => normalizeSeats(
@@ -483,7 +491,6 @@
             player_type: "empty",
             display_name: null,
             is_last_hand_declared: false,
-            updated_at: new Date().toISOString(),
           }),
         }
       ).catch((error) => log("ラス半終了後の直接退席に失敗しました。", rawErrorText(error)));
@@ -1676,6 +1683,28 @@
       return rows;
     }
   };
+  const clearOwnLastHandFlag = async (tableId) => {
+    if (!tableId || !state.user?.id) return;
+    try {
+      await rest("/rpc/shared_set_last_hand", {
+        method: "POST",
+        body: JSON.stringify({ p_table_id: tableId, p_is_last_hand: false }),
+      });
+    } catch (rpcError) {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("shared_set_last_hand") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("ラス半解除RPCに失敗しました。直接解除します。", raw);
+      }
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id),
+        {
+          method: "PATCH",
+          body: JSON.stringify({ is_last_hand_declared: false }),
+        }
+      ).catch((error) => log("ラス半の直接解除に失敗しました。", rawErrorText(error)));
+    }
+    clearLocalUserLastHandFlagForTable(tableId, state.user.id);
+  };
   const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
     tableId = requireTableId(tableId, "着席");
     setActiveTableId(tableId);
@@ -1692,6 +1721,7 @@
           await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
         }
       }
+      await clearOwnLastHandFlag(tableId);
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
       await loadSeats();
@@ -1708,6 +1738,7 @@
       target.user_id = requireUser().id;
       target.player_type = "human";
       target.display_name = requireUser().displayName || "あなた";
+      target.is_last_hand_declared = false;
       await clearMyWaiting().catch(() => {});
       saveLocalSeats(tableId, rows);
       renderSeatRows(rows, tableId);
@@ -1718,6 +1749,7 @@
     tableId = requireTableId(tableId, "退席");
     setActiveTableId(tableId);
     try {
+      await clearOwnLastHandFlag(tableId);
       await rest("/rpc/leave_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
       await loadTables();
       await loadSeats().catch(() => {});

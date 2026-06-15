@@ -209,6 +209,19 @@ const normalizePointDeltas = (payments = {}) => {
   }
   return normalized;
 };
+const pointDeltasFromResultPayments = (payments, pointRate = 1) => {
+  const entries = Array.isArray(payments)
+    ? payments.map((payment) => [payment.playerId, payment.delta])
+    : Object.entries(payments || {});
+  const rate = Number(pointRate || 1);
+  const deltas = {};
+  for (const [playerId, delta] of entries) {
+    if (!isUuid(playerId)) continue;
+    const value = Math.round(Number(delta || 0) * rate * 10) / 10;
+    if (value) deltas[playerId] = value;
+  }
+  return deltas;
+};
 const applyClubPointDeltasToDb = async (room, reason, payments, metadata = {}) => {
   const deltas = normalizePointDeltas(payments);
   if (!Object.keys(deltas).length) return { skipped: true, reason: "empty" };
@@ -253,12 +266,36 @@ const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}
   return true;
 };
 const syncClubPointEffects = async (room) => {
-  if (!room?.state || !isTsumoLossless3maState(room.state)) return;
+  if (!room?.state) return;
   if (isDebugGameForPointSettlement(room.state)) return;
   if (room.clubPointSyncInFlight) return room.clubPointSyncInFlight;
   room.clubPointSyncInFlight = (async () => {
     const state = room.state;
     const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
+    const result = state.handLog?.result;
+    if (!isTsumoLossless3maState(state) && result?.payments && ["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) {
+      const rate = Number(state.settings?.pointRate || 1);
+      const payments = pointDeltasFromResultPayments(result.payments, rate);
+      await syncOneClubPointEffect(room, `${handId}:anmikaSettlement`, "game_settlement", payments, {
+        label: "アンミカロケット局精算",
+        handId,
+        resultType: result.type,
+        winnerId: result.winnerId,
+        winType: result.winType,
+        pointRate: rate,
+      });
+      if (result?.scoreResult?.rakePoints && result?.winnerId && isUuid(result.winnerId)) {
+        await syncOneClubPointEffect(room, `${handId}:anmikaRake`, "rake", { [result.winnerId]: -Number(result.scoreResult.rakePoints || 0) }, {
+          label: "レーキ",
+          handId,
+          winnerId: result.winnerId,
+          rakePoints: result.scoreResult.rakePoints,
+          rakePercent: result.scoreResult.rakePercent,
+        });
+      }
+      return;
+    }
+    if (!isTsumoLossless3maState(state)) return;
     const entryRake = Number(state.settings?.ruleConfig?.entryRakePoints || 0);
     if (entryRake > 0) {
       const payments = Object.fromEntries(nonCpuPlayersForPointSettlement(state).map((player) => [player.id, -entryRake]));
@@ -267,7 +304,6 @@ const syncClubPointEffects = async (room) => {
         entryRakePoints: entryRake,
       });
     }
-    const result = state.handLog?.result;
     if (result?.chipSettlement?.payments) {
       await syncOneClubPointEffect(room, `${handId}:chipSettlement`, "shugi", result.chipSettlement.payments, {
         label: "祝儀",
@@ -1156,6 +1192,8 @@ const getServerRiichiDiscardTileIds = (player) => {
   const hasOpenMeld = ensureArray(player.melds).some((meld) => meld?.type !== "ankan");
   if (hasOpenMeld && !hasTurquoise5pInHandOrMeldsServer(player)) return [];
   const tiles = combinedHandTiles(player).filter((tile) => !isFlowerTile(tile));
+  const expectedLength = 14 - ensureArray(player.melds).length * 3;
+  if (tiles.length !== expectedLength) return [];
   const candidateIds = [];
   for (const tile of tiles) {
     const afterDiscard = tiles.filter((item) => item.id !== tile.id);
@@ -1477,8 +1515,10 @@ const applyServerAction = (state, event) => {
       player.riichiTurnIndex = state.turnIndex ?? 0;
       player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(player));
       player.feverWinCount = 0;
+      player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
       appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
       discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
+      player.riichiDiscardTileIds = [];
     } else {
       state.pendingAction = null;
       state.phase = "waitingForRiichiDiscard";
@@ -1877,9 +1917,10 @@ const isWinningShapeServer = (tiles, melds = []) => {
   return isStandardWinWithMeldsServer(counts, meldCount);
 };
 const getHand13ForServerTenpai = (player) => {
-  const hand = ensureArray(player.hand).filter((tile) => !isFlowerTile(tile));
-  if (hand.length === 13 - ensureArray(player.melds).length * 3) return hand;
-  return hand.slice(0, Math.max(0, 13 - ensureArray(player.melds).length * 3));
+  const expectedLength = 13 - ensureArray(player.melds).length * 3;
+  const hand = [...ensureArray(player.hand), ...(player?.drawnTile ? [player.drawnTile] : [])].filter((tile) => !isFlowerTile(tile));
+  if (hand.length === expectedLength) return hand;
+  return hand.slice(0, Math.max(0, expectedLength));
 };
 const getWinningTilesForServerTenpai = (player) => {
   const hand13 = getHand13ForServerTenpai(player);
@@ -2201,7 +2242,7 @@ const scheduleRoomResultTimeout = (room) => {
   }
   if (!isWaitingForResultOk(room.state)) return;
   room.state.resultCountdownStartedAt ??= Date.now();
-  const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + 10000 - Date.now());
+  const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + 12000 - Date.now());
   room.resultTimer = setTimeout(() => {
     room.resultTimer = null;
     if (!applyAutoResultOk(room.state)) return;

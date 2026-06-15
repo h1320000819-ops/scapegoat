@@ -548,7 +548,6 @@ const leaveOnlineTableForSync = async (sync) => {
         player_type: "empty",
         display_name: null,
         is_last_hand_declared: false,
-        updated_at: new Date().toISOString(),
       }),
     });
     return fallbackResponse.ok;
@@ -2023,6 +2022,7 @@ class GameController {
     this.socketInitialStateInFlight = false;
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
+    this.lastDisplayedResultKey = "";
     this.setupGlobalResultOkHandler();
     document.addEventListener("anmika-result-ok", (event) => {
       event?.preventDefault?.();
@@ -2571,12 +2571,14 @@ class GameController {
         turnIndex: next.turnIndex,
       })
       : "";
-    if (next.handLog?.result && nextResultKey !== previousResultKey) {
+    if (next.handLog?.result && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
+      this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Date.now();
       next.resultCountdownSeconds = 10;
       next.resultAutoCloseHandled = false;
       next.resultOkSubmitted = false;
     }
+    if (!next.handLog?.result) this.lastDisplayedResultKey = "";
     if (next.activeClockPlayerId && next.activeClockPlayerId === currentUserId) {
       next.playerClocks ??= this.state.playerClocks ?? createPlayerClocks(next.players, next.settings?.initialClockMs ?? INITIAL_TIME_MS);
       next.playerClocks[currentUserId] ??= { playerId: currentUserId, remainingMs: next.settings?.initialClockMs ?? INITIAL_TIME_MS, isInByoyomi: false };
@@ -4594,10 +4596,12 @@ class GameView {
   assistControls(player) {
     const assist = player.assistSettings ?? {};
     const autoWinChecked = Boolean(assist.autoWin || player.isRiichi);
+    const declaredBy = Array.isArray(this.currentStateForClock?.lastHandDeclaredBy) ? this.currentStateForClock.lastHandDeclaredBy : [];
+    const localLastHandChecked = declaredBy.includes(player.id);
     return `<div class="assist-controls">
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
-      <label><input type="checkbox" data-last-hand ${this.currentStateForClock?.settings?.isLastHand ? "checked" : ""} /> ラス半</label>
+      <label><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>
     </div>`;
   }
   discardAreaClean(player, seat) {
@@ -4646,7 +4650,10 @@ class GameView {
     if (this.currentStateForClock?.isReplayView) return renderTileView({ tile, isDrawnTile, faceDown });
     if (player?.type === "cpu") return renderTileView({ tile, isDrawnTile, faceDown: faceDown || tile?.kind === "back" });
     if (!active || faceDown) return renderTileView({ tile, isDrawnTile, faceDown });
-    if (player?.riichiDiscardTileIds.length > 0 && !player.riichiDiscardTileIds.includes(tile.id)) return renderTileView({ tile, isDrawnTile, disabledForRiichi: true });
+    const riichiDiscardIds = Array.isArray(player?.riichiDiscardTileIds) ? player.riichiDiscardTileIds : [];
+    const currentStatePlayer = this.currentStateForClock?.players?.[this.currentStateForClock?.currentPlayerIndex ?? 0];
+    const isRiichiDiscardSelection = this.currentStateForClock?.phase === "waitingForRiichiDiscard" && currentStatePlayer?.id === player?.id;
+    if (isRiichiDiscardSelection && riichiDiscardIds.length > 0 && !riichiDiscardIds.includes(tile.id)) return renderTileView({ tile, isDrawnTile, disabledForRiichi: true });
     if (player?.isRiichi && !isDrawnTile) return renderTileView({ tile, isDrawnTile });
     return renderTileView({ tile, isDrawnTile, buttonTileId: tile.id, buttonAction: isFlowerTile(tile) ? "nuki" : "discard" });
   }
