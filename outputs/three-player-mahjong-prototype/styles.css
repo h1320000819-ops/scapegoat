@@ -1502,12 +1502,14 @@ button:hover {
   }
 
   .mahjong-table {
-    --center-info-height: 116px;
-    --center-info-width: 152px;
+    --center-info-height: 96px;
+    --center-info-width: 132px;
     --discard-gap: 2px;
-    --discard-tile-height: 26px;
-    --discard-tile-width: 19px;
-    --river-center-gap: 2px;
+    --discard-tile-height: 28px;
+    --discard-tile-width: 20px;
+    --river-center-gap: 1px;
+    --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 4px);
+    --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 4px);
     height: 100dvh;
     min-height: 0;
     overflow: hidden;
@@ -1520,7 +1522,7 @@ button:hover {
   }
 
   .mahjong-table::after {
-    inset: 24px 10px 42px;
+    inset: 18px 8px 38px;
   }
 
   .top-bar {
@@ -1533,19 +1535,19 @@ button:hover {
 
   .seat-bottom {
     bottom: 2px;
-    max-width: 640px;
-    width: min(86vw, 640px);
+    max-width: 760px;
+    width: min(94vw, 760px);
   }
 
   .seat-top {
-    max-width: 500px;
+    max-width: 540px;
     top: 2px;
-    width: min(58vw, 500px);
+    width: min(62vw, 540px);
   }
 
   .seat-right {
-    right: 2px;
-    width: 160px;
+    right: 0;
+    width: 126px;
   }
 
   .seat-info {
@@ -1563,79 +1565,151 @@ button:hover {
   .hand-row {
     border-radius: 7px;
     gap: 0;
-    padding: 2px;
+    padding: 1px;
   }
 
   .tile,
   .tile-button,
   .tile-image,
   .tile-fallback {
-    height: 34px;
-    min-width: 24px;
-    width: 24px;
+    height: 38px;
+    min-width: 27px;
+    width: 27px;
+  }
+
+  .seat-bottom .tile,
+  .seat-bottom .tile-button,
+  .seat-bottom .tile-image,
+  .seat-bottom .tile-fallback {
+    height: 48px;
+    min-width: 34px;
+    width: 34px;
+  }
+
+  .seat-bottom .hand-row {
+    min-height: 54px;
+    padding: 2px;
   }
 
   .drawn-tile {
-    margin-left: 6px;
-    padding-left: 5px;
+    margin-left: 5px;
+    padding-left: 4px;
   }
 
   .drawn-tile::before {
-    height: 30px;
+    height: 42px;
+    top: 2px;
   }
 
   .center-info {
     border-radius: 8px;
-    font-size: 10px;
-    max-height: 116px;
+    font-size: 9px;
+    max-height: var(--center-info-height);
     min-height: var(--center-info-height);
     overflow: hidden;
-    padding: 5px;
+    padding: 4px;
+    top: 43%;
     width: var(--center-info-width);
   }
 
   .center-info h2 {
-    font-size: 16px;
-    margin-bottom: 3px;
+    font-size: 14px;
+    margin-bottom: 2px;
   }
 
   .center-scores {
-    gap: 2px;
-    margin: 3px 0;
+    gap: 1px;
+    margin: 2px 0;
   }
 
   .center-scores li,
   .wall-info {
-    font-size: 9px;
+    font-size: 8px;
   }
 
   .center-dora {
-    gap: 2px;
-    margin-top: 3px;
+    gap: 1px;
+    margin-top: 2px;
   }
 
   .center-dora .tile,
   .center-dora .tile-button,
   .center-dora .tile-image,
   .center-dora .tile-fallback {
-    height: 23px;
-    min-width: 16px;
-    width: 16px;
+    height: 20px;
+    min-width: 14px;
+    width: 14px;
   }
 
   .discard-area {
+    background: rgba(5, 13, 22, 0.08);
+    border-radius: 5px;
+    height: var(--river-height);
     padding: 2px;
+    width: var(--river-width);
   }
 
   .discard-title {
-    font-size: 8px;
-    margin-bottom: 1px;
+    display: none;
+  }
+
+  .discard-grid {
+    grid-template-columns: repeat(6, var(--discard-tile-width));
+    grid-template-rows: repeat(4, var(--discard-tile-height));
+    min-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3);
+  }
+
+  .discard .tile,
+  .mini-dora .tile,
+  .exposed-row .tile,
+  .discard .tile-image,
+  .mini-dora .tile-image,
+  .exposed-row .tile-image,
+  .discard .tile-fallback,
+  .mini-dora .tile-fallback,
+  .exposed-row .tile-fallback {
+    height: var(--discard-tile-height);
+    min-width: var(--discard-tile-width);
+    width: var(--discard-tile-width);
+  }
+
+  .discard-bottom {
+    bottom: 64px;
+    left: 50%;
+    top: auto;
+    transform: translateX(-50%) rotate(0deg);
+  }
+
+  .discard-top {
+    left: 50%;
+    top: 48px;
+    transform: translateX(-50%) rotate(180deg);
+  }
+
+  .discard-right {
+    left: auto;
+    right: 92px;
+    top: 43%;
+    transform: translateY(-50%) rotate(-90deg);
+  }
+
+  .seat-right .hand-row {
+    max-height: 56vh;
+    padding: 4px 2px;
+    width: 42px;
+  }
+
+  .seat-right .hand-row > .tile,
+  .seat-right .hand-row > .tile-button,
+  .seat-right .drawn-tile > .tile,
+  .seat-right .drawn-tile > .tile-button {
+    margin-block: -5px;
   }
 
   .bottom-actions {
-    bottom: 50px;
+    bottom: 58px;
     max-width: 92vw;
-    transform: translateX(-50%) scale(0.88);
+    transform: translateX(-50%) scale(0.82);
     transform-origin: bottom center;
   }
 
