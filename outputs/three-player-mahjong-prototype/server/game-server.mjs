@@ -368,9 +368,18 @@ const markReplaySyncApplied = (state, key, replayId = null) => {
 const hasReplaySyncApplied = (state, key) => asArray(state?.replayDbSync?.appliedKeys).includes(key);
 const saveReplayToDb = async (room, key, scope, { initialState, snapshots, result, summary = {} } = {}) => {
   if (!room?.state || hasReplaySyncApplied(room.state, key)) return false;
-  if (!hasSupabaseServerWriter()) return false;
+  if (!hasSupabaseServerWriter()) {
+    if (!room.replaySyncMissingEnvLogged) {
+      console.warn("[ReplaySync] SUPABASE_SERVICE_ROLE_KEY is not set. Replay DB sync is skipped.");
+      room.replaySyncMissingEnvLogged = true;
+    }
+    return false;
+  }
   const table = await getRoomTableContext(room);
-  if (!table?.club_id) return false;
+  if (!table?.club_id) {
+    console.warn("[ReplaySync] skipped: table club context is missing", { tableId: room.tableId, gameId: room.gameId });
+    return false;
+  }
   const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
   const replayId = randomUUID();
   const replaySummary = {

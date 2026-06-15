@@ -74,6 +74,7 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  const asArray = (value) => Array.isArray(value) ? value : value ? [value] : [];
   const loadClubIconCache = () => {
     try {
       return JSON.parse(localStorage.getItem("anmikaClubIconCache") || "{}") || {};
@@ -1339,6 +1340,30 @@
       throw error;
     }
     log(`${name} に管理者権限を付与しました。`);
+    await loadClubs();
+  };
+  const removeClubMember = async (member) => {
+    const clubId = selectedClubId();
+    const targetUserId = member.user_id || member.users?.user_id;
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) throw new Error("管理者権限がありません。");
+    if (!targetUserId) throw new Error("対象ユーザーが見つかりません。");
+    if (targetUserId === state.user?.id) throw new Error("自分自身は削除できません。");
+    if (member.role === "admin") throw new Error("管理者権限を持つメンバーは削除できません。");
+    const name = member.display_name || member.users?.display_name || targetUserId;
+    if (!confirm(`${name} をクラブから削除しますか？\nこのメンバーのクラブポイントはクラブ側へ戻ります。`)) return;
+    uiLog("remove member clicked", { clubId, targetUserId });
+    try {
+      const result = await rest("/rpc/remove_club_member", { method: "POST", body: JSON.stringify({ p_club_id: clubId, p_member_user_id: targetUserId }) });
+      if (result && result.ok === false) throw new Error(result.message || "メンバーを削除できませんでした。");
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (raw.includes("remove_club_member") || raw.includes("schema cache") || raw.includes("Could not find the function")) {
+        throw new Error("メンバー削除用のDB関数が見つかりません。supabase/patch_remove_club_member_rpc.sql を実行してください。");
+      }
+      throw error;
+    }
+    log(`${name} をクラブから削除しました。`);
     await loadClubs();
   };
 
@@ -2709,35 +2734,79 @@
       body.innerHTML = `<p class="muted">ポイント履歴テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
     }
   };
+  const replayRuleName = (summary = {}) => {
+    const ruleId = summary.ruleId || summary.rule_id || summary.gameType || "";
+    if (ruleId === "tsumo-lossless-3ma") return "ツモ損なし全赤三麻";
+    if (ruleId === "anmika-rocket") return "アンミカロケット";
+    return summary.ruleName || summary.rule_name || ruleId || "ルール不明";
+  };
+  const replayResultSummary = (summary = {}) => {
+    if (summary.resultSummary) return summary.resultSummary;
+    const result = summary.result || summary.finalResult || {};
+    if (result.label) return result.label;
+    if (summary.resultLabel) return summary.resultLabel;
+    const payments = result.payments || result.pointPayments || summary.payments || {};
+    const entries = Object.entries(payments).filter(([, value]) => Number(value));
+    if (entries.length) {
+      return entries.map(([name, value]) => `${name} ${Number(value) > 0 ? "+" : ""}${value}`).join(" / ");
+    }
+    return summary.roundLabel || summary.scope || "結果未記録";
+  };
+  const replayPlayersText = (summary = {}) => asArray(summary.players)
+    .map((player) => player.name || player.displayName || player.id)
+    .filter(Boolean)
+    .join(" / ") || "対局者不明";
+  const replayOpenUrl = (replayId) => {
+    const encoded = encodeURIComponent(replayId);
+    if (window.location.protocol === "file:") return `../index.html#/replay/${encoded}`;
+    return `${window.location.origin}/replay/${encoded}`;
+  };
   const renderReplayListPage = async (body) => {
-    const clubId = selectedClubId();
-    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     try {
       let rows;
       try {
-        rows = await rest("/rpc/get_my_club_replays", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+        rows = await rest("/rpc/get_my_replays", { method: "POST", body: JSON.stringify({}) });
       } catch (error) {
         const raw = rawErrorText(error);
-        if (!raw.includes("get_my_club_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
-        rows = await rest("/replays?select=*&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc&limit=30");
+        if (!raw.includes("get_my_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+        rows = await rest("/replays?select=replay_id,club_id,table_id,game_id,summary,created_at&order=created_at.desc&limit=100");
       }
+      rows = asArray(rows).slice(0, 100);
       if (!rows.length) {
-        body.innerHTML = `<p class="muted">牌譜はまだありません。</p>`;
+        body.innerHTML = `
+          <p class="muted">牌譜はまだありません。</p>
+          <p class="muted">対局終了時に保存されます。対局後も増えない場合は、ゲームサーバー側の Supabase 書き込み設定を確認してください。</p>
+        `;
         return;
       }
-      body.innerHTML = rows
+      body.innerHTML = `<p class="muted">クラブに関係なく、このアカウントで取得できる直近100本を表示しています。</p>` + rows
         .map((row) => {
           const replayId = row.replay_id || row.id;
-          return `<div class="table-seat-line"><strong>${new Date(row.created_at || Date.now()).toLocaleString()}</strong><span>${row.table_name || row.table_id || "卓"}</span><button type="button" data-replay-id="${replayId}">再生</button></div>`;
+          const summary = row.summary || {};
+          return `<div class="table-seat-line replay-list-row">
+            <strong>${new Date(row.created_at || summary.endedAt || Date.now()).toLocaleString()}</strong>
+            <span>${escapeHtml(replayRuleName(summary))}</span>
+            <span>${escapeHtml(replayPlayersText(summary))}</span>
+            <span>${escapeHtml(replayResultSummary(summary))}</span>
+            <button type="button" data-replay-id="${escapeHtml(replayId)}">再生</button>
+            <button type="button" class="secondary" data-copy-replay-url="${escapeHtml(replayId)}">URLコピー</button>
+          </div>`;
         })
         .join("");
       body.querySelectorAll("[data-replay-id]").forEach((button) => {
         button.addEventListener("click", () => {
-          window.location.href = `${window.location.origin}/replay/${encodeURIComponent(button.dataset.replayId)}`;
+          window.location.href = replayOpenUrl(button.dataset.replayId);
+        });
+      });
+      body.querySelectorAll("[data-copy-replay-url]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const url = replayOpenUrl(button.dataset.copyReplayUrl);
+          await copyText(url);
+          log("牌譜URLをコピーしました。");
         });
       });
     } catch (error) {
-      body.innerHTML = `<p class="muted">牌譜テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
+      body.innerHTML = `<p class="muted">牌譜一覧の取得に失敗しました。</p><pre>${getErrorText(error)}</pre><p class="muted">Supabase SQL Editorで supabase/patch_my_replays_rpc.sql を実行してください。</p>`;
     }
   };
   const renderJoinRequestsPage = async (body) => {
@@ -2867,7 +2936,7 @@
         <span>権限: ${roleLabel}</span>
         <span>ポイント: ${Number(member.point_balance || 0)}</span>
         <span>加入: ${new Date(member.joined_at || Date.now()).toLocaleString()}</span>
-        ${member.role !== "admin" ? '<button type="button" data-action="grantAdmin">管理者権限を付与</button>' : ""}
+        ${member.role !== "admin" ? '<button type="button" data-action="grantAdmin">管理者権限を付与</button><button type="button" data-action="removeMember" class="danger">削除</button>' : ""}
       `;
       row.querySelector('[data-action="grantAdmin"]')?.addEventListener("click", async () => {
         try {
@@ -2875,6 +2944,14 @@
           await renderClubMembersPage(body);
         } catch (error) {
           showError("管理者権限の付与に失敗しました", error);
+        }
+      });
+      row.querySelector('[data-action="removeMember"]')?.addEventListener("click", async () => {
+        try {
+          await removeClubMember(member);
+          await renderClubMembersPage(body);
+        } catch (error) {
+          showError("メンバー削除に失敗しました", error);
         }
       });
       container.append(row);
