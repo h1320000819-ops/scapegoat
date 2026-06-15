@@ -284,6 +284,73 @@ const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
     },
   };
 };
+const truncatePointUnitTowardZero = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return (numeric < 0 ? Math.ceil(numeric * 10) : Math.floor(numeric * 10)) / 10;
+};
+const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
+  const rate = Number(pointRate || 1);
+  const entries = Array.isArray(result?.payments)
+    ? result.payments.map((payment) => [payment.playerId, payment.delta])
+    : Object.entries(result?.payments || {});
+  const playerById = pointSettlementPlayerById(state);
+  const deltas = {};
+  const allPointDeltas = {};
+  const omittedAutoPlayerDeltas = {};
+  const rawClubPointDeltas = {};
+  for (const [playerId, delta] of entries) {
+    const rawValue = Number(delta || 0) * rate;
+    if (!rawValue) continue;
+    rawClubPointDeltas[playerId] = Math.round(rawValue * 1000) / 1000;
+    const pointValue = truncatePointUnitTowardZero(rawValue);
+    if (!pointValue) continue;
+    allPointDeltas[playerId] = pointValue;
+    const player = playerById.get(playerId);
+    if (player?.type === "cpu" || !isUuid(playerId)) {
+      omittedAutoPlayerDeltas[playerId] = pointValue;
+      continue;
+    }
+    deltas[playerId] = pointValue;
+  }
+
+  const winnerId = result?.winnerId;
+  const winnerRawGain = Number(rawClubPointDeltas[winnerId] || 0);
+  const rakePercent = Math.max(0, Number(state?.settings?.rakePercent || 0));
+  const shouldApplyRake = winnerId && isUuid(winnerId) && winnerRawGain > 0 && rakePercent > 0;
+  let rakeRaw = 0;
+  let rakePlayerDeduction = 0;
+  if (shouldApplyRake) {
+    rakeRaw = winnerRawGain * (rakePercent / 100);
+    const winnerAfterRake = truncatePointUnitTowardZero(winnerRawGain - rakeRaw);
+    rakePlayerDeduction = truncatePointUnitTowardZero(winnerRawGain) - winnerAfterRake;
+    deltas[winnerId] = winnerAfterRake;
+    allPointDeltas[winnerId] = winnerAfterRake;
+  }
+
+  const realPlayerTotal = Math.round(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0) * 10) / 10;
+  const clubReserveDelta = Math.round(-realPlayerTotal * 10) / 10;
+  return {
+    deltas,
+    metadata: {
+      rawGamePayments: Object.fromEntries(entries),
+      rawClubPointDeltas,
+      allDeltas: allPointDeltas,
+      omittedAutoPlayerDeltas,
+      clubReserveDelta,
+      cpuCompensationApplied: Object.keys(omittedAutoPlayerDeltas).length > 0,
+      rake: {
+        applied: shouldApplyRake,
+        winnerId,
+        rakePercent,
+        winnerRawGain: Math.round(winnerRawGain * 1000) / 1000,
+        rakeRaw: Math.round(rakeRaw * 1000) / 1000,
+        playerDeduction: rakePlayerDeduction,
+        roundingPolicy: "0.1pt未満はプレイヤー側に渡さずクラブ側へ寄せる",
+      },
+    },
+  };
+};
 const applyClubPointDeltasToDb = async (room, reason, payments, metadata = {}) => {
   const deltas = normalizePointDeltas(payments);
   if (!Object.keys(deltas).length) return { skipped: true, reason: "empty" };
@@ -506,7 +573,7 @@ const syncClubPointEffects = async (room) => {
     const result = ensureResultSyncIdentity(state.handLog?.result);
     if (!isTsumoLossless3maState(state) && result?.payments) {
       const rate = Number(state.settings?.pointRate || 1);
-      const { deltas: payments, metadata: compensationMetadata } = pointDeltasForRealPlayers(state, result.payments, rate);
+      const { deltas: payments, metadata: compensationMetadata } = anmikaClubPointDeltasFromResult(state, result, rate);
       console.log("[ClubPointSync] settlement candidate", {
         tableId: room.tableId,
         gameId: room.gameId,
@@ -514,6 +581,7 @@ const syncClubPointEffects = async (room) => {
         resultId: result.resultId,
         phase: state.phase,
         payments,
+        rake: compensationMetadata.rake,
       });
       await syncOneClubPointEffect(room, makeResultSyncKey(state, room, result, "anmikaSettlement"), "game_settlement", payments, {
         label: "アンミカロケット局精算",
@@ -525,16 +593,6 @@ const syncClubPointEffects = async (room) => {
         pointRate: rate,
         ...compensationMetadata,
       });
-      if (result?.scoreResult?.rakePoints && result?.winnerId && isUuid(result.winnerId)) {
-        await syncOneClubPointEffect(room, makeResultSyncKey(state, room, result, "anmikaRake"), "rake", { [result.winnerId]: -Number(result.scoreResult.rakePoints || 0) }, {
-          label: "レーキ",
-          handId,
-          resultId: result.resultId,
-          winnerId: result.winnerId,
-          rakePoints: result.scoreResult.rakePoints,
-          rakePercent: result.scoreResult.rakePercent,
-        });
-      }
       return;
     }
     if (!isTsumoLossless3maState(state)) return;

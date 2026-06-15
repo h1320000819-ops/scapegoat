@@ -2652,7 +2652,7 @@ class GameController {
       this.state.selectedClubId = table.clubId ?? this.state.selectedClubId;
       this.state.screen = "game";
       this.state.settings.isLastHand = normalizedSeats.some((seat) => seat.isLastHandDeclared);
-      this.state.settings.rakePercent = isCpuDebugTable(table) ? 0 : table.rakePercent ?? 0;
+      this.state.settings.rakePercent = table.rakePercent ?? 0;
       this.state.settings.pointRate = table.pointRate ?? 1;
       this.state.settings.ruleId = table.ruleId ?? "anmika-rocket";
       this.state.settings.gameType = table.gameType ?? table.ruleId ?? "anmika-rocket";

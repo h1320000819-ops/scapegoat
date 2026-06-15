@@ -2193,7 +2193,7 @@
       ruleId: table.rule_id || "anmika-rocket",
       gameType: table.rule_id || "anmika-rocket",
       pointRate: Number(table.point_rate || 1),
-      rakePercent: 0,
+      rakePercent: Number(table.rake_percent || 0),
       ruleConfig: table.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID ? tableRuleConfig : {
         rocket19Enabled: Boolean(tableRuleConfig.rocket19Enabled),
         baibaEnabled: Boolean(tableRuleConfig.baibaEnabled),
