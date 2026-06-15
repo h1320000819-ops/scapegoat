@@ -1,5 +1,6 @@
 ﻿const MAX_AUTO_TURNS = 200;
 const INITIAL_TIME_MS = 20000;
+const RESULT_COUNTDOWN_SECONDS = 15;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -293,7 +294,7 @@ const socketEmitWithAck = (socket, eventName, payload) => new Promise((resolve, 
     reject(new Error("ゲームサーバーに接続されていません"));
     return;
   }
-  socket.timeout(5000).emit(eventName, payload, (error, response) => {
+  socket.timeout(10000).emit(eventName, payload, (error, response) => {
     if (error) {
       reject(error);
       return;
@@ -354,6 +355,9 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
       lastServerState: response?.state ?? sync.lastServerState ?? null,
       lastSyncedAt: Date.now(),
     });
+    if (response?.state && globalThis.__anmikaController?.applyOnlineStateSnapshot) {
+      globalThis.__anmikaController.applyOnlineStateSnapshot(response.state);
+    }
     return response;
   }
   if (!sync?.enabled || !sync.gameId || !sync.tableId || !sync.userId || !sync.supabaseUrl || !sync.anonKey || !sync.accessToken) return null;
@@ -1145,7 +1149,7 @@ const hasLocalPlayerConfirmedResult = (state) => {
   return Boolean(localId && getResultOkPlayerIds(state).includes(localId));
 };
 const renderResultOkButton = (state) => {
-  const countdown = state.resultCountdownSeconds ?? 10;
+  const countdown = state.resultCountdownSeconds ?? RESULT_COUNTDOWN_SECONDS;
   const okIds = getResultOkPlayerIds(state);
   const requiredIds = getResultRequiredOkPlayerIds(state);
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
@@ -2115,8 +2119,8 @@ class GameController {
     if (!this.state.handLog.result) return;
     if (isSocketAuthoritativeGame() && hasLocalPlayerConfirmedResult(this.state)) return;
     this.state.resultCountdownStartedAt ??= Date.now();
-    this.state.resultCountdownSeconds ??= 10;
-    const nextSeconds = Math.max(0, 10 - Math.floor((Date.now() - this.state.resultCountdownStartedAt) / 1000));
+    this.state.resultCountdownSeconds ??= RESULT_COUNTDOWN_SECONDS;
+    const nextSeconds = Math.max(0, RESULT_COUNTDOWN_SECONDS - Math.floor((Date.now() - this.state.resultCountdownStartedAt) / 1000));
     if (nextSeconds !== this.state.resultCountdownSeconds) {
       this.state.resultCountdownSeconds = nextSeconds;
       this.onStateChanged(this.state);
@@ -2574,7 +2578,7 @@ class GameController {
     if (next.handLog?.result && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Date.now();
-      next.resultCountdownSeconds = 10;
+      next.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
       next.resultAutoCloseHandled = false;
       next.resultOkSubmitted = false;
     }
@@ -2643,16 +2647,46 @@ class GameController {
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
       this.gameSocket.off("game:needInitialState");
+      this.gameSocket.off("connect");
+      this.gameSocket.off("disconnect");
       this.gameSocket.off("connect_error");
       this.gameSocket.disconnect();
     }
     this.socketInitialStateInFlight = false;
     const socket = globalThis.io(serverUrl, {
       transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 4000,
+      timeout: 12000,
+      forceNew: true,
       auth: { userId: sync.userId, tableId: sync.tableId, gameId: sync.gameId },
     });
     this.gameSocket = socket;
     globalThis.anmikaGameSocket = socket;
+    let didInitialJoin = false;
+    const rejoinSocketRoom = async (reason = "reconnect") => {
+      if (!didInitialJoin || !socket.connected) return;
+      try {
+        const latestSync = loadOnlineSync();
+        const response = await socketEmitWithAck(socket, "game:join", {
+          tableId: latestSync?.tableId || sync.tableId,
+          gameId: latestSync?.gameId || sync.gameId,
+          userId: latestSync?.userId || sync.userId,
+          reason,
+        });
+        if (response?.state) {
+          saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+          this.state.onlineLoadingMessage = "";
+          this.applyOnlineStateSnapshot(response.state);
+        }
+      } catch (error) {
+        console.warn("[SocketGame] 再接続後の卓復帰に失敗しました", error);
+        this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
+        this.onStateChanged(this.state);
+      }
+    };
     socket.on("game:state", (payload) => {
       const state = payload?.state;
       if (!state) return;
@@ -2695,8 +2729,16 @@ class GameController {
       }
     };
     socket.on("game:needInitialState", () => sendInitialSocketState("needInitialState"));
+    socket.on("connect", () => {
+      if (didInitialJoin) rejoinSocketRoom("connect");
+    });
+    socket.on("disconnect", (reason) => {
+      if (reason === "io client disconnect") return;
+      this.state.onlineLoadingMessage = "ゲームサーバーへ再接続中...";
+      this.onStateChanged(this.state);
+    });
     socket.on("connect_error", (error) => {
-      this.state.onlineLoadingMessage = `ゲームサーバー接続エラー: ${error?.message ?? error}`;
+      this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
       this.onStateChanged(this.state);
     });
     await new Promise((resolve, reject) => {
@@ -2708,6 +2750,7 @@ class GameController {
       gameId: sync.gameId,
       userId: sync.userId,
     });
+    didInitialJoin = true;
     if (joinResponse?.state) {
       saveOnlineSync({ ...loadOnlineSync(), version: joinResponse.version ?? 0, lastServerState: joinResponse.state, lastSyncedAt: Date.now() });
       this.applyOnlineStateSnapshot(joinResponse.state);
@@ -3334,7 +3377,7 @@ class GameController {
     console.log("[Result]", this.state.handLog.result);
     this.state.lastScoreResult = score;
     this.state.resultCountdownStartedAt = null;
-    this.state.resultCountdownSeconds = 10;
+    this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
     this.state.resultAutoCloseHandled = false;
     this.state.pendingAction = null;
     this.state.phase = "showingWinAnnouncement";
@@ -3886,11 +3929,16 @@ const calledTileIndexForMeld = (state, ownerId, fromPlayerId, tileCount) => {
 };
 const renderMeldSet = (state, ownerId, meld) => {
   const calledTile = meld.calledTile ?? (meld.fromPlayerId ? meld.tiles.at(-1) : null);
-  const calledKey = calledTile ? tileKindKey(calledTile) : null;
   const sidewaysIndex = meld.type === "ankan" ? -1 : calledTileIndexForMeld(state, ownerId, meld.fromPlayerId, meld.type === "minkan" ? 4 : 3);
-  const baseTiles = meld.type === "kakan" ? meld.tiles.slice(0, 3) : meld.tiles;
+  let baseTiles = meld.type === "kakan" ? meld.tiles.slice(0, 3) : [...(meld.tiles || [])];
+  if (calledTile && sidewaysIndex >= 0 && baseTiles.length > sidewaysIndex) {
+    const otherTiles = baseTiles.filter((tile) => tile.id !== calledTile.id);
+    baseTiles = [...otherTiles];
+    baseTiles.splice(sidewaysIndex, 0, calledTile);
+    baseTiles = baseTiles.slice(0, meld.type === "minkan" ? 4 : 3);
+  }
   const tiles = baseTiles.map((tile, index) => {
-    const sideways = index === sidewaysIndex || (calledKey && index === sidewaysIndex && sameTileKind(tile, calledTile));
+    const sideways = index === sidewaysIndex;
     return `<span class="meld-tile ${sideways ? "sideways" : ""}">${renderTileView({ tile })}</span>`;
   }).join("");
   const added = meld.type === "kakan" ? (meld.addedTile ?? meld.tiles.at(-1)) : null;
@@ -4561,6 +4609,7 @@ class GameView {
         <span>嶺上: ${state.rinshanWall.length}</span>
         <span>カン: ${state.kanCount}/4</span>
       </div>
+      ${state.settings?.ruleConfig?.baibaEnabled ? `<div class="center-baiba">倍場</div>` : ""}
       <div class="center-dora"><span>ドラ表示牌</span>${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div>
       ${state.handLog.result?.type === "win" ? `<div class="center-dora"><span>裏ドラ表示牌</span>${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div>` : ""}
       <div class="center-rake">レーキ: ${state.settings?.rakePercent ?? 0}% / 累積 ${state.rakePool ?? 0}点</div>

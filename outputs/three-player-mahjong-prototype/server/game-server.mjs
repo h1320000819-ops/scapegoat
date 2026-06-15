@@ -339,6 +339,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
+const RESULT_AUTO_OK_DELAY_MS = 17000;
 
 const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: false,
@@ -560,6 +561,42 @@ const findFourOfAKindTile = (tiles) => {
     buckets.set(key, next);
   }
   return [...buckets.values()].find((bucket) => bucket.length >= 4)?.[0] || null;
+};
+const fourOfAKindTiles = (tiles, targetTile = null) => {
+  const buckets = new Map();
+  for (const tile of ensureArray(tiles)) {
+    const key = tileKindKey(tile);
+    if (!key) continue;
+    const next = buckets.get(key) || [];
+    next.push(tile);
+    buckets.set(key, next);
+  }
+  const groups = [...buckets.values()].filter((bucket) => bucket.length >= 4);
+  if (!targetTile) return groups;
+  const targetKey = tileKindKey(targetTile);
+  return groups.filter((bucket) => tileKindKey(bucket[0]) === targetKey);
+};
+const isRiichiSafeAnkanTile = (player, kanTile) => {
+  if (!player?.isRiichi || !kanTile) return true;
+  const before = getWinningTilesForServerTenpai({ ...player, drawnTile: null }).map(tileKindKey).sort().join("|");
+  const remaining = combinedHandTiles(player)
+    .filter((tile) => !isFlowerTile(tile))
+    .filter((tile) => tileKindKey(tile) !== tileKindKey(kanTile));
+  const afterPlayer = {
+    ...player,
+    hand: remaining,
+    drawnTile: null,
+    melds: [...ensureArray(player.melds), { type: "ankan", tiles: fourOfAKindTiles(combinedHandTiles(player), kanTile)[0] || [] }],
+  };
+  const after = getWinningTilesForServerTenpai(afterPlayer).map(tileKindKey).sort().join("|");
+  return Boolean(before && before === after);
+};
+const findServerAnkanCandidate = (player, { allowRiichi = false } = {}) => {
+  for (const group of fourOfAKindTiles(combinedHandTiles(player).filter((tile) => !isFlowerTile(tile)))) {
+    const tile = group[0];
+    if (!player?.isRiichi || (allowRiichi && isRiichiSafeAnkanTile(player, tile))) return tile;
+  }
+  return null;
 };
 const removeLastMatchingDiscard = (state, fromPlayerId, sourceTile) => {
   const fromPlayer = findPlayer(state, fromPlayerId);
@@ -1273,7 +1310,11 @@ const queueServerSelfDrawOptions = (state, player) => {
     options.push(option);
   }
   if (!player.isRiichi && Number(state.kanCount || 0) < 4) {
-    const kanTile = findFourOfAKindTile(combinedHandTiles(player).filter((tile) => !isFlowerTile(tile)));
+    const kanTile = findServerAnkanCandidate(player, { allowRiichi: false });
+    if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
+  }
+  if (player.isRiichi && Number(state.kanCount || 0) < 4) {
+    const kanTile = findServerAnkanCandidate(player, { allowRiichi: true });
     if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
   }
   const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
@@ -1573,6 +1614,9 @@ const applyServerAction = (state, event) => {
     const same = (tile) => sameTileKind(tile, baseTile);
     const tiles = [];
     const isMinkan = Boolean(fromPlayerId && sourceTile);
+    if (!isMinkan && player.isRiichi && !isRiichiSafeAnkanTile(player, baseTile)) {
+      throw new Error("待ちが変わるためリーチ後はカンできません");
+    }
     if (isMinkan) {
       tiles.push(removeLastMatchingDiscard(state, fromPlayerId, sourceTile) || sourceTile);
     } else if (player.drawnTile && same(player.drawnTile)) {
@@ -2215,6 +2259,22 @@ const broadcastState = (room) => {
     io.to(socketId).emit("game:state", publicRoomState(room, meta?.userId || null));
   }
 };
+const clearRoomLastHandForUser = (room, userId) => {
+  if (!room?.state || !userId) return false;
+  const isStillSeated = ensureArray(room.state.seats).some((seat) => seat?.playerId === userId);
+  if (room.state.phase !== "gameEnded" && isStillSeated) return false;
+  const before = ensureArray(room.state.lastHandDeclaredBy);
+  const after = before.filter((id) => id !== userId);
+  if (after.length === before.length) return false;
+  room.state.lastHandDeclaredBy = after;
+  room.state.settings ??= {};
+  room.state.settings.isLastHand = after.length > 0;
+  for (const seat of ensureArray(room.state.seats)) {
+    if (seat?.playerId === userId) seat.isLastHandDeclared = false;
+  }
+  appendHandEvent(room.state, { type: "lastHandClearedOnJoin", playerId: userId, turnIndex: room.state.turnIndex ?? 0 });
+  return true;
+};
 const isWaitingForResultOk = (state) => Boolean(state?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(state.phase));
 const applyAutoResultOk = (state) => {
   if (!isWaitingForResultOk(state)) return false;
@@ -2242,7 +2302,7 @@ const scheduleRoomResultTimeout = (room) => {
   }
   if (!isWaitingForResultOk(room.state)) return;
   room.state.resultCountdownStartedAt ??= Date.now();
-  const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + 12000 - Date.now());
+  const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + RESULT_AUTO_OK_DELAY_MS - Date.now());
   room.resultTimer = setTimeout(() => {
     room.resultTimer = null;
     if (!applyAutoResultOk(room.state)) return;
@@ -2355,6 +2415,10 @@ io.on("connection", (socket) => {
       socket.data.tableId = room.tableId;
       socket.data.userId = userId;
       if (room.state) {
+        if (clearRoomLastHandForUser(room, userId)) {
+          room.updatedAt = now();
+          persistRoom(room);
+        }
         socket.emit("game:state", publicRoomState(room, userId));
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
@@ -2375,6 +2439,10 @@ io.on("connection", (socket) => {
       console.log("[AnmikaGameServer] initState", { tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state) });
       if (room.state) {
         const viewerId = userId || socket.data.userId || null;
+        if (clearRoomLastHandForUser(room, viewerId)) {
+          room.updatedAt = now();
+          persistRoom(room);
+        }
         ack?.({ ok: true, alreadyInitialized: true, ...publicRoomState(room, viewerId) });
         socket.emit("game:state", publicRoomState(room, viewerId));
         scheduleRoomServerEffect(room);
