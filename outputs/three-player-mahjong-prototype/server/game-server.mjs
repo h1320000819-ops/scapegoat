@@ -33,6 +33,8 @@ const makeRoomKey = (tableId) => String(tableId || "");
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const safeStoreFileName = (tableId) => `${String(tableId || "").replace(/[^a-zA-Z0-9_.-]/g, "_")}.json`;
 const roomStorePath = (tableId) => path.join(STATE_STORE_DIR, safeStoreFileName(tableId));
+const roomBackupStorePath = (tableId) => `${roomStorePath(tableId)}.bak`;
+const roomTempStorePath = (tableId) => `${roomStorePath(tableId)}.tmp`;
 const asArray = (value) => Array.isArray(value) ? value : [];
 const createServerPlayerClocks = (players, initialMs = 20000) => Object.fromEntries(asArray(players).map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
 const ensureServerClocks = (state) => {
@@ -128,44 +130,72 @@ const publicRoomState = (room, viewerId = null) => ({
 });
 
 const loadPersistedRoom = (tableId) => {
-  const filePath = roomStorePath(tableId);
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (!parsed?.tableId || !parsed?.state) return null;
-    return {
-      tableId: String(parsed.tableId),
-      gameId: parsed.gameId || `game-${tableId}`,
-      version: Number(parsed.version || parsed.state?.version || 0),
-      state: parsed.state,
-      events: Array.isArray(parsed.events) ? parsed.events : [],
-      sockets: new Map(),
-      updatedAt: Number(parsed.updatedAt || now()),
-    };
-  } catch (error) {
-    console.warn("[AnmikaGameServer] persisted room load failed", tableId, error);
-    return null;
+  const filePaths = [roomStorePath(tableId), roomBackupStorePath(tableId)];
+  for (const filePath of filePaths) {
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (!parsed?.tableId || !parsed?.state) continue;
+      console.log("[AnmikaGameServer] loaded persisted room", {
+        tableId,
+        file: filePath,
+        gameId: parsed.gameId,
+        version: parsed.version || parsed.state?.version || 0,
+      });
+      return {
+        tableId: String(parsed.tableId),
+        gameId: parsed.gameId || `game-${tableId}`,
+        version: Number(parsed.version || parsed.state?.version || 0),
+        state: parsed.state,
+        events: Array.isArray(parsed.events) ? parsed.events : [],
+        sockets: new Map(),
+        processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
+        updatedAt: Number(parsed.updatedAt || now()),
+      };
+    } catch (error) {
+      console.warn("[AnmikaGameServer] persisted room load failed", tableId, filePath, error);
+    }
   }
+  return null;
 };
 
 const persistRoom = (room) => {
   if (!room?.tableId || !room.state) return;
   appendServerReplaySnapshot(room.state);
+  const filePath = roomStorePath(room.tableId);
+  const backupPath = roomBackupStorePath(room.tableId);
+  const tempPath = roomTempStorePath(room.tableId);
   const payload = {
     tableId: room.tableId,
     gameId: room.gameId,
     version: room.version,
     state: room.state,
     events: room.events,
+    processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
     updatedAt: room.updatedAt || now(),
   };
-  fs.writeFileSync(roomStorePath(room.tableId), JSON.stringify(payload));
+  const serialized = JSON.stringify(payload);
+  fs.writeFileSync(tempPath, serialized);
+  if (fs.existsSync(filePath)) {
+    fs.copyFileSync(filePath, backupPath);
+  }
+  fs.renameSync(tempPath, filePath);
   console.log("[AnmikaGameServer] persisted room", {
     tableId: room.tableId,
     gameId: room.gameId,
     version: room.version,
-    file: roomStorePath(room.tableId),
+    file: filePath,
   });
+};
+
+const isRecoverableClientState = (state, tableId, gameId) => {
+  if (!state || typeof state !== "object") return false;
+  if (state.tableId && String(state.tableId) !== String(tableId)) return false;
+  if (state.onlineMeta?.viewForPlayerId) return false;
+  if (!Array.isArray(state.players) || state.players.length !== 3) return false;
+  if (!Array.isArray(state.liveWall) || !Array.isArray(state.doraIndicators)) return false;
+  if (!state.handLog?.handId) return false;
+  return !gameId || !state.gameId || String(state.gameId) === String(gameId);
 };
 
 const hasSupabaseServerWriter = () => Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
@@ -289,6 +319,17 @@ const markClubPointSyncApplied = (state, key) => {
   state.clubPointDbSync.appliedKeys = [...new Set([...(state.clubPointDbSync.appliedKeys || []), key])];
 };
 const hasClubPointSyncApplied = (state, key) => asArray(state?.clubPointDbSync?.appliedKeys).includes(key);
+const ensureResultSyncIdentity = (result) => {
+  if (!result) return null;
+  result.resultId ??= randomUUID();
+  result.createdAt ??= now();
+  return result;
+};
+const makeResultSyncKey = (state, room, result, suffix) => {
+  const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
+  const identified = ensureResultSyncIdentity(result);
+  return `${handId}:${identified?.resultId || "result"}:${suffix}`;
+};
 const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}) => {
   if (!room?.state || hasClubPointSyncApplied(room.state, key)) return false;
   const result = await applyClubPointDeltasToDb(room, reason, payments, metadata);
@@ -462,13 +503,22 @@ const syncClubPointEffects = async (room) => {
     const state = room.state;
     await syncReplayEffects(room);
     const handId = state.handLog?.handId || `${room.gameId || room.tableId}-hand-${state.round?.hanchanRoundIndex ?? 0}`;
-    const result = state.handLog?.result;
-    if (!isTsumoLossless3maState(state) && result?.payments && ["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) {
+    const result = ensureResultSyncIdentity(state.handLog?.result);
+    if (!isTsumoLossless3maState(state) && result?.payments) {
       const rate = Number(state.settings?.pointRate || 1);
       const { deltas: payments, metadata: compensationMetadata } = pointDeltasForRealPlayers(state, result.payments, rate);
-      await syncOneClubPointEffect(room, `${handId}:anmikaSettlement`, "game_settlement", payments, {
+      console.log("[ClubPointSync] settlement candidate", {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        handId,
+        resultId: result.resultId,
+        phase: state.phase,
+        payments,
+      });
+      await syncOneClubPointEffect(room, makeResultSyncKey(state, room, result, "anmikaSettlement"), "game_settlement", payments, {
         label: "アンミカロケット局精算",
         handId,
+        resultId: result.resultId,
         resultType: result.type,
         winnerId: result.winnerId,
         winType: result.winType,
@@ -476,9 +526,10 @@ const syncClubPointEffects = async (room) => {
         ...compensationMetadata,
       });
       if (result?.scoreResult?.rakePoints && result?.winnerId && isUuid(result.winnerId)) {
-        await syncOneClubPointEffect(room, `${handId}:anmikaRake`, "rake", { [result.winnerId]: -Number(result.scoreResult.rakePoints || 0) }, {
+        await syncOneClubPointEffect(room, makeResultSyncKey(state, room, result, "anmikaRake"), "rake", { [result.winnerId]: -Number(result.scoreResult.rakePoints || 0) }, {
           label: "レーキ",
           handId,
+          resultId: result.resultId,
           winnerId: result.winnerId,
           rakePoints: result.scoreResult.rakePoints,
           rakePercent: result.scoreResult.rakePercent,
@@ -511,6 +562,12 @@ const syncClubPointEffects = async (room) => {
       });
     }
   })().catch((error) => {
+    if (room?.state) {
+      room.state.clubPointDbSync ??= { appliedKeys: [] };
+      room.state.clubPointDbSync.lastError = error?.message || String(error);
+      room.state.clubPointDbSync.lastErrorAt = now();
+      persistRoom(room);
+    }
     console.error("[ClubPointSync] failed", { tableId: room?.tableId, gameId: room?.gameId, error });
   }).finally(() => {
     room.clubPointSyncInFlight = null;
@@ -830,6 +887,11 @@ const hasTurquoise5pInHandOrMeldsServer = (player) => {
   ];
   return tiles.some((tile) => tile?.suit === "pinzu" && Number(tile.rank) === 5 && tile.color === "turquoise");
 };
+const hasTurquoise5pInTilesOrMeldsServer = (tiles, melds) =>
+  [
+    ...ensureArray(tiles),
+    ...ensureArray(melds).flatMap((meld) => ensureArray(meld.tiles)),
+  ].some((tile) => tile?.suit === "pinzu" && Number(tile.rank) === 5 && tile.color === "turquoise");
 const isServerMenzen = (player) => !ensureArray(player?.melds).some((meld) => ["pon", "minkan", "kakan"].includes(meld?.type));
 const getServerSeatWind = (state, playerId) => {
   const index = ensureArray(state?.players).findIndex((player) => player.id === playerId);
@@ -1481,6 +1543,7 @@ const getServerRiichiDiscardTileIds = (player) => {
   const candidateIds = [];
   for (const tile of tiles) {
     const afterDiscard = tiles.filter((item) => item.id !== tile.id);
+    if (hasOpenMeld && !hasTurquoise5pInTilesOrMeldsServer(afterDiscard, player.melds)) continue;
     const testPlayer = {
       ...player,
       hand: afterDiscard,
@@ -1496,6 +1559,32 @@ const getServerRiichiDiscardTileIds = (player) => {
     if (waits.length > 0 && !isServerFuritenForWaits(afterDiscardPlayer, waits)) candidateIds.push(tile.id);
   }
   return [...new Set(candidateIds)];
+};
+const queueServerDiscardTurnOptions = (state, player, source = { type: "discardTurn" }) => {
+  if (!player || player.type === "cpu" || player.isRiichi) return false;
+  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+  if (!riichiDiscardTileIds.length) {
+    console.log("[PonRiichi] unavailable", {
+      tableId: state.tableId,
+      playerId: player.id,
+      source,
+      hasTurquoise: hasTurquoise5pInHandOrMeldsServer(player),
+      handCount: ensureArray(player.hand).length,
+      meldCount: ensureArray(player.melds).length,
+      phase: state.phase,
+    });
+    return false;
+  }
+  player.riichiDiscardTileIds = riichiDiscardTileIds;
+  console.log("[PonRiichi] available", {
+    tableId: state.tableId,
+    playerId: player.id,
+    source,
+    discardTileIds: riichiDiscardTileIds,
+  });
+  return setServerPendingActions(state, player.id, [
+    { type: "riichi", playerId: player.id, options: { discardTileIds: riichiDiscardTileIds } },
+  ], source);
 };
 const canServerTsumo = (state, player) => {
   if (isServerWhitePochiTile(player?.drawnTile) && resolveServerPochiWin(state, player, player.drawnTile, "tsumo")) return true;
@@ -2012,7 +2101,9 @@ const applyServerAction = (state, event) => {
     state.pendingAction = null;
     state.phase = "waitingForHumanDiscard";
     appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
-    startServerClockForPlayer(state, player);
+    if (!queueServerDiscardTurnOptions(state, player, { type: "afterPon", fromPlayerId, sourceTile })) {
+      startServerClockForPlayer(state, player);
+    }
     return state;
   }
 
@@ -2057,6 +2148,8 @@ const applyServerAction = (state, event) => {
     state.pendingAction = null;
     state.handLog ??= {};
     state.handLog.result = {
+      resultId: randomUUID(),
+      createdAt: now(),
       type: "win",
       winnerId: player.id,
       loserId,
@@ -2351,6 +2444,8 @@ const calculateServerExhaustiveDraw = (state) => {
       player.score = Number(player.score || 0) + Number(scoreResult.payments?.[player.id] || 0);
     }
     return {
+      resultId: randomUUID(),
+      createdAt: now(),
       type: "win",
       winnerId: nagashiWinner.id,
       loserId: null,
@@ -2384,6 +2479,8 @@ const calculateServerExhaustiveDraw = (state) => {
   }
   for (const player of ensureArray(state.players)) player.score = Number(player.score || 0) + (paymentMap[player.id] || 0);
   return {
+    resultId: randomUUID(),
+    createdAt: now(),
     type: "exhaustiveDraw",
     reason: "liveWallEmpty",
     tenpaiResults,
@@ -2822,7 +2919,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:initState", (payload = {}, ack) => {
     try {
-      const { tableId, gameId, state, players, settings, ruleConfig, userId } = payload;
+      const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true } = payload;
       const room = getOrCreateRoom({ tableId, gameId });
       console.log("[AnmikaGameServer] initState", { tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state) });
       if (room.state) {
@@ -2838,14 +2935,28 @@ io.on("connection", (socket) => {
         scheduleRoomResultTimeout(room);
         return;
       }
-      const serverState = createServerInitialState({
+      const recoveredClientState = isRecoverableClientState(state, room.tableId, room.gameId) ? clone(state) : null;
+      if (state && !recoveredClientState) {
+        console.warn("[AnmikaGameServer] rejected client initial state recovery payload", {
+          tableId: room.tableId,
+          gameId: room.gameId,
+          hasPlayers: Array.isArray(state?.players),
+          hasLiveWall: Array.isArray(state?.liveWall),
+          handId: state?.handLog?.handId,
+          viewForPlayerId: state?.onlineMeta?.viewForPlayerId,
+        });
+      }
+      if (!recoveredClientState && allowCreateInitialState === false) {
+        throw new Error("保存済み局面を復元できませんでした。新しい配牌は作成しません。ゲームサーバーを再起動した場合は、サーバーの保存ファイルを確認してください。");
+      }
+      const serverState = recoveredClientState || createServerInitialState({
         tableId: room.tableId,
         gameId: room.gameId,
         players,
         settings,
         ruleConfig,
       });
-      acceptStateFromServerPipeline(room, serverState || state, "serverInitial", userId || socket.data.userId);
+      acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
       ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
       ack?.({ ok: false, error: error.message });
@@ -2958,6 +3069,14 @@ export const attachAnmikaGameServer = (httpServer) => {
       origin: allowedOrigins.includes("*") ? "*" : allowedOrigins,
       methods: ["GET", "POST"],
     },
+    pingInterval: 25000,
+    pingTimeout: 60000,
+    connectTimeout: 45000,
+    connectionStateRecovery: {
+      maxDisconnectionDuration: 120000,
+      skipMiddlewares: true,
+    },
+    transports: ["websocket", "polling"],
   });
   registerGameSocketHandlers();
   return io;

@@ -56,6 +56,10 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 70000;
+server.requestTimeout = 0;
+
 attachAnmikaGameServer(server);
 
 server.on("error", (error) => {

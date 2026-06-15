@@ -290,12 +290,14 @@ const loadSocketIoClient = async (serverUrl = defaultGameServerUrl()) => {
   }
   return socketClientLoadPromise;
 };
-const socketEmitWithAck = (socket, eventName, payload) => new Promise((resolve, reject) => {
+const SOCKET_ACK_TIMEOUT_MS = 30000;
+const SOCKET_CONNECT_TIMEOUT_MS = 30000;
+const socketEmitWithAck = (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS) => new Promise((resolve, reject) => {
   if (!socket?.connected) {
     reject(new Error("ゲームサーバーに接続されていません"));
     return;
   }
-  socket.timeout(10000).emit(eventName, payload, (error, response) => {
+  socket.timeout(timeoutMs).emit(eventName, payload, (error, response) => {
     if (error) {
       reject(error);
       return;
@@ -2888,8 +2890,9 @@ class GameController {
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
-      reconnectionDelayMax: 4000,
-      timeout: 12000,
+      reconnectionDelayMax: 8000,
+      randomizationFactor: 0.5,
+      timeout: SOCKET_CONNECT_TIMEOUT_MS,
       forceNew: true,
       auth: { userId: sync.userId, tableId: sync.tableId, gameId: sync.gameId },
     });
@@ -2929,11 +2932,14 @@ class GameController {
       this.state.onlineLoadingMessage = "ゲームサーバーの初期局面を作成中...";
       this.onStateChanged(this.state);
       try {
+        const latestSync = loadOnlineSync();
+        const hadServerStateBefore = Boolean(latestSync?.lastSyncedAt || latestSync?.lastServerState);
         const response = await socketEmitWithAck(socket, "game:initState", {
           tableId: sync.tableId,
           gameId: sync.gameId,
           userId: sync.userId,
           reason,
+          allowCreateInitialState: !hadServerStateBefore,
           players: this.state.players.map((player) => ({
             id: player.id,
             name: player.name,
@@ -2964,7 +2970,7 @@ class GameController {
     });
     socket.on("disconnect", (reason) => {
       if (reason === "io client disconnect") return;
-      this.state.onlineLoadingMessage = "ゲームサーバーへ再接続中...";
+      this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... (${reason})`;
       this.onStateChanged(this.state);
     });
     socket.on("connect_error", (error) => {
