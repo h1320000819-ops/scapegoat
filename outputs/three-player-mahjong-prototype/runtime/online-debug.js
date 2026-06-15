@@ -40,6 +40,8 @@
     autoOpenedPlayingTableIds: new Set(),
     activeClubId: sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
     activeTableId: new URLSearchParams(location.search).get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
+    recentlyLeftTableId: new URLSearchParams(location.search).get("leftTableId") || "",
+    recentlyLeftAt: Number(new URLSearchParams(location.search).get("leftAt") || 0),
     searchedClub: null,
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
@@ -131,6 +133,20 @@
     return [...byClub.values()];
   };
   const localSeatKey = (tableId) => String(tableId || "default");
+  const RECENTLY_LEFT_SUPPRESS_MS = 180000;
+  const isRecentlyLeftTable = (tableId) =>
+    Boolean(
+      tableId &&
+      state.recentlyLeftTableId &&
+      String(tableId) === String(state.recentlyLeftTableId) &&
+      Date.now() - Number(state.recentlyLeftAt || 0) < RECENTLY_LEFT_SUPPRESS_MS
+    );
+  const clearRecentlyLeftTableIfExpired = () => {
+    if (!state.recentlyLeftTableId) return;
+    if (isRecentlyLeftTable(state.recentlyLeftTableId)) return;
+    state.recentlyLeftTableId = "";
+    state.recentlyLeftAt = 0;
+  };
   const emptySeatRows = (tableId) =>
     [0, 1, 2].map((seatIndex) => ({
       table_id: tableId,
@@ -436,6 +452,64 @@
   };
   const rest = (path, options = {}) => request("/rest/v1" + path, options);
   const auth = (path, options = {}) => request("/auth/v1" + path, { ...options, auth: false });
+  const settleRecentlyLeftTable = async () => {
+    const tableId = state.recentlyLeftTableId;
+    if (!tableId || !state.user?.id || !state.accessToken) return;
+    console.log("[LastHand] settle recently left table", { tableId, userId: state.user.id });
+    clearLocalUserSeatsForTable(tableId, state.user.id);
+    state.autoOpenedPlayingTableIds.delete(tableId);
+    state.autoStartingTableIds.delete(tableId);
+    if (state.activeTableId === tableId) {
+      state.activeTableId = "";
+      sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+    }
+    await rest("/table_waiting_list?user_id=eq." + encodeURIComponent(state.user.id), {
+      method: "DELETE",
+    }).catch((error) => log("ラス半終了後のウェイティング解除に失敗しました。", rawErrorText(error)));
+    await rest("/rpc/leave_table_after_last_hand", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId }),
+    }).catch(async (rpcError) => {
+      const raw = rawErrorText(rpcError);
+      if (!raw.includes("leave_table_after_last_hand") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("ラス半終了後の退席RPCに失敗しました。直接退席へ切り替えます。", raw);
+      }
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            user_id: null,
+            player_type: "empty",
+            display_name: null,
+            is_last_hand_declared: false,
+            updated_at: new Date().toISOString(),
+          }),
+        }
+      ).catch((error) => log("ラス半終了後の直接退席に失敗しました。", rawErrorText(error)));
+    await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+      method: "PATCH",
+      body: JSON.stringify({ status: "waiting" }),
+    }).catch((error) => log("ラス半終了後の卓状態更新に失敗しました。", rawErrorText(error)));
+    });
+    await rest("/games?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.playing", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
+    }).catch(() => {});
+    await rest("/game_states?table_id=eq." + encodeURIComponent(tableId) + "&is_active=eq.true", {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
+    }).catch(() => {});
+    await rest("/rpc/resolve_last_hand_and_waiting_queue", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId }),
+    }).catch((error) => {
+      const raw = rawErrorText(error);
+      if (!raw.includes("resolve_last_hand_and_waiting_queue") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("ラス半終了後のウェイティング処理に失敗しました。", raw);
+      }
+    });
+  };
   const CLUB_POINT_FIXED_TOTAL = 10000000;
   const clubPointSummaryFromMembers = (members = []) => {
     const memberTotal = members.reduce((sum, member) => sum + Number(member.point_balance || 0), 0);
@@ -1257,6 +1331,18 @@
   };
   const openPlayingTableIfNeeded = async (table, seatRows = null) => {
     if (!table?.table_id || table.status !== "playing") return;
+    clearRecentlyLeftTableIfExpired();
+    if (isRecentlyLeftTable(table.table_id)) {
+      console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
+      clearLocalUserSeatsForTable(table.table_id);
+      state.autoOpenedPlayingTableIds.delete(table.table_id);
+      state.autoStartingTableIds.delete(table.table_id);
+      if (state.activeTableId === table.table_id) {
+        state.activeTableId = "";
+        sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+      }
+      return;
+    }
     const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
     if (!isCurrentUserSeatedAt(seats)) return;
     if (state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
@@ -1285,6 +1371,18 @@
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
     tableId = requireTableId(tableId, "自動対局開始");
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
+    clearRecentlyLeftTableIfExpired();
+    if (isRecentlyLeftTable(tableId)) {
+      console.log("[LastHand] recently left table: suppress auto-start", tableId);
+      clearLocalUserSeatsForTable(tableId);
+      state.autoOpenedPlayingTableIds.delete(tableId);
+      state.autoStartingTableIds.delete(tableId);
+      if (state.activeTableId === tableId) {
+        state.activeTableId = "";
+        sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+      }
+      return null;
+    }
     if (filledSeatCount(seats) < 3) return null;
 
     const table = getOrCreateTableRecord(tableId, seats);
@@ -3389,6 +3487,7 @@
     render();
     if (state.user && state.accessToken) {
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+      await settleRecentlyLeftTable().catch((error) => showError("ラス半終了後の退席処理に失敗しました", error));
       startClubPolling();
       const returnClubId = localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
       if (returnClubId && state.clubs.some((club) => club.club_id === returnClubId)) {

@@ -307,15 +307,32 @@ const socketEmitWithAck = (socket, eventName, payload) => new Promise((resolve, 
 });
 const isOnlineDebugLocalTableId = (tableId) => String(tableId || "").startsWith("online-debug-");
 const sourceTableIdFromLocalDebugId = (tableId) => isOnlineDebugLocalTableId(tableId) ? String(tableId).replace(/^online-debug-/, "") : tableId;
+const forgetLocalOnlineDebugTable = (tableId) => {
+  if (!isOnlineDebugLocalTableId(tableId)) return;
+  try {
+    saveTables(loadTables().filter((table) => table.id !== tableId));
+  } catch (error) {
+    console.warn("[OnlineDebug] ローカル卓キャッシュの削除に失敗しました", error);
+  }
+};
 const onlineDebugLobbyUrl = (clubId = "") => {
   const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
   if (globalThis.location?.protocol === "file:") return new URL(`online-debug/index.html${query}`, globalThis.location.href).href;
   return `${globalThis.location?.origin || ""}/online-debug${query}`;
 };
-const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "") => {
+const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
-  if (value.includes("/online-debug")) return value;
-  return onlineDebugLobbyUrl(clubId);
+  const base = value.includes("/online-debug") ? value : onlineDebugLobbyUrl(clubId);
+  if (!leftTableId) return base;
+  try {
+    const url = new URL(base, globalThis.location?.href || "http://localhost/");
+    url.searchParams.set("leftTableId", leftTableId);
+    url.searchParams.set("leftAt", String(Date.now()));
+    return url.href;
+  } catch {
+    const joiner = base.includes("?") ? "&" : "?";
+    return `${base}${joiner}leftTableId=${encodeURIComponent(leftTableId)}&leftAt=${Date.now()}`;
+  }
 };
 const submitOnlineGameAction = async (actionType, payload = {}) => {
   const sync = loadOnlineSync();
@@ -502,6 +519,18 @@ const leaveOnlineTableForSync = async (sync) => {
       body: JSON.stringify({ status: "waiting" }),
     }).catch((error) => console.warn("[OnlineSync] table waiting update failed", error));
   };
+  const resolveLastHandWaitingQueue = async () => {
+    const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_and_waiting_queue`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ p_table_id: sync.tableId }),
+    }).catch((error) => {
+      console.warn("[OnlineSync] ラス半後ウェイティング処理に失敗しました", error);
+      return null;
+    });
+    if (!response?.ok) return false;
+    return true;
+  };
   const clearOwnWaiting = async () => {
     if (!sync.userId) return;
     await fetch(`${sync.supabaseUrl}/rest/v1/table_waiting_list?user_id=eq.${encodeURIComponent(sync.userId)}`, {
@@ -535,6 +564,7 @@ const leaveOnlineTableForSync = async (sync) => {
       await clearOwnWaiting();
       await clearOwnSeatDirectly().catch((error) => console.warn("[OnlineSync] ラス半者の直接退席に失敗しました", error));
       await markTableWaiting();
+      await resolveLastHandWaitingQueue();
       return true;
     }
     const forceLeaveText = await forceLeaveResponse.text();
@@ -555,6 +585,7 @@ const leaveOnlineTableForSync = async (sync) => {
       await clearOwnWaiting();
       await clearOwnSeatDirectly().catch((error) => console.warn("[OnlineSync] ラス半者の直接退席に失敗しました", error));
       await markTableWaiting();
+      await resolveLastHandWaitingQueue();
       return true;
     }
     const resolveText = await resolveResponse.text();
@@ -578,6 +609,7 @@ const leaveOnlineTableForSync = async (sync) => {
       body: JSON.stringify({ p_table_id: sync.tableId }),
     });
     await markTableWaiting();
+    await resolveLastHandWaitingQueue();
     if (response.ok) return true;
     const text = await response.text();
     console.warn("[OnlineSync] ラス半終了時の退席に失敗しました", text || response.statusText);
@@ -589,6 +621,7 @@ const leaveOnlineTableForSync = async (sync) => {
     await clearOwnWaiting();
     const fallbackOk = await clearOwnSeatDirectly();
     await markTableWaiting();
+    await resolveLastHandWaitingQueue();
     if (fallbackOk) return true;
     console.warn("[OnlineSync] ラス半終了時の直接退席にも失敗しました");
   } catch (error) {
@@ -2572,9 +2605,10 @@ class GameController {
           const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
           await leaveOnlineTableForSync(sync);
           if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
+          forgetLocalOnlineDebugTable(activeTableId);
           saveOnlineSync(null);
           if (sync.returnUrl) {
-            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
+            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
           } else {
             this.state.screen = "clubLobby";
             this.emit();
@@ -2980,9 +3014,10 @@ class GameController {
           const leavePlayerId = sync?.userId || localPlayerId;
           await leaveOnlineTableForSync(sync);
           if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
+          forgetLocalOnlineDebugTable(activeTableId);
           saveOnlineSync(null);
           if (sync?.returnUrl) {
-            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
+            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
           } else {
             this.state.screen = "clubLobby";
             this.emit();
@@ -3036,9 +3071,10 @@ class GameController {
         const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
         await leaveOnlineTableForSync(sync);
         if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
+        forgetLocalOnlineDebugTable(activeTableId);
         saveOnlineSync(null);
         if (sync?.returnUrl) {
-          window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
+          window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
         } else {
           this.state.screen = "clubLobby";
           this.emit();
@@ -3064,8 +3100,9 @@ class GameController {
       const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
       await leaveOnlineTableForSync(sync);
       if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
+      forgetLocalOnlineDebugTable(activeTableId);
       saveOnlineSync(null);
-      window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
+      window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
       return;
     }
     this.emit();
