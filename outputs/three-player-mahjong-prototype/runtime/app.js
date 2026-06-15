@@ -2933,6 +2933,7 @@ class GameController {
       this.onStateChanged(this.state);
       try {
         const latestSync = loadOnlineSync();
+        const hadServerStateBefore = Boolean(latestSync?.lastSyncedAt || latestSync?.lastServerState);
         const localRecoveryState = isUsableOnlineGameState(this.state) && !this.state.onlineMeta?.redacted
           ? cloneOnlineGameState(this.state)
           : null;
@@ -2942,7 +2943,7 @@ class GameController {
           userId: sync.userId,
           reason,
           state: localRecoveryState,
-          allowCreateInitialState: true,
+          allowCreateInitialState: Boolean(localRecoveryState) || !hadServerStateBefore,
           players: this.state.players.map((player) => ({
             id: player.id,
             name: player.name,

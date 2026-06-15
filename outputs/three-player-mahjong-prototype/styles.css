@@ -1649,7 +1649,7 @@ button:hover {
 
   .seat-top {
     max-width: 620px;
-    top: -14px;
+    top: -34px;
     width: min(78vw, 620px);
   }
 
@@ -1697,6 +1697,24 @@ button:hover {
   .seat-bottom .hand-row {
     min-height: 54px;
     padding: 2px;
+  }
+
+  .seat-top .tile,
+  .seat-top .tile-button,
+  .seat-top .tile-image,
+  .seat-top .tile-fallback,
+  .seat-right .tile,
+  .seat-right .tile-button,
+  .seat-right .tile-image,
+  .seat-right .tile-fallback {
+    height: 25px;
+    min-width: 18px;
+    width: 18px;
+  }
+
+  .seat-top .hand-row {
+    min-height: 29px;
+    padding: 1px;
   }
 
   .drawn-tile {
@@ -1819,13 +1837,13 @@ button:hover {
   }
 
   .seat-top .hand-row {
-    transform: translateY(-46px);
+    transform: translateY(-58px);
   }
 
   .seat-right .hand-row {
-    max-height: 56vh;
-    padding: 4px 2px;
-    width: 42px;
+    max-height: 48vh;
+    padding: 2px 1px;
+    width: 26px;
   }
 
   .seat-right .hand-row > .tile,
@@ -1868,84 +1886,92 @@ button:hover {
   }
 
   .result-modal {
-    max-height: 92dvh;
-    overflow: auto;
+    max-height: 96dvh;
+    overflow: hidden;
+  }
+
+  .score-result.result-modal {
+    font-size: 8px;
+    max-width: min(112vw, 600px);
+    padding: 5px 6px 40px;
+    transform: translate(-50%, -50%) scale(0.84);
+    width: 600px;
   }
 
   .compact-score-result {
-    font-size: 10px;
-    max-width: min(94vw, 520px);
-    padding: 8px 8px 54px;
-    width: 520px;
+    font-size: 8px;
+    max-width: min(112vw, 600px);
+    padding: 5px 6px 40px;
+    width: 600px;
   }
 
   .result-modal h2 {
-    font-size: 16px;
-    margin-bottom: 5px;
+    font-size: 13px;
+    margin-bottom: 3px;
   }
 
   .result-modal h3 {
-    font-size: 12px;
-    margin: 6px 0 3px;
+    font-size: 9px;
+    margin: 3px 0 1px;
   }
 
   .score-winner-line {
-    font-size: 12px;
-    margin-bottom: 4px;
+    font-size: 10px;
+    margin-bottom: 2px;
   }
 
   .score-tile-section {
-    gap: 5px;
+    gap: 3px;
     grid-template-columns: minmax(0, 1fr) minmax(50px, auto);
-    margin: 4px 0;
+    margin: 2px 0;
   }
 
   .compact-yaku {
-    gap: 1px 8px;
-    margin: 4px 0;
+    gap: 0 6px;
+    margin: 2px 0;
   }
 
   .compact-score-lines {
-    border-radius: 5px;
-    margin: 4px 0;
-    padding: 4px 6px;
+    border-radius: 4px;
+    margin: 2px 0;
+    padding: 2px 4px;
   }
 
   .compact-score-lines p {
-    margin: 1px 0;
+    margin: 0;
   }
 
   .final-score-line {
-    font-size: 13px;
+    font-size: 10px;
   }
 
   .score-payments {
-    gap: 2px;
-    margin-top: 4px;
+    gap: 1px;
+    margin-top: 2px;
   }
 
   .score-payments li {
-    border-radius: 4px;
-    font-size: 10px;
+    border-radius: 3px;
+    font-size: 8px;
     gap: 4px;
-    line-height: 1.15;
+    line-height: 1.05;
     min-height: 0;
-    padding: 2px 4px;
+    padding: 1px 3px;
   }
 
   .score-payments li strong,
   .score-payments li span {
-    font-size: 10px;
+    font-size: 8px;
   }
 
   .score-extra-settlement {
-    font-size: 10px;
-    margin: 4px 0;
+    font-size: 8px;
+    margin: 2px 0;
   }
 
   .score-extra-settlement h3 {
-    font-size: 11px;
-    margin: 4px 0 2px;
+    font-size: 9px;
+    margin: 2px 0 1px;
   }
 
   .score-extra-settlement ul {
@@ -1959,10 +1985,10 @@ button:hover {
 
   .score-extra-settlement li {
     background: rgba(18, 63, 98, 0.08);
-    border-radius: 4px;
-    font-size: 9px;
-    line-height: 1.15;
-    padding: 2px 3px;
+    border-radius: 3px;
+    font-size: 7px;
+    line-height: 1.05;
+    padding: 1px 2px;
   }
 
   .tenpai-results {
@@ -1971,13 +1997,13 @@ button:hover {
 
   .tenpai-player {
     border-radius: 5px;
-    font-size: 10px;
-    padding: 4px;
+    font-size: 8px;
+    padding: 3px;
   }
 
   .tenpai-player h4 {
-    font-size: 11px;
-    margin-bottom: 2px;
+    font-size: 9px;
+    margin-bottom: 1px;
   }
 
   .tenpai-player p {
@@ -1985,23 +2011,23 @@ button:hover {
   }
 
   .result-tiles {
-    gap: 2px;
-    margin-top: 3px;
+    gap: 1px;
+    margin-top: 1px;
   }
 
   .result-tiles .tile,
   .result-tiles .tile-image,
   .result-tiles .tile-fallback {
-    height: 28px;
-    min-width: 20px;
-    width: 20px;
+    height: 20px;
+    min-width: 14px;
+    width: 14px;
   }
 
   .result-modal [data-result-ok] {
-    bottom: 7px;
-    font-size: 12px;
+    bottom: 5px;
+    font-size: 10px;
     left: 8px;
-    min-height: 32px;
+    min-height: 25px;
     right: 8px;
     width: calc(100% - 16px);
   }

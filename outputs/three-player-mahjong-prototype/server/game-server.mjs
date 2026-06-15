@@ -159,6 +159,85 @@ const loadPersistedRoom = (tableId) => {
   return null;
 };
 
+const roomDbPersistWarnings = new Set();
+const roomDbLoadWarnings = new Set();
+const roomFromPersistedPayload = (parsed, tableId) => {
+  if (!parsed?.tableId || !parsed?.state) return null;
+  return {
+    tableId: String(parsed.tableId || tableId),
+    gameId: parsed.gameId || `game-${tableId}`,
+    version: Number(parsed.version || parsed.state?.version || 0),
+    state: parsed.state,
+    events: Array.isArray(parsed.events) ? parsed.events : [],
+    sockets: new Map(),
+    processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
+    updatedAt: Number(parsed.updatedAt || now()),
+  };
+};
+const persistRoomToDb = async (room, payload) => {
+  if (!hasSupabaseServerWriter() || !room?.tableId || !payload?.state) return false;
+  try {
+    await supabaseRest("/online_game_rooms?on_conflict=table_id", {
+      method: "POST",
+      prefer: "resolution=merge-duplicates,return=minimal",
+      body: {
+        table_id: String(room.tableId),
+        game_id: String(room.gameId || ""),
+        version: Number(room.version || payload.version || 0),
+        state: payload.state,
+        events: asArray(payload.events),
+        processed_request_ids: asArray(payload.processedRequestIds),
+        updated_at: new Date(Number(payload.updatedAt || now())).toISOString(),
+      },
+    });
+    return true;
+  } catch (error) {
+    if (!roomDbPersistWarnings.has(room.tableId)) {
+      roomDbPersistWarnings.add(room.tableId);
+      console.warn("[AnmikaGameServer] DB room persistence failed. Run supabase/patch_online_game_rooms_persistence.sql if needed.", {
+        tableId: room.tableId,
+        error: error?.message || String(error),
+      });
+    }
+    return false;
+  }
+};
+const loadPersistedRoomFromDb = async (tableId) => {
+  if (!hasSupabaseServerWriter() || !tableId) return null;
+  try {
+    const rows = await supabaseRest(`/online_game_rooms?select=*&table_id=eq.${encodeURIComponent(String(tableId))}&limit=1`);
+    const row = asArray(rows)[0];
+    if (!row?.state) return null;
+    const parsed = {
+      tableId: row.table_id || tableId,
+      gameId: row.game_id || `game-${tableId}`,
+      version: row.version,
+      state: row.state,
+      events: row.events,
+      processedRequestIds: row.processed_request_ids,
+      updatedAt: row.updated_at ? Date.parse(row.updated_at) : now(),
+    };
+    const room = roomFromPersistedPayload(parsed, tableId);
+    if (room) {
+      console.log("[AnmikaGameServer] loaded DB persisted room", {
+        tableId,
+        gameId: room.gameId,
+        version: room.version,
+      });
+    }
+    return room;
+  } catch (error) {
+    if (!roomDbLoadWarnings.has(String(tableId))) {
+      roomDbLoadWarnings.add(String(tableId));
+      console.warn("[AnmikaGameServer] DB room load failed. Run supabase/patch_online_game_rooms_persistence.sql if needed.", {
+        tableId,
+        error: error?.message || String(error),
+      });
+    }
+    return null;
+  }
+};
+
 const persistRoom = (room) => {
   if (!room?.tableId || !room.state) return;
   appendServerReplaySnapshot(room.state);
@@ -186,6 +265,7 @@ const persistRoom = (room) => {
     version: room.version,
     file: filePath,
   });
+  persistRoomToDb(room, payload);
 };
 
 const isRecoverableClientState = (state, tableId, gameId) => {
@@ -454,7 +534,8 @@ const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツ�
 const replayResultSummary = (state, result) => {
   if (!result) return "結果なし";
   const playerName = (playerId) => asArray(state?.players).find((player) => player.id === playerId)?.name || playerId || "";
-  const payments = result?.scoreResult?.payments || result?.payments || {};
+  const rawPayments = result?.scoreResult?.paymentDeltas || result?.scoreResult?.payments || result?.payments || {};
+  const payments = Array.isArray(rawPayments) ? Object.fromEntries(rawPayments.map((item) => [item.playerId, item.delta])) : rawPayments;
   if (result.type === "exhaustiveDraw") {
     const entries = Object.entries(payments).filter(([, delta]) => Number(delta || 0) !== 0);
     return entries.length ? `流局 / ${entries.map(([playerId, delta]) => `${playerName(playerId)} ${Number(delta) > 0 ? "+" : ""}${delta}`).join(" / ")}` : "流局 / 点数移動なし";
@@ -474,6 +555,81 @@ const markReplaySyncApplied = (state, key, replayId = null) => {
   if (replayId) state.replayDbSync.replayIds = { ...(state.replayDbSync.replayIds || {}), [key]: replayId };
 };
 const hasReplaySyncApplied = (state, key) => asArray(state?.replayDbSync?.appliedKeys).includes(key);
+const playerPaymentDeltaFromResult = (result, playerId) => {
+  const payments = result?.scoreResult?.paymentDeltas || result?.scoreResult?.payments || result?.payments || {};
+  if (Array.isArray(payments)) {
+    const found = payments.find((item) => item?.playerId === playerId);
+    return Number(found?.delta || 0);
+  }
+  return Number(payments?.[playerId] || 0);
+};
+const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) => {
+  const state = room?.state;
+  const ruleId = state?.settings?.ruleId || state?.settings?.gameType || "anmika-rocket";
+  const handEvents = asArray(state?.handLog?.events);
+  const socketEvents = asArray(room?.events);
+  return asArray(state?.players).map((player) => {
+    const playerId = String(player?.id || "");
+    const isCpu = player?.type === "cpu" || playerId.startsWith("cpu");
+    const riichiEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "riichi");
+    const callEvents = handEvents.filter((event) => event?.playerId === playerId && ["pon", "kan", "nukiDora"].includes(event?.type));
+    const winEvents = handEvents.filter((event) => event?.playerId === playerId && ["ron", "tsumo"].includes(event?.type));
+    const discardEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "discard");
+    const drawEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "draw");
+    const scoreDelta = playerPaymentDeltaFromResult(result, playerId);
+    return {
+      replay_id: replayId,
+      club_id: table.club_id,
+      table_id: table.table_id,
+      game_id: isUuid(room.gameId) ? room.gameId : null,
+      rule_id: ruleId,
+      scope,
+      player_key: playerId,
+      user_id: isUuid(playerId) ? playerId : null,
+      display_name: player?.name || playerId,
+      is_cpu: isCpu,
+      hand_count: scope === "hanchan" ? Math.max(1, handMarkersFromSnapshots(state?.hanchanReplaySnapshots || state?.replaySnapshots).length) : 1,
+      win_count: result?.type === "win" && result?.winnerId === playerId ? 1 : winEvents.length,
+      ron_win_count: result?.type === "win" && result?.winnerId === playerId && result?.winType === "ron" ? 1 : winEvents.filter((event) => event.type === "ron").length,
+      tsumo_win_count: result?.type === "win" && result?.winnerId === playerId && result?.winType === "tsumo" ? 1 : winEvents.filter((event) => event.type === "tsumo").length,
+      riichi_count: riichiEvents.length || (player?.isRiichi ? 1 : 0),
+      call_count: callEvents.length || asArray(player?.melds).length,
+      discard_count: discardEvents.length,
+      draw_count: drawEvents.length,
+      score_delta: scoreDelta,
+      final_score: Number(player?.score || 0),
+      stat_payload: {
+        resultType: result?.type || null,
+        winType: result?.winType || null,
+        winnerId: result?.winnerId || null,
+        loserId: result?.loserId || null,
+        meldCount: asArray(player?.melds).length,
+        nukiDoraCount: asArray(player?.nukiDoraTiles).length,
+        handEventCount: handEvents.filter((event) => event?.playerId === playerId).length,
+        socketEventCount: socketEvents.filter((event) => event?.playerId === playerId).length,
+      },
+    };
+  });
+};
+const saveReplayStatsToDb = async ({ room, replayId, table, scope, result }) => {
+  const rows = buildPlayerStatRowsForReplay({ room, replayId, table, scope, result });
+  if (!rows.length) return false;
+  try {
+    await supabaseRest("/player_replay_stats", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: rows,
+    });
+    console.log("[ReplayStats] saved", { replayId, rows: rows.length, hasCpu: rows.some((row) => row.is_cpu) });
+    return true;
+  } catch (error) {
+    console.warn("[ReplayStats] skipped or failed. Run supabase/patch_player_replay_stats.sql if the table is missing.", {
+      replayId,
+      error: error?.message || String(error),
+    });
+    return false;
+  }
+};
 const saveReplayToDb = async (room, key, scope, { initialState, snapshots, result, summary = {} } = {}) => {
   if (!room?.state || hasReplaySyncApplied(room.state, key)) return false;
   if (!hasSupabaseServerWriter()) {
@@ -481,11 +637,17 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       console.warn("[ReplaySync] SUPABASE_SERVICE_ROLE_KEY is not set. Replay DB sync is skipped.");
       room.replaySyncMissingEnvLogged = true;
     }
+    room.state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
+    room.state.replayDbSync.lastError = "SUPABASE_SERVICE_ROLE_KEY is not set. Renderの環境変数に設定してください。";
+    room.state.replayDbSync.lastErrorAt = now();
     return false;
   }
   const table = await getRoomTableContext(room);
   if (!table?.club_id) {
     console.warn("[ReplaySync] skipped: table club context is missing", { tableId: room.tableId, gameId: room.gameId });
+    room.state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
+    room.state.replayDbSync.lastError = "table club context is missing";
+    room.state.replayDbSync.lastErrorAt = now();
     return false;
   }
   const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
@@ -520,6 +682,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       snapshots: compactSnapshots,
     },
   });
+  await saveReplayStatsToDb({ room, replayId, table, scope, result });
   markReplaySyncApplied(room.state, key, replayId);
   console.log("[ReplaySync] saved", { tableId: room.tableId, gameId: room.gameId, replayId, scope, snapshots: compactSnapshots.length });
   persistRoom(room);
@@ -2784,6 +2947,21 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
   }
   return room;
 };
+const hydrateRoomFromDbIfNeeded = async (room) => {
+  if (!room || room.state) return room;
+  const persisted = await loadPersistedRoomFromDb(room.tableId);
+  if (!persisted?.state) return room;
+  const existingSockets = room.sockets instanceof Map ? room.sockets : new Map();
+  room.gameId = persisted.gameId || room.gameId;
+  room.version = Number(persisted.version || persisted.state?.version || room.version || 0);
+  room.state = persisted.state;
+  room.events = asArray(persisted.events);
+  room.processedRequestIds = new Set(asArray(persisted.processedRequestIds));
+  room.updatedAt = Number(persisted.updatedAt || now());
+  room.sockets = existingSockets;
+  gameRooms.set(room.tableId, room);
+  return room;
+};
 
 const broadcastState = (room) => {
   for (const [socketId, meta] of room.sockets.entries()) {
@@ -2834,8 +3012,9 @@ const scheduleRoomResultTimeout = (room) => {
   if (!isWaitingForResultOk(room.state)) return;
   room.state.resultCountdownStartedAt ??= Date.now();
   const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + RESULT_AUTO_OK_DELAY_MS - Date.now());
-  room.resultTimer = setTimeout(() => {
+  room.resultTimer = setTimeout(async () => {
     room.resultTimer = null;
+    await syncReplayEffects(room);
     if (!applyAutoResultOk(room.state)) return;
     advanceServerCpuTurns(room.state);
     room.version = Number(room.version || 0) + 1;
@@ -2942,10 +3121,10 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
 
 const registerGameSocketHandlers = () => {
 io.on("connection", (socket) => {
-  socket.on("game:join", (payload = {}, ack) => {
+  socket.on("game:join", async (payload = {}, ack) => {
     try {
       const { tableId, gameId, userId } = payload;
-      const room = getOrCreateRoom({ tableId, gameId });
+      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       console.log("[AnmikaGameServer] join", { tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
       room.sockets.set(socket.id, { userId, joinedAt: now() });
       socket.join(`table:${room.tableId}`);
@@ -2975,10 +3154,10 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("game:initState", (payload = {}, ack) => {
+  socket.on("game:initState", async (payload = {}, ack) => {
     try {
       const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true } = payload;
-      const room = getOrCreateRoom({ tableId, gameId });
+      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       console.log("[AnmikaGameServer] initState", { tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state) });
       if (room.state) {
         const viewerId = userId || socket.data.userId || null;
@@ -3005,10 +3184,7 @@ io.on("connection", (socket) => {
         });
       }
       if (!recoveredClientState && allowCreateInitialState === false) {
-        console.warn("[AnmikaGameServer] persisted room was unavailable; creating a fresh initial state", {
-          tableId: room.tableId,
-          gameId: room.gameId,
-        });
+        throw new Error("保存済み局面を復元できませんでした。新しい配牌は作成しません。数秒後に再読み込みしてください。");
       }
       const serverState = recoveredClientState || createServerInitialState({
         tableId: room.tableId,
@@ -3024,13 +3200,13 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("game:action", (payload = {}, ack) => {
+  socket.on("game:action", async (payload = {}, ack) => {
     let room = null;
     let playerIdForAck = payload?.playerId || socket.data.userId || null;
     try {
       const { tableId, gameId, playerId, actionType, turnVersion, payload: actionPayload } = payload;
       playerIdForAck = playerId || playerIdForAck;
-      room = getOrCreateRoom({ tableId, gameId });
+      room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
       const requestId = actionPayload?.discardRequestId || actionPayload?.requestId || payload.requestId || "";
       if (requestId && room.processedRequestIds?.has(requestId)) {
@@ -3044,6 +3220,9 @@ io.on("connection", (socket) => {
         clientVersion = room.version;
       }
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
+      if (actionType === "resultOk" && room.state?.handLog?.result) {
+        await syncReplayEffects(room);
+      }
       const event = {
         id: `event-${randomUUID()}`,
         tableId: room.tableId,
@@ -3097,9 +3276,9 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("game:requestState", (payload = {}, ack) => {
+  socket.on("game:requestState", async (payload = {}, ack) => {
     try {
-      const room = getOrCreateRoom(payload);
+      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom(payload));
       const viewerId = payload.userId || socket.data.userId || null;
       ack?.({ ok: true, ...publicRoomState(room, viewerId) });
       if (room.state) {
