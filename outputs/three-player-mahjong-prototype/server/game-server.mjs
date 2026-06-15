@@ -1460,6 +1460,7 @@ const enterCurrentTurnOnServer = (state) => {
 };
 const discardForServer = (state, player, tileId, { isRiichiDiscard = false, resolveAfterDiscard = true } = {}) => {
   stopServerClockForPlayer(state, player.id, { recoverAfterDiscard: true });
+  state.pendingAction = null;
   const drawn = player.drawnTile?.id === tileId ? player.drawnTile : null;
   const tile = drawn || removeTileById(player.hand, tileId);
   if (!tile) throw new Error("指定された牌を持っていません");
@@ -1561,6 +1562,7 @@ const applyServerAction = (state, event) => {
   if (action === "discard") {
     const tileId = payload.tileId || payload.tile?.id;
     if (!tileId) throw new Error("打牌する牌が指定されていません");
+    state.pendingAction = null;
     discardForServer(state, player, tileId, { isRiichiDiscard: state.phase === "waitingForRiichiDiscard" });
     return state;
   }
@@ -2306,11 +2308,15 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
       state: null,
       events: [],
       sockets: new Map(),
+      processedRequestIds: new Set(),
       updatedAt: now(),
     };
     gameRooms.set(key, room);
   }
   if (gameId && !room.gameId) room.gameId = gameId;
+  if (!(room.processedRequestIds instanceof Set)) {
+    room.processedRequestIds = new Set(asArray(room.processedRequestIds));
+  }
   return room;
 };
 
@@ -2535,6 +2541,11 @@ io.on("connection", (socket) => {
       const { tableId, gameId, playerId, actionType, turnVersion, payload: actionPayload } = payload;
       const room = getOrCreateRoom({ tableId, gameId });
       if (!room.state) throw new Error("対局が初期化されていません");
+      const requestId = actionPayload?.discardRequestId || actionPayload?.requestId || payload.requestId || "";
+      if (requestId && room.processedRequestIds?.has(requestId)) {
+        ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
+        return;
+      }
       let clientVersion = Number(turnVersion ?? room.version);
       if (actionType === "resultOk") clientVersion = room.version;
       if (clientVersion !== room.version) throw new Error("局面のバージョンが古いため操作できません");
@@ -2566,6 +2577,12 @@ io.on("connection", (socket) => {
       room.state = nextState;
       room.updatedAt = now();
       persistRoom(room);
+      if (requestId) {
+        room.processedRequestIds.add(requestId);
+        if (room.processedRequestIds.size > 500) {
+          room.processedRequestIds = new Set([...room.processedRequestIds].slice(-300));
+        }
+      }
       syncClubPointEffects(room);
       io.to(`table:${room.tableId}`).emit("game:event", event);
       broadcastState(room);
