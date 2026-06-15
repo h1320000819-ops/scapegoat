@@ -1,6 +1,6 @@
 ﻿const MAX_AUTO_TURNS = 200;
 const INITIAL_TIME_MS = 20000;
-const RESULT_COUNTDOWN_SECONDS = 10;
+const RESULT_COUNTDOWN_SECONDS = 15;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -300,7 +300,9 @@ const socketEmitWithAck = (socket, eventName, payload) => new Promise((resolve, 
       return;
     }
     if (response?.ok === false) {
-      reject(new Error(response.error || "ゲームサーバー処理に失敗しました"));
+      const errorObject = new Error(response.error || "ゲームサーバー処理に失敗しました");
+      errorObject.response = response;
+      reject(errorObject);
       return;
     }
     resolve(response);
@@ -1116,6 +1118,41 @@ const canUseTsumogiriShortcut = (gameState, viewerPlayerId) => {
     player?.type === "human" &&
     Boolean(player.drawnTile);
 };
+const getSeatRoleLabel = (state, playerId) => {
+  const players = state?.players ?? [];
+  const dealerIndex = players.findIndex((player) => player.id === state?.round?.dealerPlayerId);
+  const playerIndex = players.findIndex((player) => player.id === playerId);
+  if (dealerIndex < 0 || playerIndex < 0 || players.length === 0) return "";
+  const offset = (playerIndex - dealerIndex + players.length) % players.length;
+  if (offset === 0) return "親";
+  if (offset === 1) return "南家";
+  return "西家";
+};
+const expectedDiscardTileCount = (player) => Math.max(2, 14 - (player?.melds?.length ?? 0) * 3);
+const getDiscardBlockReason = (gameState, viewerPlayerId, tileId = null) => {
+  if (!gameState) return "局面がありません";
+  if (gameState.screen && gameState.screen !== "game") return "対局画面ではありません";
+  if (gameState.handLog?.result) return "結果画面を表示中です";
+  if (gameState.phase === "showingWinAnnouncement" || gameState.phase === "showingFlowerAnnouncement") return "演出中です";
+  if (gameState.pendingAction) return "他の選択待ちが残っています";
+  if (!["waitingForHumanDiscard", "waitingForRiichiDiscard"].includes(gameState.phase)) return `打牌フェーズではありません (${gameState.phase})`;
+  const player = getCurrentPlayer(gameState);
+  if (!player) return "現在プレイヤーが見つかりません";
+  if (!viewerPlayerId) return "自分のプレイヤーIDが復元できません";
+  if (player.id !== viewerPlayerId) return "現在の手番ではありません";
+  if (player.type === "cpu") return "CPUの手番です";
+  const tileCount = (player.hand?.length ?? 0) + (player.drawnTile ? 1 : 0);
+  const expected = expectedDiscardTileCount(player);
+  if (tileCount !== expected) return `手牌枚数が不正です (${tileCount}/${expected})`;
+  if (gameState.phase === "waitingForRiichiDiscard" && tileId && !(Array.isArray(player.riichiDiscardTileIds) ? player.riichiDiscardTileIds : []).includes(tileId)) {
+    return "この牌ではリーチ後テンパイになりません";
+  }
+  if (player.isRiichi && tileId && player.drawnTile?.id !== tileId && gameState.phase !== "waitingForRiichiDiscard") {
+    return "リーチ後はツモ切りのみです";
+  }
+  return "";
+};
+const canDiscard = (gameState, viewerPlayerId, tileId = null) => !getDiscardBlockReason(gameState, viewerPlayerId, tileId);
 const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLastHand);
 const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   const localUserId = sync?.userId || gameState?.onlineSync?.userId || CURRENT_USER_ID;
@@ -2601,6 +2638,7 @@ class GameController {
     next.replayInitialState = this.state.replayInitialState;
     next.replaySnapshots = this.state.replaySnapshots;
     next.lastSavedReplayId = this.state.lastSavedReplayId;
+    next.discardDebugMessage = "";
     this.isApplyingOnlineState = true;
     this.state = { ...this.state, ...next };
     this.isApplyingOnlineState = false;
@@ -2765,6 +2803,28 @@ class GameController {
         }
       }, 1200);
     }
+  }
+  async resyncSocketGameState(reason = "resync") {
+    const sync = loadOnlineSync();
+    const socket = globalThis.anmikaGameSocket;
+    if (sync?.transport !== "socketio" || !socket?.connected) return false;
+    try {
+      console.log("[Discard] resync requested", reason);
+      const response = await socketEmitWithAck(socket, "game:requestState", {
+        tableId: sync.tableId,
+        gameId: sync.gameId,
+        userId: sync.userId,
+        reason,
+      });
+      if (response?.state) {
+        saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? sync.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+        this.applyOnlineStateSnapshot(response.state);
+        return true;
+      }
+    } catch (error) {
+      console.warn("[Discard] resync failed", error);
+    }
+    return false;
   }
   startOnlineStateSync() {
     const sync = loadOnlineSync();
@@ -3243,11 +3303,24 @@ class GameController {
     return tile;
   }
   discardTile(tileId, { isCpuAction = false, suppressEmit = false, suppressCpuAutoProgress = false } = {}) {
-    if (this.state.pendingAction) {
-      console.warn("[Discard] blocked by pendingAction", { tileId, pendingAction: this.state.pendingAction, phase: this.state.phase });
+    const player = getCurrentPlayer(this.state);
+    const viewerPlayerId = isCpuAction ? player?.id : (isSocketAuthoritativeGame() ? loadOnlineSync()?.userId : getLocalHumanPlayerId(this.state));
+    const blockReason = isCpuAction ? "" : getDiscardBlockReason(this.state, viewerPlayerId, tileId);
+    console.log("[Discard] tile clicked", { tileId, viewerPlayerId, currentPlayerId: player?.id, phase: this.state.phase });
+    console.log("[Discard] canDiscard =", !blockReason, "reason =", blockReason || "OK");
+    if (blockReason) {
+      this.state.discardDebugMessage = `打牌できません: ${blockReason}`;
+      console.warn("[Discard] blocked", { tileId, reason: blockReason, pendingAction: this.state.pendingAction, phase: this.state.phase, version: this.state.version });
+      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction/.test(blockReason)) {
+        this.resyncSocketGameState("discardBlocked").then((synced) => {
+          if (!synced) this.emit();
+        });
+      } else {
+        this.emit();
+      }
       return;
     }
-    const player = getCurrentPlayer(this.state);
+    this.state.discardDebugMessage = "";
     if (!player) {
       console.warn("[Discard] blocked: current player missing", { tileId, phase: this.state.phase });
       return;
@@ -3263,10 +3336,21 @@ class GameController {
     }
     if (!isCpuAction && isSocketAuthoritativeGame() && player.type !== "cpu") {
       const onlineActionType = isRiichiDiscardPhase ? "riichi" : "discard";
+      console.log("[Discard] send action", { onlineActionType, tileId, version: loadOnlineSync()?.version });
       submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id }).catch((error) => {
+        console.warn("[Discard] server rejected", error);
+        if (error?.response?.state) {
+          saveOnlineSync({ ...loadOnlineSync(), version: error.response.version ?? loadOnlineSync()?.version ?? 0, lastServerState: error.response.state, lastSyncedAt: Date.now() });
+          this.applyOnlineStateSnapshot(error.response.state);
+        } else {
+          this.resyncSocketGameState("discardRejected");
+        }
         console.warn("[SocketGame] discard action failed", error);
+        this.state.discardDebugMessage = `打牌できません: ${error.message}`;
         this.state.log.unshift(`${isRiichiDiscardPhase ? "オンラインリーチ" : "オンライン打牌"}に失敗: ${error.message}`);
         this.emit();
+      }).then((response) => {
+        if (response) console.log("[Discard] server accepted", { version: response.version });
       });
       return;
     }
@@ -4572,6 +4656,7 @@ class GameView {
       ${state.isReplayView ? "" : `<section class="bottom-actions">
         ${state.cpuThinkingMessage ? `<div class="thinking">${state.cpuThinkingMessage}</div>` : ""}
         ${renderActionPrompt(state.pendingAction, state)}
+        ${state.discardDebugMessage ? `<div class="discard-debug-message">${escapeHtml(state.discardDebugMessage)}</div>` : ""}
       </section>`}
       ${state.phase === "idle" ? this.startOverlay() : ""}
       ${state.isReplayView ? "" : this.settingsButton(state)}
@@ -4619,17 +4704,7 @@ class GameView {
   centerInfoClean(state, dealer) {
     return `<section class="center-info">
       <div class="round-label">東場</div>
-      <div class="center-dealer">親: ${dealer?.name ?? ""}</div>
-      <ul class="center-scores">${state.players.map((player) => `<li class="${player.id === state.round.dealerPlayerId ? "dealer-score" : ""}"><span>${player.name}</span><strong>${player.score}</strong>${player.id === state.round.dealerPlayerId ? `<em>親</em>` : ""}</li>`).join("")}</ul>
-      <div class="center-wall">
-        <span>山: ${state.liveWall.length}</span>
-        <span>嶺上: ${state.rinshanWall.length}</span>
-        <span>カン: ${state.kanCount}/4</span>
-      </div>
       ${state.settings?.ruleConfig?.baibaEnabled ? `<div class="center-baiba">倍場</div>` : ""}
-      <div class="center-dora"><span>ドラ表示牌</span>${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div>
-      ${state.handLog.result?.type === "win" ? `<div class="center-dora"><span>裏ドラ表示牌</span>${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div>` : ""}
-      <div class="center-rake">レーキ: ${state.settings?.rakePercent ?? 0}% / 累積 ${state.rakePool ?? 0}点</div>
     </section>`;
   }
   playerSeatClean(player, seat, current, dealer) {
@@ -4641,6 +4716,7 @@ class GameView {
     const drawnTile = seatView?.drawnTile ?? (player.drawnTile ? { tile: player.drawnTile, faceDown } : undefined);
     const active = player.id === current.id;
     const isDealer = player.id === dealer?.id;
+    const seatRole = getSeatRoleLabel(this.currentStateForClock ?? {}, player.id);
     const avatarClass = player.type === "human" ? "avatar-human" : seat === "right" ? "avatar-cpu1" : "avatar-cpu2";
     const userIcon = player.type === "human" || player.type === "remote" ? authRepository.getUser(player.id)?.iconUrl : null;
     const avatarPath = userIcon || (player.type === "human" || player.type === "remote" ? UI_ASSETS.avatars.human : seat === "right" ? UI_ASSETS.avatars.cpu1 : UI_ASSETS.avatars.cpu2);
@@ -4649,7 +4725,7 @@ class GameView {
       <div class="seat-info">
         <div class="player-avatar ${avatarClass}">${avatarPath ? `<img src="${avatarPath}" alt="${player.name}" />` : `<span>${shortName}</span>`}</div>
         <div class="seat-meta">
-          <div class="seat-name">${player.name} ${isDealer ? `<b class="dealer-badge">親</b>` : ""}</div>
+          <div class="seat-name">${player.name} ${seatRole ? `<b class="seat-role">（${seatRole}）</b>` : ""}</div>
           <div class="seat-score">${player.score}点 ${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ中"}</span>` : ""}</div>
           <div class="seat-clock ${getClockRemainingMs(this.currentStateForClock ?? {}, player.id) <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock ?? {}, player.id)}</div>
         </div>
@@ -4741,8 +4817,13 @@ class GameView {
       handTiles: getHand13ForTenpai(player),
     }));
     const tenpaiByPlayer = new Map(tenpaiResults.map((item) => [item.playerId, item]));
+    const tenpaiCount = tenpaiResults.filter((item) => item.isTenpai).length;
+    const hasPayment = Array.isArray(result.payments)
+      ? result.payments.some((payment) => Number(payment.delta || 0) !== 0)
+      : Object.values(result.payments || {}).some((delta) => Number(delta || 0) !== 0);
     return `<section class="score-result result-modal"><h2>流局</h2>
       <h3>テンパイ状況</h3>
+      ${tenpaiCount === 0 ? `<p class="score-note">全員ノーテン</p>` : ""}
       <div class="tenpai-results">${state.players.map((player) => {
         const item = tenpaiByPlayer.get(player.id);
         const waits = item?.waits ?? [];
@@ -4754,7 +4835,7 @@ class GameView {
         </section>`;
       }).join("")}</div>
       <h3>点数移動</h3>
-      <ul>${this.paymentRows(state, result.payments ?? {})}</ul>
+      ${hasPayment ? `<ul>${this.paymentRows(state, result.payments ?? {})}</ul>` : `<p>点数移動なし</p>`}
       <h3>現在点数</h3>
       <ul>${state.players.map((player) => `<li>${player.name}: ${result.finalScores?.[player.id] ?? player.score}点</li>`).join("")}</ul>
       ${renderResultOkButton(state)}

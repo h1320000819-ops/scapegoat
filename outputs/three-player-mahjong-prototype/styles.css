@@ -5,8 +5,8 @@
   --discard-tile-width: 28px;
   --discard-tile-height: 39px;
   --discard-gap: 5px;
-  --center-info-width: 212px;
-  --center-info-height: 188px;
+  --center-info-width: 112px;
+  --center-info-height: 62px;
   --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 16px);
   --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 31px);
   --river-center-gap: 4px;
@@ -142,7 +142,7 @@ button:hover {
   height: var(--center-info-height);
   left: 50%;
   overflow: hidden;
-  padding: 7px;
+  padding: 6px;
   position: absolute;
   text-align: center;
   top: calc(50% + var(--center-y-offset));
@@ -153,11 +153,11 @@ button:hover {
 
 .round-label {
   color: #62e6ee;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1;
-  margin-bottom: 5px;
+  margin-bottom: 0;
 }
 
 .center-dealer {
@@ -189,7 +189,8 @@ button:hover {
 }
 
 .center-scores em,
-.dealer-badge {
+.dealer-badge,
+.seat-role {
   background: #ffd15c;
   border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 999px;
@@ -1185,6 +1186,20 @@ button:hover {
   pointer-events: auto;
 }
 
+.discard-debug-message {
+  background: rgba(120, 20, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  margin: 8px auto 0;
+  max-width: min(92vw, 680px);
+  padding: 7px 10px;
+  pointer-events: none;
+  text-align: center;
+}
+
 .action-prompt h2 {
   font-size: 17px;
   margin: 0 0 10px;
@@ -1520,8 +1535,8 @@ button:hover {
   }
 
   .mahjong-table {
-    --center-info-height: 96px;
-    --center-info-width: 132px;
+    --center-info-height: 54px;
+    --center-info-width: 100px;
     --discard-gap: 2px;
     --discard-tile-height: 28px;
     --discard-tile-width: 20px;

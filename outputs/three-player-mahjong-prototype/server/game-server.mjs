@@ -339,7 +339,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
-const RESULT_AUTO_OK_DELAY_MS = 12000;
+const RESULT_AUTO_OK_DELAY_MS = 17000;
 
 const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: false,
@@ -1714,13 +1714,14 @@ const applyServerAction = (state, event) => {
     if (tiles.length < 3) throw new Error("ポンに必要な2枚がありません");
     player.melds ??= [];
     player.melds.push({ type: "pon", tiles, calledTile, fromPlayerId });
+    player.drawnTile = null;
     player.hand = sortHandTiles(player.hand);
     state.currentPlayerIndex = state.players.findIndex((p) => p.id === player.id);
     state.players.forEach((p) => { p.status = p.id === player.id ? "active" : "waiting"; });
     state.pendingAction = null;
     state.phase = "waitingForHumanDiscard";
     appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
-    if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
+    startServerClockForPlayer(state, player);
     return state;
   }
 
@@ -2487,7 +2488,13 @@ io.on("connection", (socket) => {
       }
       ack?.({ ok: true, ...publicRoomState(room, userId) });
     } catch (error) {
-      ack?.({ ok: false, error: error.message });
+      try {
+        const { tableId, gameId, playerId } = payload || {};
+        const room = tableId ? getOrCreateRoom({ tableId, gameId }) : null;
+        ack?.({ ok: false, error: error.message, ...(room ? publicRoomState(room, playerId || socket.data.userId || null) : {}) });
+      } catch {
+        ack?.({ ok: false, error: error.message });
+      }
     }
   });
 
