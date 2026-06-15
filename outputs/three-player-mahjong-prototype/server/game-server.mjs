@@ -1055,14 +1055,15 @@ const applyServerAction = (state, event) => {
       throw new Error("その牌ではリーチできません");
     }
     player.riichiDiscardTileIds = riichiDiscardTileIds;
-    player.isRiichi = true;
-    player.ippatsu = true;
-    player.riichiTurnIndex = state.turnIndex ?? 0;
-    player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(player));
-    player.feverWinCount = 0;
-    appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
-    if (payload.tileId) discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
-    else {
+    if (payload.tileId) {
+      player.isRiichi = true;
+      player.ippatsu = true;
+      player.riichiTurnIndex = state.turnIndex ?? 0;
+      player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(player));
+      player.feverWinCount = 0;
+      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
+      discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
+    } else {
       state.pendingAction = null;
       state.phase = "waitingForRiichiDiscard";
       state.isWaitingForHumanAction = true;

@@ -475,7 +475,15 @@ const leaveOnlineTableForSync = async (sync) => {
       body: JSON.stringify({ status: "waiting" }),
     }).catch((error) => console.warn("[OnlineSync] table waiting update failed", error));
   };
+  const clearOwnWaiting = async () => {
+    if (!sync.userId) return;
+    await fetch(`${sync.supabaseUrl}/rest/v1/table_waiting_list?user_id=eq.${encodeURIComponent(sync.userId)}`, {
+      method: "DELETE",
+      headers: { ...headers, Prefer: "return=minimal" },
+    }).catch((error) => console.warn("[OnlineSync] ラス半者のウェイティング解除に失敗しました", error));
+  };
   try {
+    await clearOwnWaiting();
     const resolveResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_leavers`, {
       method: "POST",
       headers,
@@ -495,6 +503,7 @@ const leaveOnlineTableForSync = async (sync) => {
     console.warn("[OnlineSync] ラス半者の一括退席に失敗しました", error);
   }
   try {
+    await clearOwnWaiting();
     const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/leave_table`, {
       method: "POST",
       headers,
@@ -509,6 +518,7 @@ const leaveOnlineTableForSync = async (sync) => {
     await markTableWaiting();
   }
   try {
+    await clearOwnWaiting();
     const fallbackResponse = await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?table_id=eq.${encodeURIComponent(sync.tableId)}&user_id=eq.${encodeURIComponent(sync.userId)}`, {
       method: "PATCH",
       headers: { ...headers, Prefer: "return=minimal" },
@@ -1020,7 +1030,7 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   return Boolean(localSeat?.isLastHandDeclared);
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
-  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && (didLocalPlayerDeclareLastHand(gameState, sync) || sync?.returnUrl));
+  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && didLocalPlayerDeclareLastHand(gameState, sync));
 const calculateRake = (winnerGain, rakePercent) => Math.max(0, winnerGain) * ((rakePercent ?? 0) / 100);
 const createPlayerClocks = (players, initialMs = INITIAL_TIME_MS) => Object.fromEntries(players.map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
 const getClockRemainingMs = (state, playerId) => {
@@ -2485,8 +2495,9 @@ class GameController {
       setTimeout(async () => {
         try {
           const activeTableId = this.state.activeTableId;
+          const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
           await leaveOnlineTableForSync(sync);
-          if (activeTableId) this.leaveSeat(activeTableId);
+          if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
           saveOnlineSync(null);
           if (sync.returnUrl) {
             window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
@@ -2891,8 +2902,9 @@ class GameController {
         const sync = loadOnlineSync();
         const activeTableId = this.state.activeTableId;
         if (shouldLeaveOnlineTableAfterGameEnded(response.state, sync)) {
+          const leavePlayerId = sync?.userId || localPlayerId;
           await leaveOnlineTableForSync(sync);
-          if (activeTableId) this.leaveSeat(activeTableId);
+          if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
           saveOnlineSync(null);
           if (sync?.returnUrl) {
             window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
@@ -2902,7 +2914,9 @@ class GameController {
           }
           return;
         }
-        if (activeTableId) this.leaveSeat(activeTableId);
+        this.state.resultOkSubmitted = false;
+        this.state.resultAutoCloseHandled = false;
+        this.emit();
       }).catch((error) => {
         this.state.resultOkSubmitted = false;
         this.state.resultAutoCloseHandled = false;
@@ -2944,8 +2958,9 @@ class GameController {
       this.state.isWaitingForHumanAction = false;
       const sync = loadOnlineSync();
       if (shouldLeaveOnlineTableAfterGameEnded(this.state, sync)) {
+        const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
         await leaveOnlineTableForSync(sync);
-        if (activeTableId) this.leaveSeat(activeTableId);
+        if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
         saveOnlineSync(null);
         if (sync?.returnUrl) {
           window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
@@ -2953,10 +2968,6 @@ class GameController {
           this.state.screen = "clubLobby";
           this.emit();
         }
-        return;
-      }
-      if (activeTableId) {
-        this.leaveSeat(activeTableId);
         return;
       }
       this.emit();
@@ -2975,8 +2986,9 @@ class GameController {
     this.refreshStoredData();
     const sync = loadOnlineSync();
     if (sync?.returnUrl) {
+      const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
       await leaveOnlineTableForSync(sync);
-      if (activeTableId) this.leaveSeat(activeTableId);
+      if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
       saveOnlineSync(null);
       window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "");
       return;
@@ -2990,8 +3002,9 @@ class GameController {
   updateSettings(partial) {
     this.state.settings = { ...this.state.settings, ...partial };
     if (Object.prototype.hasOwnProperty.call(partial, "isLastHand") && this.state.activeTableId) {
+      const sync = loadOnlineSync();
+      const localPlayerId = getLocalHumanPlayerId(this.state) || sync?.userId || this.currentUserId();
       if (isSocketAuthoritativeGame()) {
-        const localPlayerId = this.state.players.find((player) => player.type === "human")?.id || this.state.players[0]?.id;
         submitOnlineGameAction("declareLastHand", { isLastHand: Boolean(partial.isLastHand), localPlayerId }).catch((error) => {
           console.warn("[SocketGame] last hand failed", error);
           this.state.log.unshift(`ラス半宣言に失敗: ${error.message}`);
@@ -2999,7 +3012,7 @@ class GameController {
         });
       }
       const table = loadTables().find((item) => item.id === this.state.activeTableId);
-      const seat = table?.seats.find((item) => item.playerId === CURRENT_USER_ID);
+      const seat = table?.seats.find((item) => item.playerId === localPlayerId);
       if (table && seat) {
         seat.isLastHandDeclared = Boolean(partial.isLastHand);
         this.syncTable(table);
@@ -3248,7 +3261,7 @@ class GameController {
   }
   confirmRiichi(action) {
     const player = this.getPlayer(action.playerId);
-    player.riichiDiscardTileIds = action.options?.allowedDiscardIds ?? this.getRiichiDiscardIds(player.id);
+    player.riichiDiscardTileIds = action.options?.allowedDiscardIds ?? action.options?.discardTileIds ?? this.getRiichiDiscardIds(player.id);
     console.log("[RiichiCandidates]", player.id, player.riichiDiscardTileIds);
     if (player.riichiDiscardTileIds.length === 0) {
       this.waitForHumanDiscard(player.id);
@@ -3784,7 +3797,7 @@ class GameView {
           event.preventDefault();
           event.stopPropagation();
           const now = Date.now();
-          if (now - handledAt < 450) return;
+          if (now - handledAt < 180) return;
           handledAt = now;
           handler(button);
         };
