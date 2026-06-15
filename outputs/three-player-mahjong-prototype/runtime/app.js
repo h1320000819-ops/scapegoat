@@ -526,6 +526,26 @@ const leaveOnlineTableForSync = async (sync) => {
   };
   try {
     await clearOwnWaiting();
+    const forceLeaveResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/leave_table_after_last_hand`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ p_table_id: sync.tableId }),
+    });
+    if (forceLeaveResponse.ok) {
+      await clearOwnWaiting();
+      await clearOwnSeatDirectly().catch((error) => console.warn("[OnlineSync] ラス半者の直接退席に失敗しました", error));
+      await markTableWaiting();
+      return true;
+    }
+    const forceLeaveText = await forceLeaveResponse.text();
+    if (
+      forceLeaveText &&
+      !forceLeaveText.includes("leave_table_after_last_hand") &&
+      !forceLeaveText.includes("schema cache") &&
+      !forceLeaveText.includes("Could not find the function")
+    ) {
+      console.warn("[OnlineSync] ラス半終了時の強制退席に失敗しました", forceLeaveText);
+    }
     const resolveResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_leavers`, {
       method: "POST",
       headers,
