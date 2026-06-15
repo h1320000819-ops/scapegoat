@@ -2020,6 +2020,7 @@ class GameController {
     this.isApplyingOnlineState = false;
     this.lastAppliedOnlinePublishedAt = 0;
     this.onlineInitialPublisher = false;
+    this.socketInitialStateInFlight = false;
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
     this.setupGlobalResultOkHandler();
@@ -2643,6 +2644,7 @@ class GameController {
       this.gameSocket.off("connect_error");
       this.gameSocket.disconnect();
     }
+    this.socketInitialStateInFlight = false;
     const socket = globalThis.io(serverUrl, {
       transports: ["websocket", "polling"],
       auth: { userId: sync.userId, tableId: sync.tableId, gameId: sync.gameId },
@@ -2655,33 +2657,42 @@ class GameController {
       saveOnlineSync({ ...loadOnlineSync(), version: payload.version ?? 0, lastServerState: state, lastSyncedAt: Date.now() });
       if (this.applyOnlineStateSnapshot(state)) this.lastAppliedOnlinePublishedAt = Number(state?.onlineMeta?.publishedAt ?? Date.now());
     });
-    socket.on("game:needInitialState", () => {
-      if (!this.onlineInitialPublisher) {
-        this.state.onlineLoadingMessage = "ゲームサーバーの初期局面を待っています...";
-        this.onStateChanged(this.state);
-        return;
-      }
-      socketEmitWithAck(socket, "game:initState", {
-        tableId: sync.tableId,
-        gameId: sync.gameId,
-        userId: sync.userId,
-        players: this.state.players.map((player) => ({
-          id: player.id,
-          name: player.name,
-          type: player.type === "cpu" ? "cpu" : "human",
-          score: player.score ?? 0,
-        })),
-        settings: {
-          ...this.state.settings,
+    const sendInitialSocketState = async (reason = "needInitialState") => {
+      if (this.socketInitialStateInFlight) return;
+      this.socketInitialStateInFlight = true;
+      this.state.onlineLoadingMessage = "ゲームサーバーの初期局面を作成中...";
+      this.onStateChanged(this.state);
+      try {
+        const response = await socketEmitWithAck(socket, "game:initState", {
+          tableId: sync.tableId,
+          gameId: sync.gameId,
+          userId: sync.userId,
+          reason,
+          players: this.state.players.map((player) => ({
+            id: player.id,
+            name: player.name,
+            type: player.type === "cpu" ? "cpu" : "human",
+            score: player.score ?? 0,
+          })),
+          settings: {
+            ...this.state.settings,
+            ruleConfig: this.state.settings?.ruleConfig,
+          },
           ruleConfig: this.state.settings?.ruleConfig,
-        },
-        ruleConfig: this.state.settings?.ruleConfig,
-      }).catch((error) => {
+        });
+        if (response?.state) {
+          saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+          this.applyOnlineStateSnapshot(response.state);
+        }
+      } catch (error) {
         console.warn("[SocketGame] 初期局面の作成に失敗しました", error);
         this.state.onlineLoadingMessage = `ゲームサーバーの初期局面作成に失敗しました: ${error?.message ?? error}`;
         this.onStateChanged(this.state);
-      });
-    });
+      } finally {
+        this.socketInitialStateInFlight = false;
+      }
+    };
+    socket.on("game:needInitialState", () => sendInitialSocketState("needInitialState"));
     socket.on("connect_error", (error) => {
       this.state.onlineLoadingMessage = `ゲームサーバー接続エラー: ${error?.message ?? error}`;
       this.onStateChanged(this.state);
@@ -2690,11 +2701,22 @@ class GameController {
       socket.once("connect", resolve);
       socket.once("connect_error", reject);
     });
-    await socketEmitWithAck(socket, "game:join", {
+    const joinResponse = await socketEmitWithAck(socket, "game:join", {
       tableId: sync.tableId,
       gameId: sync.gameId,
       userId: sync.userId,
     });
+    if (joinResponse?.state) {
+      saveOnlineSync({ ...loadOnlineSync(), version: joinResponse.version ?? 0, lastServerState: joinResponse.state, lastSyncedAt: Date.now() });
+      this.applyOnlineStateSnapshot(joinResponse.state);
+    } else {
+      setTimeout(() => {
+        const latest = loadOnlineSync();
+        if (latest?.transport === "socketio" && latest?.tableId === sync.tableId && socket.connected && this.state.phase === "onlineLoading") {
+          sendInitialSocketState("joinFallback");
+        }
+      }, 1200);
+    }
   }
   startOnlineStateSync() {
     const sync = loadOnlineSync();
