@@ -1167,7 +1167,7 @@ button:hover {
   position: absolute;
   transform: translateX(-50%);
   width: max-content;
-  z-index: 12;
+  z-index: 60;
 }
 
 .action-prompt {
@@ -1177,7 +1177,12 @@ button:hover {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   color: #17202a;
   padding: 12px;
+  pointer-events: auto;
   text-align: center;
+}
+
+.action-prompt button {
+  pointer-events: auto;
 }
 
 .action-prompt h2 {

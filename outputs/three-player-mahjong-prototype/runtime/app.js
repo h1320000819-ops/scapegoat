@@ -1,6 +1,6 @@
 ﻿const MAX_AUTO_TURNS = 200;
 const INITIAL_TIME_MS = 20000;
-const RESULT_COUNTDOWN_SECONDS = 15;
+const RESULT_COUNTDOWN_SECONDS = 10;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -339,6 +339,7 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
   const sync = loadOnlineSync();
   if (sync?.transport === "socketio") {
     const socket = globalThis.anmikaGameSocket;
+    if (actionType === "ron") console.log("[Ron] clicked", { tableId: sync.tableId, gameId: sync.gameId, version: sync.version, payload });
     const response = await socketEmitWithAck(socket, "game:action", {
       tableId: sync.tableId,
       gameId: sync.gameId,
@@ -355,6 +356,7 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
       lastServerState: response?.state ?? sync.lastServerState ?? null,
       lastSyncedAt: Date.now(),
     });
+    if (actionType === "ron") console.log("[Ron] accepted", { tableId: sync.tableId, gameId: sync.gameId, version: response?.version });
     if (response?.state && globalThis.__anmikaController?.applyOnlineStateSnapshot) {
       globalThis.__anmikaController.applyOnlineStateSnapshot(response.state);
     }
@@ -1281,10 +1283,11 @@ const createWallTiles = (ruleConfig = normalizeAnmikaRocketRuleConfig(), ruleId 
       tiles.push({ id: `${spec.suit}-${rank}-${copy}${isRocket ? "-rocket" : ""}`, suit: spec.suit, rank, color: colorForNumberTile(spec.suit, rank, copy, ruleConfig, ruleId), isPochi: false, isRocket });
     }
   }
+  const usePochi = ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID;
   const pochiColors = ["red", "yellow", "green", "blue"];
   for (const kind of ["east", "south", "west", "north", "white", "green", "red"]) for (let copy = 1; copy <= 4; copy++) {
-    const tile = { id: `honor-${kind}-${copy}`, suit: "honor", kind, color: "normal", isPochi: kind === "white" };
-    if (kind === "white") tile.pochiColor = pochiColors[copy - 1];
+    const tile = { id: `honor-${kind}-${copy}`, suit: "honor", kind, color: "normal", isPochi: usePochi && kind === "white" };
+    if (usePochi && kind === "white") tile.pochiColor = pochiColors[copy - 1];
     tiles.push(tile);
   }
   for (let copy = 1; copy <= 4; copy++) tiles.push({ id: `flower-hua-${copy}`, suit: "flower", kind: "flower", color: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? flowerColorByComposition(ruleConfig.flowerComposition, copy) : (copy <= 3 ? "red" : "blue"), isPochi: false });
@@ -3240,14 +3243,24 @@ class GameController {
     return tile;
   }
   discardTile(tileId, { isCpuAction = false, suppressEmit = false, suppressCpuAutoProgress = false } = {}) {
-    if (this.state.pendingAction) return;
+    if (this.state.pendingAction) {
+      console.warn("[Discard] blocked by pendingAction", { tileId, pendingAction: this.state.pendingAction, phase: this.state.phase });
+      return;
+    }
     const player = getCurrentPlayer(this.state);
+    if (!player) {
+      console.warn("[Discard] blocked: current player missing", { tileId, phase: this.state.phase });
+      return;
+    }
     this.stopClockForPlayer(player.id, true);
     const isRiichiDiscardPhase = this.state.phase === "waitingForRiichiDiscard";
     const drawn = player.drawnTile?.id === tileId ? player.drawnTile : null;
     const hand = player.hand.find((t) => t.id === tileId);
     const tile = drawn ?? hand;
-    if (!tile) return;
+    if (!tile) {
+      console.warn("[Discard] blocked: tile not found", { tileId, playerId: player.id, drawnTile: player.drawnTile?.id, handCount: player.hand?.length, phase: this.state.phase });
+      return;
+    }
     if (!isCpuAction && isSocketAuthoritativeGame() && player.type !== "cpu") {
       const onlineActionType = isRiichiDiscardPhase ? "riichi" : "discard";
       submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id }).catch((error) => {
@@ -3308,6 +3321,7 @@ class GameController {
     if (!action) return;
     if (isSocketAuthoritativeGame()) {
       submitOnlineGameAction(action.type, { action, localPlayerId: action.playerId }).catch((error) => {
+        if (action.type === "ron") console.warn("[Ron] rejected", error);
         console.warn("[SocketGame] action failed", error);
         this.state.log.unshift(`オンライン操作に失敗: ${error.message}`);
         this.emit();
@@ -3879,6 +3893,9 @@ const renderActionPrompt = (pending, state = null) => {
   if (!pending?.options?.length) return "";
   const viewerId = state ? getLocalHumanPlayerId(state) : null;
   if (viewerId && pending.playerId && pending.playerId !== viewerId) return "";
+  if (pending.options.some((option) => option.type === "ron")) {
+    console.log("[Ron] available", { playerId: pending.playerId, options: pending.options });
+  }
   const labels = { ron: "ロン", tsumo: "ツモ", riichi: "リーチ", pon: "ポン", kan: "カン" };
   const options = pending.options.map((option) => `<button type="button" data-confirm-action="${option.type}">${labels[option.type] ?? option.type}</button>`).join("");
   return `<section class="action-prompt"><div class="actions">${options}<button type="button" data-skip-action>スキップ</button></div></section>`;

@@ -10,6 +10,7 @@
     "dev:online": "node static-server.mjs",
     "start": "node static-server.mjs",
     "serve": "node static-server.mjs",
+    "test:waits": "node server/wait-detection.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

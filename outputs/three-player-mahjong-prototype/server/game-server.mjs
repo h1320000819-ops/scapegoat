@@ -339,7 +339,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
-const RESULT_AUTO_OK_DELAY_MS = 17000;
+const RESULT_AUTO_OK_DELAY_MS = 12000;
 
 const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: false,
@@ -598,6 +598,14 @@ const findServerAnkanCandidate = (player, { allowRiichi = false } = {}) => {
   }
   return null;
 };
+const findServerKakanCandidate = (player) => {
+  for (const meld of ensureArray(player?.melds)) {
+    if (meld?.type !== "pon" || !meld?.tiles?.[0]) continue;
+    const tile = combinedHandTiles(player).find((item) => sameTileKind(item, meld.tiles[0]) && !isFlowerTile(item));
+    if (tile) return { tile, meld };
+  }
+  return null;
+};
 const removeLastMatchingDiscard = (state, fromPlayerId, sourceTile) => {
   const fromPlayer = findPlayer(state, fromPlayerId);
   if (!fromPlayer?.discardedTiles?.length) return null;
@@ -687,13 +695,23 @@ const parseServerNumberKey = (key) => {
   if (!["manzu", "pinzu", "souzu"].includes(suit) || !Number.isFinite(rank)) return null;
   return { suit, rank };
 };
+const tileKeySortValue = (key) => {
+  const [suit, value] = String(key || "").split(":");
+  const suitBase = { manzu: 0, pinzu: 20, souzu: 40, honor: 60, flower: 80 }[suit] ?? 99;
+  const honorOrder = { east: 1, south: 2, west: 3, north: 4, white: 5, green: 6, red: 7 };
+  const numeric = Number(value);
+  return suitBase + (Number.isFinite(numeric) ? numeric : honorOrder[value] || 0);
+};
+const firstPositiveCountEntry = (counts) => [...counts.entries()]
+  .filter(([, count]) => count > 0)
+  .sort(([a], [b]) => tileKeySortValue(a) - tileKeySortValue(b))[0] || null;
 const serverFixedMelds = (melds = []) => ensureArray(melds).map((meld) => ({
   type: "triplet",
   key: tileKindKey(meld?.tiles?.[0]),
   source: meld?.type || "meld",
 }));
 const serverExtractMelds = (counts) => {
-  const first = [...counts.entries()].find(([, count]) => count > 0);
+  const first = firstPositiveCountEntry(counts);
   if (!first) return [[]];
   const [key, count] = first;
   const results = [];
@@ -1312,6 +1330,8 @@ const queueServerSelfDrawOptions = (state, player) => {
   if (!player.isRiichi && Number(state.kanCount || 0) < 4) {
     const kanTile = findServerAnkanCandidate(player, { allowRiichi: false });
     if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
+    const kakan = findServerKakanCandidate(player);
+    if (kakan) options.push({ type: "kan", playerId: player.id, sourceTile: kakan.tile, tile: kakan.tile, options: { kanType: "kakan", meldTile: kakan.meld?.tiles?.[0] } });
   }
   if (player.isRiichi && Number(state.kanCount || 0) < 4) {
     const kanTile = findServerAnkanCandidate(player, { allowRiichi: true });
@@ -1391,6 +1411,7 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
     const options = [];
     if (canServerRon(state, player, sourceTile)) {
       const option = { type: "ron", playerId: player.id, fromPlayerId, sourceTile };
+      console.log("[Ron] available", { tableId: state.tableId, playerId: player.id, fromPlayerId, tile: tileKindKey(sourceTile), version: state.version });
       if (player.isRiichi) {
         applyServerAction(state, { playerId: player.id, actionType: "ron", payload: { action: option, fromPlayerId, sourceTile } });
         return true;
@@ -1470,6 +1491,7 @@ const addDoraAfterKan = (state) => {
     state.doraIndicators ??= [];
     state.doraIndicators.push(indicator);
     appendHandEvent(state, { type: "doraReveal", tile: indicator, turnIndex: state.turnIndex ?? 0 });
+    console.log("[KanDora] revealed", { tableId: state.tableId, kanCount: state.kanCount, indicator: tileKindKey(indicator), doraIndicatorCount: state.doraIndicators.length });
   }
 };
 const applyServerAction = (state, event) => {
@@ -1614,6 +1636,34 @@ const applyServerAction = (state, event) => {
     const same = (tile) => sameTileKind(tile, baseTile);
     const tiles = [];
     const isMinkan = Boolean(fromPlayerId && sourceTile);
+    const kanType = option.options?.kanType || payload.kanType || option.kanType;
+    if (kanType === "kakan") {
+      const targetMeld = ensureArray(player.melds).find((meld) => meld?.type === "pon" && meld?.tiles?.[0] && sameTileKind(meld.tiles[0], baseTile));
+      if (!targetMeld) throw new Error("加槓できるポンがありません");
+      let addedTile = null;
+      if (player.drawnTile && same(player.drawnTile)) {
+        addedTile = player.drawnTile;
+        player.drawnTile = null;
+      } else {
+        addedTile = removeTileById(player.hand, tileId) || removeTileById(player.hand, ensureArray(player.hand).find(same)?.id);
+      }
+      if (!addedTile) throw new Error("加槓する牌が見つかりません");
+      targetMeld.type = "kakan";
+      targetMeld.addedTile = addedTile;
+      targetMeld.tiles = [...ensureArray(targetMeld.tiles), addedTile];
+      appendHandEvent(state, { type: "kan", playerId: player.id, tiles: targetMeld.tiles, addedTile, kanType: "kakan", turnIndex: state.turnIndex ?? 0 });
+      addDoraAfterKan(state);
+      drawFromWall(state, player, "rinshanWall");
+      player.hand = sortHandTiles(player.hand);
+      state.currentPlayerIndex = state.players.findIndex((p) => p.id === player.id);
+      state.players.forEach((p) => { p.status = p.id === player.id ? "active" : "waiting"; });
+      state.pendingAction = null;
+      state.phase = "waitingForHumanDiscard";
+      const nextFlower = findAutoFlowerTile(player);
+      if (nextFlower && beginServerFlowerAnnouncement(state, player, nextFlower)) return state;
+      if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
+      return state;
+    }
     if (!isMinkan && player.isRiichi && !isRiichiSafeAnkanTile(player, baseTile)) {
       throw new Error("待ちが変わるためリーチ後はカンできません");
     }
@@ -1675,6 +1725,7 @@ const applyServerAction = (state, event) => {
   }
 
   if (action === "ron" || action === "tsumo") {
+    if (action === "ron") console.log("[Ron] clicked", { tableId: state.tableId, playerId: player.id, version: state.version });
     const winningTile = action === "tsumo"
       ? player.drawnTile
       : (payload.tile || payload.action?.sourceTile || payload.sourceTile);
@@ -1682,10 +1733,16 @@ const applyServerAction = (state, event) => {
     const pochiResolution = action === "tsumo" ? resolveServerPochiWin(state, player, winningTile, action, loserId) : null;
     const effectiveWinningTile = pochiResolution?.selectedWait || winningTile;
     const winCheck = pochiResolution?.winCheck || evaluateServerWin(state, player, effectiveWinningTile, action);
-    if (!winCheck.canWin) throw new Error(winCheck.reason || "和了できません");
+    if (!winCheck.canWin) {
+      if (action === "ron") console.log("[Ron] rejected", { tableId: state.tableId, playerId: player.id, reason: winCheck.reason || "和了できません", version: state.version });
+      throw new Error(winCheck.reason || "和了できません");
+    }
     if (action === "ron") {
       const waits = getWinningTilesForServerTenpai(player);
-      if (isServerFuritenForWaits(player, waits)) throw new Error("フリテンのためロンできません");
+      if (isServerFuritenForWaits(player, waits)) {
+        console.log("[Ron] rejected", { tableId: state.tableId, playerId: player.id, reason: "フリテンのためロンできません", version: state.version });
+        throw new Error("フリテンのためロンできません");
+      }
     }
     const scoreResult = pochiResolution?.scoreResult || calculateServerScoreResult(state, player, action, effectiveWinningTile, loserId, winCheck.yaku);
     for (const p of ensureArray(state.players)) {
@@ -1711,6 +1768,7 @@ const applyServerAction = (state, event) => {
       chipSettlement,
       tobiPrize,
     };
+    if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
     return state;
   }
@@ -1841,11 +1899,12 @@ const createWallTiles = (ruleConfigInput = {}, ruleId = "anmika-rocket") => {
       }
     }
   }
+  const usePochi = ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID;
   const pochiColors = ["red", "yellow", "green", "blue"];
   for (const kind of ["east", "south", "west", "north", "white", "green", "red"]) {
     for (let copy = 1; copy <= 4; copy++) {
-      const tile = { id: `honor-${kind}-${copy}`, suit: "honor", kind, color: "normal", isPochi: kind === "white" };
-      if (kind === "white") tile.pochiColor = pochiColors[copy - 1];
+      const tile = { id: `honor-${kind}-${copy}`, suit: "honor", kind, color: "normal", isPochi: usePochi && kind === "white" };
+      if (usePochi && kind === "white") tile.pochiColor = pochiColors[copy - 1];
       tiles.push(tile);
     }
   }
@@ -1915,7 +1974,7 @@ const isSevenPairsShapeServer = (counts) => {
   return pairs === 7;
 };
 const canRemoveAllMelds = (counts) => {
-  const first = [...counts.entries()].find(([, count]) => count > 0);
+  const first = firstPositiveCountEntry(counts);
   if (!first) return true;
   const [key, count] = first;
   if (count >= 3) {
@@ -2562,6 +2621,12 @@ export const createAnmikaGameHttpServer = () => {
   const httpServer = createHealthServer();
   attachAnmikaGameServer(httpServer);
   return httpServer;
+};
+
+export const __testHooks = {
+  getWinningTilesForServerTenpai,
+  isWinningShapeServer,
+  tileKindKey,
 };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
