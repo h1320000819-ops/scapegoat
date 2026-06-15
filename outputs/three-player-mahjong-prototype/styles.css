@@ -1324,6 +1324,30 @@ button:hover {
   text-shadow: 0 8px 0 #5b1710, 0 18px 42px rgba(0, 0, 0, 0.75);
 }
 
+.riichi-announcement > div {
+  color: #d8fff5;
+  font-size: clamp(54px, 10vw, 112px);
+  text-shadow: 0 6px 0 #063d4a, 0 0 34px rgba(38, 233, 255, 0.75), 0 18px 42px rgba(0, 0, 0, 0.75);
+}
+
+.fever-announcement > div {
+  animation: feverAnnounce 0.42s ease-in-out infinite alternate;
+  color: #fff1a8;
+  font-size: clamp(48px, 9vw, 104px);
+  text-shadow: 0 6px 0 #9a1a12, 0 0 24px rgba(255, 226, 58, 0.95), 0 0 52px rgba(255, 67, 67, 0.85), 0 18px 42px rgba(0, 0, 0, 0.78);
+}
+
+@keyframes feverAnnounce {
+  from {
+    transform: scale(0.96) rotate(-1deg);
+    filter: brightness(1);
+  }
+  to {
+    transform: scale(1.06) rotate(1deg);
+    filter: brightness(1.35);
+  }
+}
+
 .result-backdrop:active .result-modal {
   opacity: 0.08;
 }

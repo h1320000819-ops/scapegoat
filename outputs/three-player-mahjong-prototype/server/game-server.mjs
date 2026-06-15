@@ -681,6 +681,38 @@ const isServerNagashiYakumanPlayer = (player) => {
   return discards.length > 0 && discards.every(isServerTerminalOrHonorTile);
 };
 const isServerWhitePochiTile = (tile) => tile?.suit === "honor" && tile?.kind === "white" && tile?.isPochi;
+const isServerBaibaTriggerTile = (tile) => Boolean(
+  tile &&
+  (
+    tile.isRocket ||
+    tile.isPochi ||
+    tile.pochiColor ||
+    tile.color === "gold" ||
+    tile.color === "blue" ||
+    tile.color === "turquoise"
+  )
+);
+const getServerBaibaMultiplierDetails = (state, { includeUra = false, pochiColor = null } = {}) => {
+  const enabled = Boolean(state?.settings?.ruleConfig?.baibaEnabled);
+  const hasBaiba = enabled && ensureArray(state.doraIndicators).some(isServerBaibaTriggerTile);
+  const hasSpecialUra = enabled && includeUra && ensureArray(state.uraDoraIndicators).some(isServerBaibaTriggerTile);
+  const hasRedOrBluePochiTsumo = enabled && (pochiColor === "red" || pochiColor === "blue");
+  const conditionCount = Number(hasBaiba) + Number(hasSpecialUra) + Number(hasRedOrBluePochiTsumo);
+  return {
+    multiplier: conditionCount === 0 ? 1 : Math.min(4, conditionCount + 1),
+    conditionCount,
+    hasBaiba,
+    hasSpecialUra,
+    hasRedOrBluePochiTsumo,
+    pochiColor: hasRedOrBluePochiTsumo ? pochiColor : null,
+    labels: [
+      hasBaiba ? "倍場" : null,
+      hasSpecialUra ? "裏ドラ特殊牌" : null,
+      hasRedOrBluePochiTsumo ? (pochiColor === "red" ? "赤ぽっち" : "青ぽっち") : null,
+    ].filter(Boolean),
+  };
+};
+const calculateServerBaibaMultiplier = (state, options = {}) => getServerBaibaMultiplierDetails(state, options).multiplier;
 const serverPochiMultiplier = (tile) => {
   if (!isServerWhitePochiTile(tile)) return 1;
   if (tile.pochiColor === "red") return -2;
@@ -1050,7 +1082,7 @@ const evaluateServerWin = (state, player, tile, winType) => {
   if (riichiError) return riichiError;
   return { canWin: true, yaku: best.yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
 };
-const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku) => {
+const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku, options = {}) => {
   const winningTiles = [...ensureArray(player.hand), ...(tile ? [tile] : []), ...ensureArray(player.melds).flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
   const bonusSourceTiles = [...winningTiles, ...ensureArray(player.nukiDoraTiles)];
   const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
@@ -1133,7 +1165,11 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku)
   const countedYakumanBonus = !hasYakuman && totalHan >= 14 ? 20 : 0;
   const realYakumanBonus = hasYakuman ? 40 : 0;
   const bonusPoints = blueTileBonus + goldTileBonus + uraDoraBonus + honbaBonus + ippatsuBonus + countedYakumanBonus + realYakumanBonus;
-  const baibaMultiplier = Number(state.settings?.ruleConfig?.baibaEnabled ? state.settings?.baibaMultiplier || 2 : 1);
+  const baibaDetails = getServerBaibaMultiplierDetails(state, {
+    includeUra: player.isRiichi,
+    pochiColor: options.pochiColor || null,
+  });
+  const baibaMultiplier = baibaDetails.multiplier;
   const beforeBaibaPoints = basePoints + bonusPoints;
   const totalPoints = beforeBaibaPoints * baibaMultiplier;
   const payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
@@ -1176,6 +1212,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku)
       baiba: totalPoints - beforeBaibaPoints,
     },
     baibaMultiplier,
+    baibaDetails,
     payments,
     paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
     winnerGain: payments[player.id] || 0,
@@ -1213,7 +1250,7 @@ const resolveServerPochiWin = (state, player, pochiTile, winType = "tsumo", lose
   for (const candidateTile of candidates) {
     const winCheck = evaluateServerWin(state, player, candidateTile, winType);
     if (!winCheck.canWin) continue;
-    const scoreResult = calculateServerScoreResult(state, player, winType, candidateTile, loserId, winCheck.yaku);
+    const scoreResult = calculateServerScoreResult(state, player, winType, candidateTile, loserId, winCheck.yaku, { pochiColor: winType === "tsumo" ? pochiTile.pochiColor : null });
     const multiplier = serverPochiMultiplier(pochiTile);
     scoreResult.pochiActivated = true;
     scoreResult.pointMultiplier = multiplier;
@@ -1362,6 +1399,19 @@ const beginServerFlowerAnnouncement = (state, player, tile) => {
   state.clockStartedAt = null;
   appendHandEvent(state, { type: "flowerAnnouncement", playerId: player.id, tile, turnIndex: state.turnIndex ?? 0 });
   return true;
+};
+const beginServerWinAnnouncement = (state, player, winType) => {
+  const label = winType === "tsumo" ? "ツモ" : "ロン";
+  const playerName = player?.name ? `${player.name} ` : "";
+  state.phase = "showingWinAnnouncement";
+  state.winAnnouncement = `${playerName}${label}`;
+  state.serverAnnouncement = { text: state.winAnnouncement, kind: winType === "tsumo" ? "tsumo" : "ron" };
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.pendingServerEffect = {
+    type: "winAnnouncement",
+    resumeAt: Date.now() + 1000,
+  };
 };
 const drawRinshanAfterFlower = (state, player, removedFromDrawn) => {
   const tile = ensureArray(state.rinshanWall).shift();
@@ -1758,7 +1808,6 @@ const applyServerAction = (state, event) => {
       ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId)
       : null;
     state.pendingAction = null;
-    state.phase = "handEnded";
     state.handLog ??= {};
     state.handLog.result = {
       type: "win",
@@ -1773,6 +1822,7 @@ const applyServerAction = (state, event) => {
     };
     if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
+    beginServerWinAnnouncement(state, player, action);
     return state;
   }
 
@@ -2256,7 +2306,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       ruleId,
       gameType: settings.gameType || ruleId,
       ruleConfig: normalizedRuleConfig,
-      baibaMultiplier: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 1 : (normalizedRuleConfig.baibaEnabled ? 2 : 1),
+      baibaMultiplier: 1,
     },
     activeTableId: tableId,
     screen: "game",
@@ -2400,6 +2450,12 @@ const scheduleRoomServerEffect = (room) => {
     if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
     else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
     else if (room.state.pendingServerEffect.type === "riichiAutoDiscard") applyServerRiichiAutoDiscardEffect(room.state);
+    else if (room.state.pendingServerEffect.type === "winAnnouncement") {
+      room.state.pendingServerEffect = null;
+      room.state.winAnnouncement = null;
+      room.state.serverAnnouncement = null;
+      room.state.phase = "handEnded";
+    }
     advanceServerCpuTurns(room.state);
     room.version = Number(room.version || 0) + 1;
     room.state.version = room.version;

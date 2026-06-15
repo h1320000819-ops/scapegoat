@@ -1008,6 +1008,33 @@ const formatTile = (tile) => {
 const isFlowerTile = (tile) => tile?.suit === "flower";
 const tileKindKey = (tile) => tile.suit === "honor" || tile.suit === "flower" ? `${tile.suit}-${tile.kind}` : `${tile.suit}-${tile.rank}`;
 const sameTileKind = (a, b) => tileKindKey(a) === tileKindKey(b);
+const isBaibaTriggerTile = (tile) => Boolean(
+  tile &&
+  (
+    tile.isRocket ||
+    tile.isPochi ||
+    tile.pochiColor ||
+    tile.color === "gold" ||
+    tile.color === "blue" ||
+    tile.color === "turquoise"
+  )
+);
+const getVisibleBaibaMultiplierDetails = (state) => {
+  const enabled = Boolean(state?.settings?.ruleConfig?.baibaEnabled);
+  const hasBaiba = enabled && (state.doraIndicators ?? []).some(isBaibaTriggerTile);
+  const hasSpecialUra = enabled && Boolean(state.handLog?.result) && (state.uraDoraIndicators ?? []).some(isBaibaTriggerTile);
+  const pochiColor = state.handLog?.result?.scoreResult?.pochiColor || null;
+  const hasRedOrBluePochi = enabled && (pochiColor === "red" || pochiColor === "blue");
+  const conditionCount = Number(hasBaiba) + Number(hasSpecialUra) + Number(hasRedOrBluePochi);
+  return {
+    multiplier: conditionCount === 0 ? 1 : Math.min(4, conditionCount + 1),
+    labels: [
+      hasBaiba ? "倍場" : null,
+      hasSpecialUra ? "裏ドラ特殊牌" : null,
+      hasRedOrBluePochi ? (pochiColor === "red" ? "赤ぽっち" : "青ぽっち") : null,
+    ].filter(Boolean),
+  };
+};
 const getDoraTileTypeFromIndicator = (indicator) => {
   if (indicator.suit === "pinzu" || indicator.suit === "souzu") return `${indicator.suit}-${indicator.rank === 9 ? 1 : indicator.rank + 1}`;
   if (indicator.suit === "manzu") return `manzu-${indicator.rank === 1 ? 9 : 1}`;
@@ -1780,7 +1807,7 @@ class RuleEngine {
     const uraDoraBonus = (input.uraDoraCount ?? 0) * 5;
     const honbaBonus = (input.honba ?? 0) * 5;
     const ippatsuBonus = input.isIppatsu ? 5 : 0;
-    const baibaMultiplier = input.baibaMultiplier ?? state.settings?.baibaMultiplier ?? 1;
+    const baibaMultiplier = input.baibaMultiplier ?? getVisibleBaibaMultiplierDetails(state).multiplier;
     const blueTileBonus = blueTileCount * 20;
     const bonusPoints = blueTileBonus + goldTileCount * 5 + uraDoraBonus + honbaBonus + ippatsuBonus + countedYakumanBonus + realYakumanBonus;
     const beforeBaibaPoints = basePoints + bonusPoints;
@@ -2072,6 +2099,8 @@ class GameController {
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
     this.lastDisplayedResultKey = "";
+    this.lastDisplayedAnnouncementKey = "";
+    this.announcementClearTimer = null;
     this.setupGlobalResultOkHandler();
     document.addEventListener("anmika-result-ok", (event) => {
       event?.preventDefault?.();
@@ -2530,7 +2559,7 @@ class GameController {
       this.state.settings.ruleId = table.ruleId ?? "anmika-rocket";
       this.state.settings.gameType = table.gameType ?? table.ruleId ?? "anmika-rocket";
       this.state.settings.ruleConfig = normalizeRuleConfigForRule(this.state.settings.ruleId, table.ruleConfig);
-      this.state.settings.baibaMultiplier = this.state.settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 1 : (this.state.settings.ruleConfig.baibaEnabled ? 2 : 1);
+      this.state.settings.baibaMultiplier = 1;
       for (const [index, seat] of normalizedSeats.entries()) {
         const player = this.state.players[index] ?? createPlayer(`cpu${index}`, `CPU${index}`, "cpu");
         this.state.players[index] = player;
@@ -2660,7 +2689,26 @@ class GameController {
         turnIndex: next.turnIndex,
       })
       : "";
-    if (next.handLog?.result && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
+    const latestEvent = next.handLog?.events?.at?.(-1);
+    if (latestEvent?.type === "riichi") {
+      const announcementKey = `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}`;
+      if (announcementKey !== this.lastDisplayedAnnouncementKey) {
+        this.lastDisplayedAnnouncementKey = announcementKey;
+        const announcer = next.players?.find((player) => player.id === latestEvent.playerId);
+        next.serverAnnouncement = {
+          text: latestEvent.feverRiichiActive ? `${announcer?.name ?? ""} 🔥フィーバーリーチ🔥` : `${announcer?.name ?? ""} リーチ`,
+          kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
+        };
+        if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
+        this.announcementClearTimer = setTimeout(() => {
+          if (this.state.serverAnnouncement?.kind === next.serverAnnouncement.kind) {
+            this.state.serverAnnouncement = null;
+            this.emit();
+          }
+        }, latestEvent.feverRiichiActive ? 1800 : 1000);
+      }
+    }
+    if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Date.now();
       next.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
@@ -4766,12 +4814,18 @@ class GameView {
       ${state.onlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}</div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
       ${state.phase === "showingWinAnnouncement" ? this.winAnnouncement(state) : ""}
+      ${state.serverAnnouncement && state.phase !== "showingWinAnnouncement" ? this.serverAnnouncement(state) : ""}
       ${state.phase === "showingFlowerAnnouncement" ? this.flowerAnnouncement(state) : ""}
       ${state.handLog.result && state.phase !== "showingWinAnnouncement" ? this.result(state) : ""}
     </section>`;
   }
   winAnnouncement(state) {
     return `<div class="win-announcement"><div>${state.winAnnouncement ?? ""}</div></div>`;
+  }
+  serverAnnouncement(state) {
+    const announcement = state.serverAnnouncement || {};
+    const className = announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : "";
+    return `<div class="win-announcement ${className}"><div>${escapeHtml(announcement.text ?? "")}</div></div>`;
   }
   flowerAnnouncement(state) {
     return `<div class="win-announcement flower-announcement"><div>${state.flowerAnnouncement ?? "華"}</div></div>`;
@@ -4804,11 +4858,8 @@ class GameView {
     return { bottom: human, right: cpus[0], top: cpus[1] };
   }
   centerInfoClean(state, dealer) {
-    const baibaMultiplier = Number(state.handLog?.result?.scoreResult?.baibaMultiplier ?? state.baibaMultiplier ?? 0);
-    const baibaLabel = state.settings?.ruleConfig?.baibaEnabled
-      ? (baibaMultiplier > 1 ? `×${baibaMultiplier}` : "倍場")
-      : "";
-    const roundLabel = `東場${baibaLabel ? `（${baibaLabel}）` : ""}`;
+    const baibaDetails = getVisibleBaibaMultiplierDetails(state);
+    const roundLabel = `東場${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
     const playerRows = (state.players ?? []).map((player) => {
       const role = getSeatRoleLabel(state, player.id);
       return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${player.score}点</strong><em>${role}</em></li>`;
@@ -4988,6 +5039,7 @@ class GameView {
     const baibaMultiplier = Number(score.baibaMultiplier ?? 1);
     const pochiMultiplier = Number(score.pointMultiplier ?? 1);
     const multiplierTotal = baibaMultiplier * pochiMultiplier;
+    const multiplierLabels = score.baibaDetails?.labels?.length ? `（${score.baibaDetails.labels.join("・")}）` : "";
     const pochiLabel = score.pochiColor ? (pochiText[score.pochiColor] ?? `${score.pochiColor}ぽっち`) : "";
     const selectedWaitLine = score.pochiActivated && winningTile
       ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(winningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
@@ -5024,7 +5076,7 @@ class GameView {
       <ul class="score-yaku compact-yaku">${yakuRows.join("")}</ul>
       <div class="compact-score-lines">
         <p>追加点合計 ${score.bonusPoints ?? 0}</p>
-        <p>倍率合計 x${multiplierTotal}</p>
+        <p>倍率合計 ×${multiplierTotal}${multiplierLabels}</p>
         <p class="final-score-line">点数 ${score.finalPoints ?? score.totalPoints ?? 0}点</p>
       </div>
       <ul class="score-payments">
