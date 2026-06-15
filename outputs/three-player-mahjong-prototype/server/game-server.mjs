@@ -1317,6 +1317,9 @@ const canServerRon = (state, player, sourceTile) => {
 };
 const hasServerPureClosedTriplet = (player, suit, rank) => {
   const targetKey = `${suit}:${rank}`;
+  if (ensureArray(player?.melds).some((meld) => meld?.type === "ankan" && ensureArray(meld.tiles).some((tile) => tileKindKey(tile) === targetKey))) {
+    return true;
+  }
   const handTiles = ensureArray(player?.hand).filter((tile) => tileKindKey(tile) === targetKey);
   const drawnMatches = player?.drawnTile && tileKindKey(player.drawnTile) === targetKey ? 1 : 0;
   if (handTiles.length + drawnMatches < 3) return false;
@@ -1325,6 +1328,15 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
   const counts = countTilesForShape(visibleTiles);
   const targetCount = counts.get(targetKey) || 0;
   if (targetCount < 3) return false;
+  const parsed = parseServerNumberKey(targetKey);
+  if (parsed) {
+    const sequencePatterns = [
+      [`${parsed.suit}:${parsed.rank - 2}`, `${parsed.suit}:${parsed.rank - 1}`],
+      [`${parsed.suit}:${parsed.rank - 1}`, `${parsed.suit}:${parsed.rank + 1}`],
+      [`${parsed.suit}:${parsed.rank + 1}`, `${parsed.suit}:${parsed.rank + 2}`],
+    ];
+    if (sequencePatterns.some((keys) => keys.every((candidate) => (counts.get(candidate) || 0) > 0))) return false;
+  }
 
   const withoutTriplet = cloneCounts(counts);
   withoutTriplet.set(targetKey, targetCount - 3);
@@ -1402,9 +1414,8 @@ const beginServerFlowerAnnouncement = (state, player, tile) => {
 };
 const beginServerWinAnnouncement = (state, player, winType) => {
   const label = winType === "tsumo" ? "ツモ" : "ロン";
-  const playerName = player?.name ? `${player.name} ` : "";
   state.phase = "showingWinAnnouncement";
-  state.winAnnouncement = `${playerName}${label}`;
+  state.winAnnouncement = label;
   state.serverAnnouncement = { text: state.winAnnouncement, kind: winType === "tsumo" ? "tsumo" : "ron" };
   state.activeClockPlayerId = null;
   state.clockStartedAt = null;
@@ -1506,6 +1517,21 @@ const enterCurrentTurnOnServer = (state) => {
   }
   const flower = findAutoFlowerTile(player);
   if (flower && beginServerFlowerAnnouncement(state, player, flower)) return;
+  const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+  if (feverPlayer && feverPlayer.id !== player.id) {
+    state.phase = "riichiAutoDiscard";
+    state.isWaitingForHumanAction = false;
+    state.activeClockPlayerId = null;
+    state.clockStartedAt = null;
+    state.pendingServerEffect = {
+      type: "riichiAutoDiscard",
+      playerId: player.id,
+      resumeAt: Date.now() + 850,
+      reason: "feverRiichiForcedDiscard",
+    };
+    appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+    return;
+  }
   if (queueServerSelfDrawOptions(state, player)) return;
 };
 const discardForServer = (state, player, tileId, { isRiichiDiscard = false, resolveAfterDiscard = true } = {}) => {
@@ -1535,6 +1561,24 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   enterCurrentTurnOnServer(state);
   return tile;
 };
+const continueAfterServerFeverWin = (state) => {
+  const result = state.handLog?.result;
+  if (!result?.isFeverContinuation) return false;
+  const winner = findPlayer(state, result.winnerId);
+  if (winner?.drawnTile && result.winType === "tsumo") winner.drawnTile = null;
+  state.handLog.result = null;
+  state.resultOkPlayerIds = [];
+  state.pendingAction = null;
+  state.winAnnouncement = null;
+  state.serverAnnouncement = null;
+  state.pendingServerEffect = null;
+  state.phase = "playing";
+  state.isWaitingForHumanAction = false;
+  advanceTurn(state);
+  enterCurrentTurnOnServer(state);
+  appendHandEvent(state, { type: "feverContinuation", playerId: result.winnerId, feverWinCount: result.feverWinCount ?? winner?.feverWinCount ?? 1, turnIndex: state.turnIndex ?? 0 });
+  return true;
+};
 const addDoraAfterKan = (state) => {
   state.kanCount = Number(state.kanCount || 0) + 1;
   const indicator = ensureArray(state.liveWall).shift();
@@ -1562,6 +1606,7 @@ const applyServerAction = (state, event) => {
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
     const allOk = requiredOkPlayerIds.length === 0 || requiredOkPlayerIds.every((id) => state.resultOkPlayerIds.includes(id));
     if (!allOk) return state;
+    if (continueAfterServerFeverWin(state)) return state;
     if (isTsumoLossless3maState(state)) {
       const result = state.handLog?.result;
       if (isTsumoLosslessHanchanFinished(state)) {
@@ -1628,11 +1673,13 @@ const applyServerAction = (state, event) => {
       player.isRiichi = true;
       player.ippatsu = true;
       player.riichiTurnIndex = state.turnIndex ?? 0;
-      player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(player));
       player.feverWinCount = 0;
       player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
-      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
+      const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== payload.tileId);
+      const feverCheckPlayer = { ...player, hand: afterRiichiDiscardTiles, drawnTile: null };
+      player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(feverCheckPlayer));
       discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
+      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
       player.riichiDiscardTileIds = [];
     } else {
       state.pendingAction = null;
@@ -1807,6 +1854,12 @@ const applyServerAction = (state, event) => {
     const tobiPrize = isTsumoLossless3maState(state)
       ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId)
       : null;
+    let isFeverContinuation = false;
+    if (player.feverRiichiActive) {
+      player.feverWinCount = Number(player.feverWinCount || 0) + 1;
+      isFeverContinuation = player.feverWinCount < 2;
+      if (!isFeverContinuation) player.feverRiichiActive = false;
+    }
     state.pendingAction = null;
     state.handLog ??= {};
     state.handLog.result = {
@@ -1819,6 +1872,8 @@ const applyServerAction = (state, event) => {
       payments: scoreResult.paymentDeltas,
       chipSettlement,
       tobiPrize,
+      isFeverContinuation,
+      feverWinCount: player.feverWinCount ?? 0,
     };
     if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
@@ -2593,9 +2648,12 @@ io.on("connection", (socket) => {
   });
 
   socket.on("game:action", (payload = {}, ack) => {
+    let room = null;
+    let playerIdForAck = payload?.playerId || socket.data.userId || null;
     try {
       const { tableId, gameId, playerId, actionType, turnVersion, payload: actionPayload } = payload;
-      const room = getOrCreateRoom({ tableId, gameId });
+      playerIdForAck = playerId || playerIdForAck;
+      room = getOrCreateRoom({ tableId, gameId });
       if (!room.state) throw new Error("対局が初期化されていません");
       const requestId = actionPayload?.discardRequestId || actionPayload?.requestId || payload.requestId || "";
       if (requestId && room.processedRequestIds?.has(requestId)) {
@@ -2604,7 +2662,10 @@ io.on("connection", (socket) => {
       }
       let clientVersion = Number(turnVersion ?? room.version);
       if (actionType === "resultOk") clientVersion = room.version;
-      if (clientVersion !== room.version) throw new Error("局面のバージョンが古いため操作できません");
+      if (clientVersion !== room.version) {
+        console.warn("[Version] stale action accepted for revalidation", { tableId, actionType, clientVersion, serverVersion: room.version });
+        clientVersion = room.version;
+      }
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
       const event = {
         id: `event-${randomUUID()}`,
@@ -2647,7 +2708,7 @@ io.on("connection", (socket) => {
       scheduleRoomResultTimeout(room);
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
     } catch (error) {
-      ack?.({ ok: false, error: error.message });
+      ack?.({ ok: false, error: error.message, ...(room?.state ? publicRoomState(room, playerIdForAck) : {}) });
     }
   });
 

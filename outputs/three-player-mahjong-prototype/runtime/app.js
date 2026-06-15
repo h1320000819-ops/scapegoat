@@ -342,14 +342,28 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
   if (sync?.transport === "socketio") {
     const socket = globalThis.anmikaGameSocket;
     if (actionType === "ron") console.log("[Ron] clicked", { tableId: sync.tableId, gameId: sync.gameId, version: sync.version, payload });
-    const response = await socketEmitWithAck(socket, "game:action", {
-      tableId: sync.tableId,
-      gameId: sync.gameId,
-      playerId: sync.userId,
-      actionType,
-      turnVersion: sync.version ?? 0,
-      payload,
-    });
+    let response;
+    try {
+      response = await socketEmitWithAck(socket, "game:action", {
+        tableId: sync.tableId,
+        gameId: sync.gameId,
+        playerId: sync.userId,
+        actionType,
+        turnVersion: sync.version ?? 0,
+        payload,
+      });
+    } catch (error) {
+      if (error.response?.state) {
+        saveOnlineSync({
+          ...sync,
+          version: error.response.version ?? sync.version ?? 0,
+          lastServerState: error.response.state,
+          lastSyncedAt: Date.now(),
+        });
+        globalThis.__anmikaController?.applyOnlineStateSnapshot?.(error.response.state);
+      }
+      throw error;
+    }
     saveOnlineSync({
       ...sync,
       version: response?.version ?? sync.version ?? 0,
@@ -2079,6 +2093,7 @@ const resolvePochiWin = (gameState, player, pochiTile, ruleEngine) => {
 };
 
 const hasFeverRiichiTriplet = (player) => (
+  (player.melds ?? []).some((meld) => meld.type === "ankan" && (meld.tiles ?? []).some((tile) => tileKindKey(tile) === "pinzu-7" || tileKindKey(tile) === "souzu-7")) ||
   isPureClosedTriplet(player.hand ?? [], "pinzu-7") ||
   isPureClosedTriplet(player.hand ?? [], "souzu-7")
 );
@@ -2694,9 +2709,8 @@ class GameController {
       const announcementKey = `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}`;
       if (announcementKey !== this.lastDisplayedAnnouncementKey) {
         this.lastDisplayedAnnouncementKey = announcementKey;
-        const announcer = next.players?.find((player) => player.id === latestEvent.playerId);
         next.serverAnnouncement = {
-          text: latestEvent.feverRiichiActive ? `${announcer?.name ?? ""} 🔥フィーバーリーチ🔥` : `${announcer?.name ?? ""} リーチ`,
+          text: latestEvent.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
           kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
         };
         if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
@@ -3629,7 +3643,7 @@ class GameController {
     this.state.pendingAction = null;
     this.state.phase = "showingWinAnnouncement";
     const announcement = input.winType === "tsumo" ? "ツモ" : "ロン";
-    this.state.winAnnouncement = winner.type === "human" ? announcement : `${winner.name} ${announcement}`;
+    this.state.winAnnouncement = announcement;
     this.state.isWaitingForHumanAction = false;
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
