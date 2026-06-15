@@ -685,8 +685,23 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
   markReplaySyncApplied(room.state, key, replayId);
   console.log("[ReplaySync] saved", { tableId: room.tableId, gameId: room.gameId, replayId, scope, snapshots: compactSnapshots.length });
-  persistRoom(room);
+  if (!room.skipPersistOnReplaySave) persistRoom(room);
   return true;
+};
+const queueReplayEffectsSnapshot = (room) => {
+  if (!room?.state?.handLog?.result) return;
+  const snapshotRoom = {
+    ...room,
+    state: clone(room.state),
+    events: clone(asArray(room.events)),
+    sockets: new Map(),
+    processedRequestIds: new Set(asArray(room.processedRequestIds)),
+    replaySyncInFlight: null,
+    skipPersistOnReplaySave: true,
+  };
+  syncReplayEffects(snapshotRoom).catch((error) => {
+    console.error("[ReplaySync] queued snapshot failed", { tableId: room?.tableId, gameId: room?.gameId, error });
+  });
 };
 const syncReplayEffects = async (room) => {
   if (!room?.state || room.replaySyncInFlight) return room?.replaySyncInFlight;
@@ -3012,9 +3027,9 @@ const scheduleRoomResultTimeout = (room) => {
   if (!isWaitingForResultOk(room.state)) return;
   room.state.resultCountdownStartedAt ??= Date.now();
   const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + RESULT_AUTO_OK_DELAY_MS - Date.now());
-  room.resultTimer = setTimeout(async () => {
+  room.resultTimer = setTimeout(() => {
     room.resultTimer = null;
-    await syncReplayEffects(room);
+    queueReplayEffectsSnapshot(room);
     if (!applyAutoResultOk(room.state)) return;
     advanceServerCpuTurns(room.state);
     room.version = Number(room.version || 0) + 1;
@@ -3221,7 +3236,7 @@ io.on("connection", (socket) => {
       }
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
       if (actionType === "resultOk" && room.state?.handLog?.result) {
-        await syncReplayEffects(room);
+        queueReplayEffectsSnapshot(room);
       }
       const event = {
         id: `event-${randomUUID()}`,
