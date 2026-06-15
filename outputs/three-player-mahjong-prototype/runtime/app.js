@@ -839,6 +839,22 @@ const clubRepository = {
     return clubRepository.saveClub(club);
   },
 };
+const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻" : "アンミカロケット";
+const replayResultSummaryFromState = (state, result) => {
+  if (!result) return "結果なし";
+  const playerName = (playerId) => state?.players?.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
+  const payments = result?.scoreResult?.payments || result?.scoreResult?.paymentDeltas || result?.payments || {};
+  const entries = Array.isArray(payments)
+    ? payments.map((item) => [item.playerId, item.delta])
+    : Object.entries(payments);
+  const paymentText = entries
+    .filter(([, delta]) => Number(delta || 0) !== 0)
+    .map(([playerId, delta]) => `${playerName(playerId)} ${Number(delta) > 0 ? "+" : ""}${delta}`)
+    .join(" / ");
+  if (result.type === "exhaustiveDraw") return paymentText ? `流局 / ${paymentText}` : "流局 / 点数移動なし";
+  if (result.type === "win") return `${playerName(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}${paymentText ? ` / ${paymentText}` : ""}`;
+  return result.type || "結果";
+};
 const replayRepository = {
   listReplays: () => loadReplays()
     .filter((replay) => replay?.summary || replay?.replayId)
@@ -848,10 +864,12 @@ const replayRepository = {
       clubId: replay.summary?.clubId ?? replay.initialState?.selectedClubId ?? replay.initialState?.activeClubId ?? loadTables().find((table) => table.id === (replay.summary?.tableId ?? replay.initialState?.activeTableId))?.clubId,
       tableId: replay.summary?.tableId ?? replay.initialState?.activeTableId,
       ruleId: replay.summary?.ruleId ?? "anmika-rocket",
+      ruleName: replay.summary?.ruleName ?? replayRuleName(replay.summary?.ruleId ?? "anmika-rocket"),
       startedAt: replay.summary?.startedAt ?? replay.initialState?.handLog?.handId?.split("-").at(-1) ?? now(),
       endedAt: replay.summary?.endedAt ?? now(),
       players: replay.summary?.players ?? replay.initialState?.players?.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })) ?? [],
       resultLabel: replay.summary?.resultLabel ?? replay.initialState?.handLog?.result?.type ?? "牌譜",
+      resultSummary: replay.summary?.resultSummary ?? replayResultSummaryFromState(replay.initialState, replay.initialState?.handLog?.result),
     }))
     .filter((summary) => summary.replayId),
   getReplay: (id) => loadReplays().find((replay) => replay.replayId === id || replay.summary?.replayId === id),
@@ -878,7 +896,7 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const filters = [
     "select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at",
     "order=created_at.desc",
-    "limit=200",
+    `limit=${replayId ? 1 : 100}`,
   ];
   if (clubId) filters.push(`club_id=eq.${encodeURIComponent(clubId)}`);
   if (replayId) filters.push(`replay_id=eq.${encodeURIComponent(replayId)}`);
@@ -2415,7 +2433,7 @@ class GameController {
     this.emit();
   }
   async refreshReplaysFromSupabase({ replayId = "" } = {}) {
-    const rows = await fetchSupabaseReplayRows({ clubId: replayId ? "" : this.state.selectedClubId, replayId });
+    const rows = await fetchSupabaseReplayRows({ replayId });
     const replays = rows.map(replayFromSupabaseRow);
     this.state.replaySummaries = mergeReplaysIntoLocalStore(replays);
     this.emit();
@@ -3144,10 +3162,12 @@ class GameController {
         clubId: this.state.activeClubId ?? table?.clubId ?? undefined,
         tableId: this.state.activeTableId ?? undefined,
         ruleId: table?.ruleId ?? "anmika-rocket",
+        ruleName: replayRuleName(table?.ruleId ?? "anmika-rocket"),
         startedAt: Number(this.state.handLog.handId.split("-").at(-1)) || endedAt,
         endedAt,
         players: this.state.players.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })),
         resultLabel: result.type === "win" ? `${getPlayerNameById(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}` : "流局",
+        resultSummary: replayResultSummaryFromState(this.state, result),
       },
       initialState: this.state.replayInitialState ?? cloneSnapshot(this.state),
       events: [...this.state.handLog.events],
@@ -3296,6 +3316,63 @@ class GameController {
     member.pointBalance -= amount;
     club.clubPointBalance += amount;
     clubRepository.saveClub(club);
+    this.refreshStoredData();
+    this.emit();
+  }
+  removeClubMember(clubId, adminUserId, memberUserId) {
+    const club = normalizeClub(clubRepository.getClub(clubId));
+    if (!club || getClubRole(adminUserId, club) !== "admin") {
+      this.state.log.unshift("メンバー削除に失敗しました: 権限がありません");
+      this.emit();
+      return;
+    }
+    const member = club.members.find((item) => item.userId === memberUserId);
+    if (!member) {
+      this.state.log.unshift("メンバー削除に失敗しました: メンバーが見つかりません");
+      this.emit();
+      return;
+    }
+    if (member.role === "admin" || member.userId === adminUserId) {
+      this.state.log.unshift("管理者はこの画面から削除できません");
+      this.emit();
+      return;
+    }
+    const memberName = getPlayerNameById(memberUserId);
+    if (!globalThis.confirm?.(`${memberName} をクラブから削除しますか？\nこのメンバーのクラブポイントはすべてクラブ側へ戻ります。`)) return;
+    const balance = Number(member.pointBalance || 0);
+    club.clubPointBalance = Number(club.clubPointBalance || 0) + balance;
+    club.members = club.members.filter((item) => item.userId !== memberUserId);
+    club.pendingApplicants = club.pendingApplicants.filter((id) => id !== memberUserId);
+    clubRepository.saveClub(club);
+    const points = loadClubMemberPoints().filter((item) => !(item.clubId === clubId && item.userId === memberUserId));
+    saveClubMemberPoints(points);
+    this.state.log.unshift(`${memberName} をクラブから削除しました`);
+    this.refreshStoredData();
+    this.emit();
+  }
+  grantClubAdminRole(clubId, adminUserId, memberUserId) {
+    const club = normalizeClub(clubRepository.getClub(clubId));
+    if (!club || getClubRole(adminUserId, club) !== "admin") {
+      this.state.log.unshift("管理者権限の付与に失敗しました: 権限がありません");
+      this.emit();
+      return;
+    }
+    const member = club.members.find((item) => item.userId === memberUserId);
+    if (!member) {
+      this.state.log.unshift("管理者権限の付与に失敗しました: メンバーが見つかりません");
+      this.emit();
+      return;
+    }
+    if (member.role === "admin") {
+      this.state.log.unshift("このメンバーはすでに管理者権限を持っています");
+      this.emit();
+      return;
+    }
+    const memberName = getPlayerNameById(memberUserId);
+    if (!globalThis.confirm?.(`${memberName} に管理者権限を付与しますか？\n卓作成、加入承認、クラブポイント管理ができるようになります。`)) return;
+    member.role = "admin";
+    clubRepository.saveClub(club);
+    this.state.log.unshift(`${memberName} に管理者権限を付与しました`);
     this.refreshStoredData();
     this.emit();
   }
@@ -4298,6 +4375,30 @@ const renderMeldSet = (state, ownerId, meld) => {
     <span class="meld-tiles">${tiles}</span>
   </span>`;
 };
+const resultHand13Tiles = (score, winner, winningTile) => {
+  const explicit = (score?.hand13Tiles ?? score?.tenpaiHandTiles ?? []).filter((tile) => tile && !isFlowerTile(tile));
+  if (explicit.length) return sortHandTiles(explicit).slice(0, 13);
+  const winnerHand = (winner?.hand ?? []).filter((tile) => tile && !isFlowerTile(tile));
+  if (winnerHand.length >= 13) return sortHandTiles(winnerHand).slice(0, 13);
+  const winningTileId = winningTile?.id;
+  const winningKind = winningTile ? tileKindKey(winningTile) : "";
+  let removedWinning = false;
+  const fromWinningTiles = (score?.winningTiles ?? [])
+    .filter((tile) => tile && !isFlowerTile(tile))
+    .filter((tile) => {
+      if (removedWinning) return true;
+      if ((winningTileId && tile.id === winningTileId) || (!winningTileId && winningKind && tileKindKey(tile) === winningKind)) {
+        removedWinning = true;
+        return false;
+      }
+      return true;
+    });
+  return sortHandTiles(fromWinningTiles).slice(0, 13);
+};
+const resultMeldsView = (state, winner) => {
+  const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld)).join("");
+  return melds ? `<div><strong>副露</strong><div class="result-melds exposed-tiles">${melds}</div></div>` : "";
+};
 class GameView {
   constructor(root, handlers) {
     this.root = root;
@@ -4469,6 +4570,8 @@ class GameView {
     this.root.querySelectorAll("[data-create-club-table]").forEach((b) => b.addEventListener("click", () => this.handlers.onCreateClubTable(b.dataset.createClubTable)));
     this.root.querySelectorAll("[data-transfer-points]").forEach((b) => b.addEventListener("click", () => this.handlers.onTransferPoints(b.dataset.clubId, b.dataset.transferPoints, 100)));
     this.root.querySelectorAll("[data-collect-points]").forEach((b) => b.addEventListener("click", () => this.handlers.onCollectPoints(b.dataset.clubId, b.dataset.collectPoints, 100)));
+    this.root.querySelectorAll("[data-grant-club-admin]").forEach((b) => b.addEventListener("click", () => this.handlers.onGrantClubAdmin?.(b.dataset.clubId, b.dataset.grantClubAdmin)));
+    this.root.querySelectorAll("[data-remove-club-member]").forEach((b) => b.addEventListener("click", () => this.handlers.onRemoveClubMember?.(b.dataset.clubId, b.dataset.removeClubMember)));
   }
   appShell(state) {
     const title = { auth: "ログイン", clubSelect: "クラブ選択", accountSettings: "アカウント設定", onlineTodo: "未決定仕様", clubHome: "クラブ内ホーム", clubTables: "クラブ内卓一覧", createTable: "卓作成", memberManagement: "メンバー管理", home: "ホーム", tableList: "卓一覧", tableRoom: "卓詳細", replayList: "牌譜一覧", replayViewer: "牌譜再生", clubList: "クラブ一覧", clubDetail: "クラブ詳細" }[state.screen] ?? "ホーム";
@@ -4724,7 +4827,11 @@ class GameView {
     const isAdmin = canCreateTable(state.currentUser.id, club);
     return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
       <h3>メンバー</h3>
-      <ul>${normalizeClub(club).members.map((member) => `<li>${getPlayerNameById(member.userId)} / ${member.role} / ${member.pointBalance}pt ${isAdmin ? `<button type="button" data-club-id="${club.id}" data-transfer-points="${member.userId}">+100</button><button type="button" data-club-id="${club.id}" data-collect-points="${member.userId}">-100</button>` : ""}</li>`).join("")}</ul>
+      <ul>${normalizeClub(club).members.map((member) => {
+        const canRemove = isAdmin && member.role !== "admin" && member.userId !== state.currentUser.id;
+        const canGrantAdmin = isAdmin && member.role !== "admin";
+        return `<li>${getPlayerNameById(member.userId)} / ${member.role === "admin" ? "管理者権限" : "メンバー"} / ${member.pointBalance}pt ${isAdmin ? `<button type="button" data-club-id="${club.id}" data-transfer-points="${member.userId}">+100</button><button type="button" data-club-id="${club.id}" data-collect-points="${member.userId}">-100</button>${canGrantAdmin ? `<button type="button" data-club-id="${club.id}" data-grant-club-admin="${member.userId}">管理者権限を付与</button>` : ""}${canRemove ? `<button type="button" class="danger" data-club-id="${club.id}" data-remove-club-member="${member.userId}">削除</button>` : ""}` : ""}</li>`;
+      }).join("")}</ul>
       <h3>加入申請</h3>
       <ul>${normalizeClub(club).pendingApplicants.map((id) => `<li>${getPlayerNameById(id)} ${isAdmin ? `<button type="button" data-club-id="${club.id}" data-approve-applicant="${id}">承認</button><button type="button" data-club-id="${club.id}" data-reject-applicant="${id}">拒否</button>` : ""}</li>`).join("") || "<li>なし</li>"}</ul>
     </section>`;
@@ -4808,16 +4915,19 @@ class GameView {
     </section>`;
   }
   replayListScreen(state) {
-    state.replaySummaries = state.selectedClubId ? replayRepository.listReplaysByClub(state.selectedClubId) : replayRepository.listReplays();
+    state.replaySummaries = replayRepository.listReplays().slice(0, 100);
     const emptyMessage = `<div class="empty-replay-note">
       <p>保存された牌譜はまだありません。</p>
-      <p>注意: <code>file:///</code> で遊んだ牌譜と <code>http://127.0.0.1:5173/</code> で遊んだ牌譜は、ブラウザ上では別の保存領域になります。</p>
+      <p>この画面では、クラブに関係なくログイン中アカウントで取得できる直近100本を表示します。</p>
     </div>`;
     return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="${state.selectedClubId ? "clubHome" : "clubSelect"}">${state.selectedClubId ? "クラブホーム" : "クラブ選択"}</button></div>
+      <h3>牌譜一覧（直近100本）</h3>
       <div class="card-grid">${state.replaySummaries.map((summary) => `<article class="lobby-card replay-card" data-replay-card="${summary.replayId}">
         <h3>${summary.resultLabel}</h3>
         <p>${new Date(summary.endedAt).toLocaleString("ja-JP")}</p>
-        <p>${summary.players.map((player) => `${player.name}: ${player.finalScore}`).join(" / ")}</p>
+        <p>ルール: ${escapeHtml(summary.ruleName || summary.ruleId || "アンミカロケット")}</p>
+        <p>対局者: ${summary.players.map((player) => `${escapeHtml(player.name)}${player.finalScore !== undefined ? ` ${player.finalScore}点` : ""}`).join(" / ")}</p>
+        <p>結果: ${escapeHtml(summary.resultSummary || summary.resultLabel || "牌譜")}</p>
         <p class="replay-url">${summary.replayUrl ?? replayUrlFor(summary.replayId)}</p>
         <div class="screen-actions"><a class="button-link" href="${replayUrlFor(summary.replayId)}" data-open-replay="${summary.replayId}">再生</a><button type="button" data-copy-replay-url="${summary.replayId}">URLコピー</button></div>
       </article>`).join("") || emptyMessage}</div>
@@ -5129,8 +5239,9 @@ class GameView {
     const playerName = (playerId) => state.players.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
     const bonus = score.bonuses ?? {};
     const yakuList = score.yakuList ?? score.yaku ?? [];
-    const handTiles = (score.winningTiles ?? winner?.hand ?? []).filter((tile) => tile && !isFlowerTile(tile)).slice(0, 13);
     const winningTile = score.winningTile ?? score.selectedWait ?? result?.winningTile ?? null;
+    const handTiles = resultHand13Tiles(score, winner, winningTile);
+    const meldsView = resultMeldsView(state, winner);
     const payments = Array.isArray(score.paymentDeltas)
       ? Object.fromEntries(score.paymentDeltas.map((payment) => [payment.playerId, payment.delta]))
       : Array.isArray(score.payments)
@@ -5185,6 +5296,7 @@ class GameView {
       <div class="score-tile-section">
         <div><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
         <div><strong>和了牌</strong><div class="result-tiles">${winningTile ? renderTileView({ tile: winningTile, isDrawnTile: true }) : ""}</div></div>
+        ${meldsView}
       </div>
       <div class="score-tile-section">
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
@@ -5270,6 +5382,8 @@ view = new GameView(document.querySelector("#game-root"), {
   onCreateClubTable: (clubId) => controller.createClubTable(clubId),
   onTransferPoints: (clubId, memberId, amount) => controller.transferClubPointsToMember(clubId, controller.currentUserId(), memberId, amount),
   onCollectPoints: (clubId, memberId, amount) => controller.collectClubPointsFromMember(clubId, controller.currentUserId(), memberId, amount),
+  onGrantClubAdmin: (clubId, memberId) => controller.grantClubAdminRole(clubId, controller.currentUserId(), memberId),
+  onRemoveClubMember: (clubId, memberId) => controller.removeClubMember(clubId, controller.currentUserId(), memberId),
 });
 view.bindStaticControls(document.querySelector("#start-button"), document.querySelector("#draw-button"));
 const routeFromHash = () => {

@@ -342,6 +342,24 @@ const handMarkersFromSnapshots = (snapshots) => {
   });
   return markers;
 };
+const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻" : "アンミカロケット";
+const replayResultSummary = (state, result) => {
+  if (!result) return "結果なし";
+  const playerName = (playerId) => asArray(state?.players).find((player) => player.id === playerId)?.name || playerId || "";
+  const payments = result?.scoreResult?.payments || result?.payments || {};
+  if (result.type === "exhaustiveDraw") {
+    const entries = Object.entries(payments).filter(([, delta]) => Number(delta || 0) !== 0);
+    return entries.length ? `流局 / ${entries.map(([playerId, delta]) => `${playerName(playerId)} ${Number(delta) > 0 ? "+" : ""}${delta}`).join(" / ")}` : "流局 / 点数移動なし";
+  }
+  if (result.type === "win") {
+    const winLabel = result.winType === "tsumo" ? "ツモ" : "ロン";
+    const move = Object.entries(payments).filter(([, delta]) => Number(delta || 0) !== 0)
+      .map(([playerId, delta]) => `${playerName(playerId)} ${Number(delta) > 0 ? "+" : ""}${delta}`).join(" / ");
+    return `${playerName(result.winnerId)} ${winLabel}${move ? ` / ${move}` : ""}`;
+  }
+  if (result.type === "gameEnded") return "半荘終了";
+  return result.type || "結果";
+};
 const markReplaySyncApplied = (state, key, replayId = null) => {
   state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
   state.replayDbSync.appliedKeys = [...new Set([...(state.replayDbSync.appliedKeys || []), key])];
@@ -365,6 +383,8 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     startedAt: compactSnapshots[0]?.handLog?.handId || room.state.handLog?.handId || now(),
     endedAt: now(),
     resultLabel: result?.type === "exhaustiveDraw" ? "流局" : result?.type === "win" ? "和了" : scope === "hanchan" ? "半荘牌譜" : "牌譜",
+    ruleName: replayRuleName(room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket"),
+    resultSummary: replayResultSummary(room.state, result),
     players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
     handMarkers: handMarkersFromSnapshots(compactSnapshots),
     ...summary,
@@ -1243,6 +1263,7 @@ const evaluateServerWin = (state, player, tile, winType) => {
   return { canWin: true, yaku: best.yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
 };
 const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku, options = {}) => {
+  const hand13Tiles = sortHandTiles(ensureArray(player.hand).filter((item) => item && !isFlowerTile(item))).slice(0, 13);
   const winningTiles = [...ensureArray(player.hand), ...(tile ? [tile] : []), ...ensureArray(player.melds).flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
   const bonusSourceTiles = [...winningTiles, ...ensureArray(player.nukiDoraTiles)];
   const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
@@ -1307,6 +1328,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
       payments,
       paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
       winnerGain: payments[player.id] || 0,
+      hand13Tiles,
       winningTiles,
       winningTile: tile || null,
       selectedWait: tile || null,
@@ -1376,6 +1398,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     payments,
     paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
     winnerGain: payments[player.id] || 0,
+    hand13Tiles,
     winningTiles,
     winningTile: tile || null,
     selectedWait: tile || null,

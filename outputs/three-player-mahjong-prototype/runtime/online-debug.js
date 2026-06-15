@@ -1319,6 +1319,28 @@
     await loadAdminJoinRequests(request.club_id).catch((error) => log("拒否後の加入申請一覧再取得に失敗しました。", rawErrorText(error)));
     log("加入申請を拒否しました。", { clubId: request.club_id, userId: applicantUserId });
   };
+  const grantClubAdminRole = async (member) => {
+    const clubId = selectedClubId();
+    const targetUserId = member.user_id || member.users?.user_id;
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) throw new Error("管理者権限がありません。");
+    if (!targetUserId) throw new Error("対象ユーザーが見つかりません。");
+    const name = member.display_name || member.users?.display_name || targetUserId;
+    if (!confirm(`${name} に管理者権限を付与しますか？\n卓作成、加入承認、クラブポイント管理ができるようになります。`)) return;
+    uiLog("grant admin clicked", { clubId, targetUserId });
+    try {
+      const result = await rest("/rpc/grant_club_admin_role", { method: "POST", body: JSON.stringify({ p_club_id: clubId, p_member_user_id: targetUserId }) });
+      if (result && result.ok === false) throw new Error(result.message || "管理者権限を付与できませんでした。");
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (raw.includes("grant_club_admin_role") || raw.includes("schema cache") || raw.includes("Could not find the function")) {
+        throw new Error("管理者権限付与用のDB関数が見つかりません。supabase/patch_grant_club_admin_role.sql を実行してください。");
+      }
+      throw error;
+    }
+    log(`${name} に管理者権限を付与しました。`);
+    await loadClubs();
+  };
 
   const openClubHome = async (clubId) => {
     setActiveClubId(clubId);
@@ -2825,6 +2847,13 @@
     }
     members.forEach((member) => {
       const userInfo = member.users || {};
+      const memberUserId = member.user_id || userInfo.user_id || "";
+      const club = state.clubs.find((item) => item.club_id === clubId) || selectedMembership()?.clubs || {};
+      const roleLabel = memberUserId && club.owner_user_id === memberUserId
+        ? "クラブ作成者"
+        : member.role === "admin"
+          ? "管理者権限"
+          : "メンバー";
       const memberIcon = member.icon_url || userInfo.icon_url || "";
       const memberIconHtml = memberIcon
         ? `<img class="club-list-icon" src="${escapeHtml(memberIcon)}" alt="メンバーアイコン" />`
@@ -2835,10 +2864,19 @@
         ${memberIconHtml}
         <strong>${member.display_name || userInfo.display_name || member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "名前未設定"}</strong>
         <span>ID: ${member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "不明"}</span>
-        <span>権限: ${member.role === "admin" ? "管理者" : "メンバー"}</span>
+        <span>権限: ${roleLabel}</span>
         <span>ポイント: ${Number(member.point_balance || 0)}</span>
         <span>加入: ${new Date(member.joined_at || Date.now()).toLocaleString()}</span>
+        ${member.role !== "admin" ? '<button type="button" data-action="grantAdmin">管理者権限を付与</button>' : ""}
       `;
+      row.querySelector('[data-action="grantAdmin"]')?.addEventListener("click", async () => {
+        try {
+          await grantClubAdminRole(member);
+          await renderClubMembersPage(body);
+        } catch (error) {
+          showError("管理者権限の付与に失敗しました", error);
+        }
+      });
       container.append(row);
     });
   };
