@@ -378,7 +378,11 @@ const ensureSocketConnected = async (socket, { timeoutMs = SOCKET_CONNECT_TIMEOU
   socket.connect?.();
   return waitForSocketConnected(socket, timeoutMs);
 };
-const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS) => {
+const isSocketDisconnectedAckError = (error) => {
+  const message = String(error?.message || error || "");
+  return message.includes("socket has been disconnected") || message.includes("transport close") || message.includes("ping timeout");
+};
+const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS, attempt = 0) => {
   await ensureSocketConnected(socket, { timeoutMs: Math.min(timeoutMs, SOCKET_CONNECT_TIMEOUT_MS) });
   saveSocketDebugStatus({
     socket: "CONNECTED",
@@ -395,6 +399,12 @@ const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_
     socket.timeout(timeoutMs).emit(eventName, payload, (error, response) => {
     if (error) {
       saveSocketDebugStatus({ lastAction: eventName, lastError: error?.message || String(error), gameServer: "NG" });
+      if (attempt < 2 && isSocketDisconnectedAckError(error)) {
+        setTimeout(() => {
+          socketEmitWithAck(socket, eventName, payload, timeoutMs, attempt + 1).then(resolve, reject);
+        }, 600 + attempt * 900);
+        return;
+      }
       reject(error);
       return;
     }
@@ -2840,8 +2850,21 @@ class GameController {
         this.onStateChanged(this.state);
         this.connectSocketGameServer().catch((error) => {
           console.warn("[SocketGame] 接続に失敗しました", error);
-          this.state.onlineLoadingMessage = `ゲームサーバーへ接続できません: ${error?.message ?? error}`;
+          const message = error?.message ?? String(error);
+          this.state.onlineLoadingMessage = isSocketDisconnectedAckError(error)
+            ? `ゲームサーバーへ再接続中... ${message}`
+            : `ゲームサーバーへ接続できません: ${message}`;
           this.onStateChanged(this.state);
+          if (isSocketDisconnectedAckError(error)) {
+            this.socketInitialConnectRetryCount = (this.socketInitialConnectRetryCount || 0) + 1;
+            if (this.socketInitialConnectRetryCount <= 3) {
+              setTimeout(() => this.connectSocketGameServer().catch((retryError) => {
+                console.warn("[SocketGame] 初回接続の再試行に失敗しました", retryError);
+                this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${retryError?.message ?? retryError}`;
+                this.onStateChanged(this.state);
+              }), 1200 * this.socketInitialConnectRetryCount);
+            }
+          }
         });
         return;
       }
@@ -3194,6 +3217,7 @@ class GameController {
       userId: sync.userId,
     });
     didInitialJoin = true;
+    this.socketInitialConnectRetryCount = 0;
     if (joinResponse?.state) {
       saveOnlineSync({ ...loadOnlineSync(), version: joinResponse.version ?? 0, lastServerState: joinResponse.state, lastSyncedAt: Date.now() });
       this.applyOnlineStateSnapshot(joinResponse.state);
