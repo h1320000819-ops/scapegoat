@@ -2388,12 +2388,11 @@
       onlineSync,
     });
     log("デバッグ対局を開始します。", localTable);
-    const tablePath = `/table/${encodeURIComponent(localTableId)}`;
     const tableHash = `#/table/${encodeURIComponent(localTableId)}`;
     const targetUrl =
       window.location.protocol === "file:"
         ? new URL(`../index.html${tableHash}`, window.location.href).href
-        : `${window.location.origin}${tablePath}`;
+        : `${window.location.origin}/${tableHash}`;
     markLaunchingTable(tableId);
     window.location.href = targetUrl;
   };

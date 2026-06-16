@@ -149,7 +149,8 @@
     const hashTableMatch = location.hash.match(/^#\/table\/(.+)$/);
     const hashReplayMatch = location.hash.match(/^#\/replay\/(.+)$/);
     const hashTableId = hashTableMatch ? decodeURIComponent(hashTableMatch[1]) : "";
-    const isLocalDebugGameRoute = hashTableId.startsWith("online-debug-");
+    const pathTableId = location.pathname.startsWith("/table/") ? decodeURIComponent(location.pathname.split("/table/")[1] || "") : "";
+    const isLocalDebugGameRoute = hashTableId.startsWith("online-debug-") || pathTableId.startsWith("online-debug-");
 
     if (hashTableMatch && !isLocalDebugGameRoute) {
       const tableId = hashTableId;
@@ -163,13 +164,13 @@
       location.replace(new URL("online-debug/index.html", location.href).href);
       return;
     }
-    if (location.pathname === "/online-debug" || location.pathname === "/online-debug/" || location.pathname.startsWith("/table/")) {
-      const tableId = location.pathname.startsWith("/table/") ? decodeURIComponent(location.pathname.split("/table/")[1] || "") : "";
+    if (location.pathname === "/online-debug" || location.pathname === "/online-debug/" || (location.pathname.startsWith("/table/") && !isLocalDebugGameRoute)) {
+      const tableId = pathTableId;
       const nextUrl = `${location.origin}/online-debug/index.html${tableId ? `?tableId=${encodeURIComponent(tableId)}` : ""}`;
       location.replace(nextUrl);
       return;
     }
-    if (!hashTableMatch && !hashReplayMatch && !location.pathname.startsWith("/replay/")) {
+    if (!isLocalDebugGameRoute && !hashTableMatch && !hashReplayMatch && !location.pathname.startsWith("/replay/")) {
       const nextUrl = location.protocol === "file:"
         ? new URL("online-debug/index.html", location.href).href
         : `${location.origin}/online-debug/index.html`;
@@ -178,7 +179,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260616-disable-auto-loop-a";
+    const assetVersion = "20260616-local-table-route-a";
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>
