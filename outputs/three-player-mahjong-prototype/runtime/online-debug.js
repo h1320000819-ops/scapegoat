@@ -2989,6 +2989,61 @@
     if (window.location.protocol === "file:") return `../replay.html#/replay/${encoded}`;
     return `${window.location.origin}/replay/${encoded}`;
   };
+  const cacheReplayForViewer = async (replayId) => {
+    if (!replayId) throw new Error("牌譜IDがありません。");
+    let rows;
+    try {
+      const serverResponse = await fetch(`${window.location.origin}/api/replay/${encodeURIComponent(replayId)}`, {
+        headers: state.accessToken ? { Authorization: `Bearer ${state.accessToken}` } : {},
+        cache: "no-store",
+      }).catch(() => null);
+      if (serverResponse?.ok) {
+        const data = await serverResponse.json();
+        rows = data?.replay ? [data.replay] : [];
+      } else {
+        rows = await rest("/rpc/get_my_replay", { method: "POST", body: JSON.stringify({ p_replay_id: replayId }) });
+      }
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (!raw.includes("get_my_replay") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
+      rows = await rest(`/replays?select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at&replay_id=eq.${encodeURIComponent(replayId)}&limit=1`);
+    }
+    const row = asArray(rows)[0];
+    if (!row?.replay_id && !row?.id) throw new Error("牌譜本体を取得できませんでした。");
+    const id = row.replay_id || row.id;
+    const replay = {
+      replayId: id,
+      summary: {
+        ...(row.summary || {}),
+        replayId: id,
+        replayUrl: replayOpenUrl(id),
+        clubId: row.club_id || row.summary?.clubId,
+        tableId: row.table_id || row.summary?.tableId,
+        gameId: row.game_id || row.summary?.gameId,
+        endedAt: row.summary?.endedAt || Date.parse(row.created_at || "") || Date.now(),
+      },
+      initialState: row.initial_state,
+      events: row.events || [],
+      snapshots: row.snapshots || [],
+      simpleReplay: row.summary?.replayFormat === "anmika-simple-replay-v1" ? {
+        format: "anmika-simple-replay-v1",
+        initialState: row.initial_state,
+        events: row.events || [],
+        result: row.initial_state?.handLog?.result || null,
+      } : row.summary?.simpleReplay || null,
+    };
+    const key = "anmikaRocket.replays";
+    let current = [];
+    try {
+      current = JSON.parse(localStorage.getItem(key) || "[]");
+    } catch {
+      current = [];
+    }
+    const byId = new Map(asArray(current).map((item) => [item.replayId || item.summary?.replayId, item]).filter(([value]) => value));
+    byId.set(id, replay);
+    localStorage.setItem(key, JSON.stringify([...byId.values()].slice(0, 100)));
+    return replay;
+  };
   const renderReplayListPage = async (body) => {
     try {
       let rows;
@@ -3022,8 +3077,19 @@
         })
         .join("");
       body.querySelectorAll("[data-replay-id]").forEach((button) => {
-        button.addEventListener("click", () => {
-          window.location.href = replayOpenUrl(button.dataset.replayId);
+        button.addEventListener("click", async () => {
+          const replayId = button.dataset.replayId;
+          button.disabled = true;
+          const previousText = button.textContent;
+          button.textContent = "読み込み中...";
+          try {
+            await cacheReplayForViewer(replayId);
+            window.location.href = replayOpenUrl(replayId);
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = previousText;
+            body.insertAdjacentHTML("afterbegin", `<p class="error-box visible">牌譜本体の取得に失敗しました: ${escapeHtml(getErrorText(error))}</p>`);
+          }
         });
       });
       body.querySelectorAll("[data-copy-replay-url]").forEach((button) => {

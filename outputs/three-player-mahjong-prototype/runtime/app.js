@@ -1054,6 +1054,14 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
     "Content-Type": "application/json",
   };
   if (replayId) {
+    const serverResponse = await fetch(`${globalThis.location?.origin || ""}/api/replay/${encodeURIComponent(replayId)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+    }).catch(() => null);
+    if (serverResponse?.ok) {
+      const data = await serverResponse.json();
+      if (data?.replay) return [data.replay];
+    }
     const rpcResponse = await fetch(`${baseUrl}/rest/v1/rpc/get_my_replay`, {
       method: "POST",
       headers,
@@ -3704,11 +3712,20 @@ class GameController {
     if (!replay) {
       this.state.selectedReplayId = replayId;
       this.state.replayIndex = 0;
+      this.state.replayLoading = true;
+      this.state.replayLoadError = "";
       this.state.screen = "replayViewer";
       this.emit();
       this.refreshReplaysFromSupabase({ replayId }).then(() => {
+        this.state.replayLoading = false;
         if (replayRepository.getReplay(replayId)) this.openReplay(replayId, { updateHash });
+        else {
+          this.state.replayLoadError = "牌譜本体を取得できませんでした。牌譜一覧から開き直してください。";
+          this.emit();
+        }
       }).catch((error) => {
+        this.state.replayLoading = false;
+        this.state.replayLoadError = error.message || "牌譜取得に失敗しました。";
         this.state.log.unshift(`牌譜取得に失敗しました: ${error.message}`);
         this.emit();
       });
@@ -3717,6 +3734,8 @@ class GameController {
     const firstSnapshot = getCurrentReplaySnapshot(replay, 0);
     this.state.selectedReplayId = replayId;
     this.state.replayIndex = 0;
+    this.state.replayLoading = false;
+    this.state.replayLoadError = "";
     this.state.replayViewerId = getValidReplayViewerId(firstSnapshot, this.state.replayViewerId ?? CURRENT_USER_ID, replay);
     this.state.replayRevealHands = false;
     this.state.screen = "replayViewer";
@@ -5498,7 +5517,12 @@ class GameView {
   replayViewerScreen(state) {
     const replay = replayRepository.getReplay(state.selectedReplayId);
     const fallbackBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || "");
-    if (!replay) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
+    if (!replay && state.replayLoading) {
+      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜を読み込み中です...</p></section>`;
+    }
+    if (!replay) {
+      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p>${state.replayLoadError ? `<p>${escapeHtml(state.replayLoadError)}</p>` : ""}</section>`;
+    }
     const snapshots = getReplaySnapshots(replay);
     const index = Math.max(0, Math.min(state.replayIndex, snapshots.length - 1));
     const snapshot = getCurrentReplaySnapshot(replay, index);
