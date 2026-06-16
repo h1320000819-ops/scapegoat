@@ -29,7 +29,9 @@
   const GAME_SERVER_STARTUP_RETRY_MS = 2500;
   const GAME_SERVER_HEALTH_TIMEOUT_MS = 6000;
   const DEBUG_LAUNCHING_TABLE_KEY = "anmikaOnlineDebug.launchingTable";
+  const DEBUG_AUTO_OPENED_TABLES_KEY = "anmikaOnlineDebug.autoOpenedTables";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
+  const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
 
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -155,6 +157,30 @@
   const clearLaunchingTable = () => sessionStorage.removeItem(DEBUG_LAUNCHING_TABLE_KEY);
   const markLaunchingTable = (tableId) => {
     sessionStorage.setItem(DEBUG_LAUNCHING_TABLE_KEY, JSON.stringify({ tableId, startedAt: Date.now() }));
+  };
+  const autoOpenedTables = () => readJsonStorage(DEBUG_AUTO_OPENED_TABLES_KEY, {});
+  const saveAutoOpenedTables = (value) => sessionStorage.setItem(DEBUG_AUTO_OPENED_TABLES_KEY, JSON.stringify(value || {}));
+  const markAutoOpenedTable = (tableId) => {
+    if (!tableId) return;
+    const opened = autoOpenedTables();
+    opened[String(tableId)] = Date.now();
+    saveAutoOpenedTables(opened);
+  };
+  const clearAutoOpenedTable = (tableId) => {
+    if (!tableId) return;
+    const opened = autoOpenedTables();
+    delete opened[String(tableId)];
+    saveAutoOpenedTables(opened);
+  };
+  const wasAutoOpenedRecently = (tableId) => {
+    const opened = autoOpenedTables();
+    const at = Number(opened[String(tableId)] || 0);
+    if (!at) return false;
+    if (Date.now() - at > DEBUG_AUTO_OPEN_SUPPRESS_MS) {
+      clearAutoOpenedTable(tableId);
+      return false;
+    }
+    return true;
   };
   const isLaunchInProgress = (tableId = "") => {
     const payload = launchingTablePayload();
@@ -1458,6 +1484,7 @@
     if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
     if (isLaunchInProgress(table.table_id)) return;
+    if (wasAutoOpenedRecently(table.table_id)) return;
     clearRecentlyLeftTableIfExpired();
     if (isRecentlyLeftTable(table.table_id)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
@@ -1477,6 +1504,7 @@
     const onlineGameState = { game_id: `socket-game-${table.table_id}`, version: 0 };
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
+    markAutoOpenedTable(table.table_id);
     startLocalDebugMahjong(table.table_id, seats, onlineGameState);
   };
   const getOrCreateTableRecord = (tableId, seats = null) => {
@@ -1498,6 +1526,7 @@
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
     tableId = requireTableId(tableId, "自動対局開始");
     if (isLaunchInProgress(tableId)) return null;
+    if (wasAutoOpenedRecently(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
     clearRecentlyLeftTableIfExpired();
     if (isRecentlyLeftTable(tableId)) {
@@ -1518,6 +1547,7 @@
 
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
+      markAutoOpenedTable(tableId);
       return state.activeGameState;
     }
 
