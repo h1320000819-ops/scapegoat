@@ -374,6 +374,24 @@ button:hover {
   white-space: nowrap;
 }
 
+.disconnect-badge {
+  background: rgba(217, 65, 65, 0.94);
+  border: 1px solid rgba(255, 230, 230, 0.42);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  margin-left: 5px;
+  padding: 2px 5px;
+  vertical-align: middle;
+}
+
+.player-seat.disconnected {
+  opacity: 0.78;
+}
+
 .seat-bottom .seat-mini-name {
   font-size: 12px;
   margin-bottom: 2px;

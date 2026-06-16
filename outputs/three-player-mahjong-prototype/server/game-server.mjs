@@ -11,6 +11,8 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL 
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const ROOM_DB_PERSIST_INTERVAL_MS = Number(process.env.GAME_ROOM_DB_PERSIST_INTERVAL_MS || 15000);
 const ROOM_DB_PERSIST_ENABLED = String(process.env.GAME_ROOM_DB_PERSIST_ENABLED || "true").toLowerCase() !== "false";
+const DISCONNECTED_DISCARD_GRACE_MS = 30 * 1000;
+const DISCONNECTED_LAST_HAND_GRACE_MS = 5 * 60 * 1000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_STORE_DIR = path.join(__dirname, "game-state-store");
 fs.mkdirSync(STATE_STORE_DIR, { recursive: true });
@@ -222,6 +224,11 @@ const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
 const connectedHumanPlayerIds = (room) => new Set(roomPlayerConnectionList(room)
   .filter((record) => record.connected && record.userId)
   .map((record) => record.userId));
+const isRoomPlayerConnected = (room, userId) => {
+  if (!userId) return false;
+  const registry = ensureRoomPlayerRegistry(room);
+  return Boolean(registry.get(userId)?.connected);
+};
 const autoOkPlayerIdsForResult = (room, actingPlayerId = "") => {
   if (!room?.state?.handLog?.result) return [];
   const connectedIds = connectedHumanPlayerIds(room);
@@ -234,7 +241,12 @@ const autoOkPlayerIdsForResult = (room, actingPlayerId = "") => {
 const markDisconnectedPlayersAsLastHand = (room) => {
   if (!room?.state) return [];
   const alreadyDeclared = new Set(asArray(room.state.lastHandDeclaredBy));
-  const ids = disconnectedHumanPlayerIds(room).filter((id) => !alreadyDeclared.has(id));
+  const cutoff = now() - DISCONNECTED_LAST_HAND_GRACE_MS;
+  const registry = ensureRoomPlayerRegistry(room);
+  const ids = disconnectedHumanPlayerIds(room)
+    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
+    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) <= cutoff)
+    .filter((id) => !alreadyDeclared.has(id));
   if (!ids.length) return [];
   room.state.lastHandDeclaredBy = [...new Set([...(room.state.lastHandDeclaredBy || []), ...ids])];
   room.state.settings ??= {};
@@ -244,6 +256,131 @@ const markDisconnectedPlayersAsLastHand = (room) => {
   }
   console.warn("[Reconnect] disconnected players marked as last hand", { tableId: room.tableId, gameId: room.gameId, playerIds: ids });
   return ids;
+};
+const scheduleDisconnectedLastHandTimeout = (room) => {
+  if (!room?.state) return;
+  if (room.disconnectedLastHandTimer) {
+    clearTimeout(room.disconnectedLastHandTimer);
+    room.disconnectedLastHandTimer = null;
+  }
+  const alreadyDeclared = new Set(asArray(room.state.lastHandDeclaredBy));
+  const registry = ensureRoomPlayerRegistry(room);
+  const candidates = [...registry.values()]
+    .filter((record) => record.userId && !record.connected && Number(record.disconnectedAt || 0) > 0)
+    .filter((record) => !alreadyDeclared.has(record.userId));
+  if (!candidates.length) return;
+  const nextAt = Math.min(...candidates.map((record) => Number(record.disconnectedAt || 0) + DISCONNECTED_LAST_HAND_GRACE_MS));
+  const delay = Math.max(0, nextAt - now());
+  room.disconnectedLastHandTimer = setTimeout(() => {
+    room.disconnectedLastHandTimer = null;
+    const ids = markDisconnectedPlayersAsLastHand(room);
+    if (ids.length) {
+      room.version = Number(room.version || 0) + 1;
+      room.state.version = room.version;
+      room.state.onlineMeta = {
+        ...(room.state.onlineMeta || {}),
+        transport: "socket.io",
+        reason: "disconnectedLastHandGrace",
+        publishedBy: null,
+        publishedAt: now(),
+      };
+      room.updatedAt = now();
+      persistRoom(room);
+      broadcastState(room);
+    }
+    scheduleDisconnectedLastHandTimeout(room);
+  }, delay);
+};
+const scheduleDisconnectedProgressTimeout = (room) => {
+  if (!room?.state) return;
+  if (room.disconnectedProgressTimer) {
+    clearTimeout(room.disconnectedProgressTimer);
+    room.disconnectedProgressTimer = null;
+  }
+  const registry = ensureRoomPlayerRegistry(room);
+  const candidates = [...registry.values()]
+    .filter((record) => record.userId && !record.connected && Number(record.disconnectedAt || 0) > 0);
+  if (!candidates.length) return;
+  const nextAt = Math.min(...candidates.map((record) => Number(record.disconnectedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS));
+  const delay = Math.max(0, nextAt - now());
+  room.disconnectedProgressTimer = setTimeout(() => {
+    room.disconnectedProgressTimer = null;
+    const cutoff = now() - DISCONNECTED_DISCARD_GRACE_MS;
+    const ids = disconnectedHumanPlayerIds(room)
+      .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
+      .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) <= cutoff);
+    const progressed = applyDisconnectedGraceActions(room, ids);
+    if (progressed) {
+      advanceServerCpuTurns(room.state);
+      room.version = Number(room.version || 0) + 1;
+      room.state.version = room.version;
+      room.state.onlineMeta = {
+        ...(room.state.onlineMeta || {}),
+        transport: "socket.io",
+        reason: "disconnectedGraceProgress",
+        publishedBy: null,
+        publishedAt: now(),
+      };
+      room.updatedAt = now();
+      persistRoom(room);
+      syncClubPointEffects(room);
+      broadcastState(room);
+      scheduleRoomServerEffect(room);
+      scheduleRoomClockTimeout(room);
+      scheduleRoomResultTimeout(room);
+    }
+    scheduleDisconnectedProgressTimeout(room);
+  }, delay);
+};
+const scheduleDisconnectedTimeouts = (room) => {
+  scheduleDisconnectedProgressTimeout(room);
+  scheduleDisconnectedLastHandTimeout(room);
+};
+const resumeClockForReconnectedPlayer = (room, userId) => {
+  if (!room?.state || !userId) return false;
+  if (room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase)) return false;
+  const current = currentPlayer(room.state);
+  const isPendingOwner = room.state.pendingAction?.playerId === userId;
+  const isDiscardOwner = current?.id === userId && ["waitingForHumanDiscard", "waitingForRiichiDiscard", "playing"].includes(room.state.phase);
+  if (!isPendingOwner && !isDiscardOwner) return false;
+  startServerClockForPlayer(room.state, findPlayer(room.state, userId));
+  return true;
+};
+const applyDisconnectedGraceActions = (room, playerIds = []) => {
+  if (!room?.state || !playerIds.length) return false;
+  if (room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase)) return false;
+  let changed = false;
+  for (const playerId of playerIds) {
+    const player = findPlayer(room.state, playerId);
+    if (!player || player.type === "cpu") continue;
+    if (room.state.pendingAction?.playerId === playerId) {
+      applyServerAction(room.state, {
+        playerId,
+        actionType: "skip",
+        payload: { pending: clone(room.state.pendingAction), reason: "disconnectedGraceTimeout" },
+      });
+      changed = true;
+      continue;
+    }
+    const active = currentPlayer(room.state);
+    if (active?.id !== playerId) continue;
+    if (!player.drawnTile && !drawFromWall(room.state, player, "liveWall")) {
+      room.state.phase = "exhaustiveDraw";
+      room.state.activeClockPlayerId = null;
+      room.state.clockStartedAt = null;
+      room.state.handLog ??= {};
+      room.state.handLog.result = calculateServerExhaustiveDraw(room.state);
+      appendHandEvent(room.state, { type: "exhaustiveDraw", turnIndex: room.state.turnIndex ?? 0, reason: "disconnectedGraceWallEmpty" });
+      changed = true;
+      continue;
+    }
+    const tileId = player.drawnTile?.id || player.hand?.at(-1)?.id;
+    if (!tileId) continue;
+    discardForServer(room.state, player, tileId);
+    appendHandEvent(room.state, { type: "disconnectedGraceDiscard", playerId, tile: player.discardedTiles?.at(-1)?.tile || null, turnIndex: room.state.turnIndex ?? 0 });
+    changed = true;
+  }
+  return changed;
 };
 const syncSeatLeaveToDb = async (tableId, userId) => {
   if (!hasSupabaseServerWriter() || !isUuid(tableId) || !isUuid(userId)) return false;
@@ -2152,7 +2289,7 @@ const beginServerWinAnnouncement = (state, player, winType) => {
   state.clockStartedAt = null;
   state.pendingServerEffect = {
     type: "winAnnouncement",
-    resumeAt: Date.now() + 1000,
+    resumeAt: Date.now() + 1800,
   };
 };
 const drawRinshanAfterFlower = (state, player, removedFromDrawn) => {
@@ -2338,7 +2475,7 @@ const applyServerAction = (state, event) => {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
     if (state.phase === "gameEnded") return state;
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
-    const autoOkPlayerIds = payload.autoAllResultOk ? requiredOkPlayerIds : asArray(payload.serverAutoOkPlayerIds);
+    const autoOkPlayerIds = requiredOkPlayerIds;
     if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
     state.resultOkPlayerIds = [...new Set([
       ...(state.resultOkPlayerIds ?? []),
@@ -2442,6 +2579,8 @@ const applyServerAction = (state, event) => {
     state.pendingAction = null;
     if (pendingSource?.type === "afterDiscard") {
       state.phase = "playing";
+      const fromIndex = ensureArray(state.players).findIndex((p) => p.id === pendingSource.fromPlayerId);
+      if (fromIndex >= 0) state.currentPlayerIndex = fromIndex;
       advanceTurn(state);
       enterCurrentTurnOnServer(state);
     } else {
@@ -3180,6 +3319,8 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
     if (room.resultTimer) clearTimeout(room.resultTimer);
     if (room.clockTimer) clearTimeout(room.clockTimer);
+    if (room.disconnectedLastHandTimer) clearTimeout(room.disconnectedLastHandTimer);
+    if (room.disconnectedProgressTimer) clearTimeout(room.disconnectedProgressTimer);
     room = null;
     gameRooms.delete(key);
   }
@@ -3311,7 +3452,6 @@ const scheduleRoomResultTimeout = (room) => {
     room.resultTimer = null;
     try {
       queueReplayEffectsSnapshot(room);
-      markDisconnectedPlayersAsLastHand(room);
       if (!applyAutoResultOk(room.state)) return;
       advanceServerCpuTurns(room.state);
       room.version = Number(room.version || 0) + 1;
@@ -3392,10 +3532,22 @@ const scheduleRoomClockTimeout = (room) => {
   }
   const playerId = room.state.activeClockPlayerId;
   if (!playerId || room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement"].includes(room.state.phase)) return;
+  const player = findPlayer(room.state, playerId);
+  if (player?.type !== "cpu" && !isRoomPlayerConnected(room, playerId)) return;
   const delay = Math.max(0, getServerClockRemainingMs(room.state, playerId)) + 80;
   room.clockTimer = setTimeout(() => {
     room.clockTimer = null;
     if (!room.state?.activeClockPlayerId) return;
+    const activePlayerId = room.state.activeClockPlayerId;
+    const activePlayer = findPlayer(room.state, activePlayerId);
+    if (activePlayer?.type !== "cpu" && !isRoomPlayerConnected(room, activePlayerId)) {
+      stopServerClockForPlayer(room.state, activePlayerId, { recoverAfterDiscard: false });
+      room.updatedAt = now();
+      persistRoom(room);
+      broadcastState(room);
+      scheduleDisconnectedTimeouts(room);
+      return;
+    }
     const changed = applyServerClockTimeout(room.state);
     if (!changed) return;
     advanceServerCpuTurns(room.state);
@@ -3438,6 +3590,7 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
   scheduleRoomServerEffect(room);
   scheduleRoomClockTimeout(room);
   scheduleRoomResultTimeout(room);
+  scheduleDisconnectedTimeouts(room);
   return publicRoomState(room, publishedBy);
 };
 
@@ -3467,6 +3620,7 @@ io.on("connection", (socket) => {
       socket.data.userId = userId;
       markRoomPlayerConnected(room, userId, socket);
       if (room.state) {
+        resumeClockForReconnectedPlayer(room, userId);
         if (applyDueRoomServerEffect(room)) {
           broadcastState(room);
         }
@@ -3478,6 +3632,8 @@ io.on("connection", (socket) => {
         persistRoom(room);
         socket.emit("game:state", publicRoomState(room, userId));
         broadcastState(room);
+        scheduleRoomClockTimeout(room);
+        scheduleDisconnectedTimeouts(room);
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
@@ -3545,6 +3701,8 @@ io.on("connection", (socket) => {
       });
       acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
       markRoomPlayerConnected(room, userId || socket.data.userId, socket);
+      resumeClockForReconnectedPlayer(room, userId || socket.data.userId);
+      scheduleDisconnectedTimeouts(room);
       persistRoom(room);
       ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
@@ -3592,7 +3750,6 @@ io.on("connection", (socket) => {
       }
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         queueReplayEffectsSnapshot(room);
-        markDisconnectedPlayersAsLastHand(room);
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
@@ -3699,9 +3856,14 @@ io.on("connection", (socket) => {
     const record = markRoomPlayerDisconnected(room, socket.id, reason);
     room?.sockets.delete(socket.id);
     if (room?.state) {
+      if (record?.userId && room.state.activeClockPlayerId === record.userId) {
+        stopServerClockForPlayer(room.state, record.userId, { recoverAfterDiscard: false });
+      }
       room.updatedAt = now();
       persistRoom(room);
       broadcastState(room);
+      scheduleRoomClockTimeout(room);
+      scheduleDisconnectedTimeouts(room);
     }
     if (record) console.warn("[Socket] player marked disconnected", { tableId, userId: record.userId, seatIndex: record.seatIndex, reason });
   });
@@ -3742,20 +3904,20 @@ export const attachAnmikaGameServer = (httpServer) => {
   if (io) return io;
   console.log("[AnmikaGameServer] starting", {
     cors: allowedOrigins.includes("*") ? "*" : allowedOrigins,
-    pingInterval: 20000,
-    pingTimeout: 90000,
-    connectionStateRecoveryMs: 300000,
+    pingInterval: 25000,
+    pingTimeout: 180000,
+    connectionStateRecoveryMs: 600000,
   });
   io = new Server(httpServer, {
     cors: {
       origin: allowedOrigins.includes("*") ? "*" : allowedOrigins,
       methods: ["GET", "POST"],
     },
-    pingInterval: 20000,
-    pingTimeout: 90000,
-    connectTimeout: 60000,
+    pingInterval: 25000,
+    pingTimeout: 180000,
+    connectTimeout: 90000,
     connectionStateRecovery: {
-      maxDisconnectionDuration: 300000,
+      maxDisconnectionDuration: 600000,
       skipMiddlewares: true,
     },
     transports: ["websocket", "polling"],

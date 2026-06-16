@@ -30,9 +30,11 @@
   const GAME_SERVER_HEALTH_TIMEOUT_MS = 6000;
   const DEBUG_LAUNCHING_TABLE_KEY = "anmikaOnlineDebug.launchingTable";
   const DEBUG_AUTO_OPENED_TABLES_KEY = "anmikaOnlineDebug.autoOpenedTables";
+  const DEBUG_AUTO_START_FAILED_TABLES_KEY = "anmikaOnlineDebug.autoStartFailedTables";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
-  const ENABLE_AUTO_TABLE_START = false;
+  const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
+  const ENABLE_AUTO_TABLE_START = true;
 
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -48,6 +50,7 @@
     lastGameSyncAt: "",
     onlineGameOpened: false,
     autoStartingTableIds: new Set(),
+    autoStartFailedTableIds: new Set(),
     autoOpenedPlayingTableIds: new Set(),
     gameServerProbe: { status: "未確認", lastError: "", checkedAt: "" },
     activeClubId: sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
@@ -170,6 +173,8 @@
   };
   const autoOpenedTables = () => readJsonStorage(DEBUG_AUTO_OPENED_TABLES_KEY, {});
   const saveAutoOpenedTables = (value) => sessionStorage.setItem(DEBUG_AUTO_OPENED_TABLES_KEY, JSON.stringify(value || {}));
+  const autoStartFailedTables = () => readJsonStorage(DEBUG_AUTO_START_FAILED_TABLES_KEY, {});
+  const saveAutoStartFailedTables = (value) => sessionStorage.setItem(DEBUG_AUTO_START_FAILED_TABLES_KEY, JSON.stringify(value || {}));
   const markAutoOpenedTable = (tableId) => {
     if (!tableId) return;
     const opened = autoOpenedTables();
@@ -188,6 +193,29 @@
     if (!at) return false;
     if (Date.now() - at > DEBUG_AUTO_OPEN_SUPPRESS_MS) {
       clearAutoOpenedTable(tableId);
+      return false;
+    }
+    return true;
+  };
+  const markAutoStartFailedTable = (tableId) => {
+    if (!tableId) return;
+    const failed = autoStartFailedTables();
+    failed[String(tableId)] = Date.now();
+    saveAutoStartFailedTables(failed);
+  };
+  const clearAutoStartFailedTable = (tableId) => {
+    if (!tableId) return;
+    const failed = autoStartFailedTables();
+    delete failed[String(tableId)];
+    saveAutoStartFailedTables(failed);
+  };
+  const wasAutoStartFailedRecently = (tableId) => {
+    if (!tableId) return false;
+    const failed = autoStartFailedTables();
+    const at = Number(failed[String(tableId)] || 0);
+    if (!at) return false;
+    if (Date.now() - at > DEBUG_AUTO_START_FAILURE_SUPPRESS_MS) {
+      clearAutoStartFailedTable(tableId);
       return false;
     }
     return true;
@@ -1568,6 +1596,7 @@
     tableId = requireTableId(tableId, "自動対局開始");
     if (isLaunchInProgress(tableId)) return null;
     if (wasAutoOpenedRecently(tableId)) return null;
+    if (wasAutoStartFailedRecently(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
     clearRecentlyLeftTableIfExpired();
     if (isRecentlyLeftTable(tableId)) {
@@ -1582,13 +1611,15 @@
       return null;
     }
     if (filledSeatCount(seats) < 3) return null;
+    if (!isCurrentUserSeatedAt(seats)) return null;
 
     const table = getOrCreateTableRecord(tableId, seats);
     const isDebugTable = hasCpuSeat(seats) || table.is_debug;
 
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
-      markAutoOpenedTable(tableId);
+      table.table_seats = seats;
+      await openPlayingTableIfNeeded(table, seats, { navigate: true });
       return state.activeGameState;
     }
 
@@ -1599,10 +1630,18 @@
       table.status = "playing";
       table.is_debug = isDebugTable;
       table.table_seats = seats;
+      clearAutoStartFailedTable(tableId);
+      clearLocalUserLastHandFlagForTable(tableId);
+      clearOwnLastHandFlag(tableId).catch((error) => log("自動対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
+      rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+        method: "PATCH",
+        body: JSON.stringify({ status: "playing" }),
+      }).catch((error) => log("自動開始時の卓ステータス更新はスキップしました。", rawErrorText(error)));
       log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
       await openPlayingTableIfNeeded(table, seats, { navigate: true });
       return onlineGameState;
     } catch (error) {
+      markAutoStartFailedTable(tableId);
       showError("自動対局開始に失敗しました", error);
       log("3人着席後の自動開始に失敗しました。", rawErrorText(error));
       return null;

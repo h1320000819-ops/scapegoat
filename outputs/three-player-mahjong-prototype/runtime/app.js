@@ -321,7 +321,7 @@ const loadSocketIoClient = async (serverUrl = defaultGameServerUrl()) => {
   return socketClientLoadPromise;
 };
 const SOCKET_ACK_TIMEOUT_MS = 45000;
-const SOCKET_CONNECT_TIMEOUT_MS = 45000;
+const SOCKET_CONNECT_TIMEOUT_MS = 90000;
 const waitForSocketConnected = (socket, timeoutMs = SOCKET_CONNECT_TIMEOUT_MS) => new Promise((resolve, reject) => {
   if (!socket) {
     saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastError: "Socketが初期化されていません" });
@@ -1498,19 +1498,26 @@ const renderResultOkButton = (state) => {
 const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   const viewerIndex = Math.max(0, gameState.players.findIndex((player) => player.id === viewerPlayerId));
   const ordered = [0, 1, 2].map((offset) => gameState.players[(viewerIndex + offset) % gameState.players.length]);
-  const makeSeat = (player) => ({
-    playerId: player.id,
-    playerName: player.name,
-    isViewer: player.id === viewerPlayerId,
-    isDealer: player.id === gameState.round.dealerPlayerId,
-    score: player.score,
-    handTiles: player.hand.map((tile) => ({ tile, faceDown: player.id !== viewerPlayerId })),
-    drawnTile: player.drawnTile ? { tile: player.drawnTile, faceDown: player.id !== viewerPlayerId } : undefined,
-    discards: player.discardedTiles.map((discard) => ({ ...discard, tile: discard.tile, faceDown: false })),
-    melds: player.melds.map((meld) => ({ ...meld, tiles: meld.tiles.map((tile) => ({ tile, faceDown: false })) })),
-    nukiDoraTiles: player.nukiDoraTiles.map((tile) => ({ tile, faceDown: false })),
-    player,
-  });
+  const connectionsByUserId = new Map((gameState.onlineConnections ?? []).map((record) => [record.userId, record]));
+  const makeSeat = (player) => {
+    const connection = connectionsByUserId.get(player.id);
+    const isDisconnected = Boolean(player.type !== "cpu" && connection && !connection.connected);
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      isViewer: player.id === viewerPlayerId,
+      isDealer: player.id === gameState.round.dealerPlayerId,
+      isDisconnected,
+      disconnectedAt: connection?.disconnectedAt || 0,
+      score: player.score,
+      handTiles: player.hand.map((tile) => ({ tile, faceDown: player.id !== viewerPlayerId })),
+      drawnTile: player.drawnTile ? { tile: player.drawnTile, faceDown: player.id !== viewerPlayerId } : undefined,
+      discards: player.discardedTiles.map((discard) => ({ ...discard, tile: discard.tile, faceDown: false })),
+      melds: player.melds.map((meld) => ({ ...meld, tiles: meld.tiles.map((tile) => ({ tile, faceDown: false })) })),
+      nukiDoraTiles: player.nukiDoraTiles.map((tile) => ({ tile, faceDown: false })),
+      player,
+    };
+  };
   return {
     viewerPlayerId,
     seats: { bottom: makeSeat(ordered[0]), right: makeSeat(ordered[1]), top: makeSeat(ordered[2]) },
@@ -2452,6 +2459,13 @@ class GameController {
       }
       return;
     }
+    if (isSocketAuthoritativeGame()) {
+      this.state.lastClockRenderTick = 0;
+      this.state.discardDebugMessage = this.gameSocket?.connected ? "サーバーの時間切れ処理を待っています..." : "接続が切れています。再接続後に手番を再開します。";
+      this.onStateChanged(this.state);
+      if (!this.gameSocket?.connected) this.resyncSocketGameState("clockExpiredWhileDisconnected").catch(() => {});
+      return;
+    }
     if (this.state.pendingAction) {
       this.skipPendingAction();
       return;
@@ -2519,7 +2533,7 @@ class GameController {
         this.state.resultAutoCloseHandled = false;
       }
       this.state.resultAutoCloseHandled = true;
-      this.handleResultOk();
+      this.handleResultOk({ autoAllResultOk: true });
     }
   }
   handleContextMenuAction(viewerPlayerId = getLocalHumanPlayerId(this.state)) {
@@ -3037,6 +3051,19 @@ class GameController {
       clearTimeout(this.flowerAnnouncementWatchdog);
       this.flowerAnnouncementWatchdog = null;
     }
+    if (this.state.phase === "showingWinAnnouncement" && isSocketAuthoritativeGame()) {
+      if (this.winAnnouncementWatchdog) clearTimeout(this.winAnnouncementWatchdog);
+      const effectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.turnIndex || 0}:${this.state.handLog?.result?.resultId || ""}`;
+      this.winAnnouncementWatchdog = setTimeout(() => {
+        if (this.state.phase !== "showingWinAnnouncement") return;
+        const currentEffectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.turnIndex || 0}:${this.state.handLog?.result?.resultId || ""}`;
+        if (currentEffectId !== effectId) return;
+        this.resyncSocketGameState("winAnnouncementWatchdog").catch(() => {});
+      }, 2600);
+    } else if (this.winAnnouncementWatchdog) {
+      clearTimeout(this.winAnnouncementWatchdog);
+      this.winAnnouncementWatchdog = null;
+    }
     if (next.handLog?.result && nextResultKey !== previousResultKey) {
       this.saveReplayForCurrentHand();
     }
@@ -3093,6 +3120,15 @@ class GameController {
       lastError: "",
     });
     await loadSocketIoClient(serverUrl);
+    if (
+      this.gameSocket?.connected &&
+      this.gameSocket.auth?.tableId === sync.tableId &&
+      this.gameSocket.auth?.gameId === sync.gameId &&
+      this.gameSocket.auth?.userId === sync.userId
+    ) {
+      saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: this.gameSocket.id, socketUrl: serverUrl, lastReconnectReason: "reuseExistingSocket", lastError: "" });
+      return;
+    }
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
       this.gameSocket.off("game:needInitialState");
@@ -3106,13 +3142,14 @@ class GameController {
     const socket = globalThis.io(serverUrl, {
       transports: ["polling", "websocket"],
       upgrade: true,
+      tryAllTransports: true,
       rememberUpgrade: false,
       autoConnect: false,
-      closeOnBeforeunload: true,
+      closeOnBeforeunload: false,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
-      reconnectionDelayMax: 8000,
+      reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
       timeout: SOCKET_CONNECT_TIMEOUT_MS,
       forceNew: true,
@@ -3730,7 +3767,7 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, autoAllResultOk: Boolean(options.autoAllResultOk) }, { timeoutMs: 12000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, autoAllResultOk: true }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
           this.emit();
@@ -4063,7 +4100,7 @@ class GameController {
     this.state.pendingAction = null;
     if (options.some((option) => option.type === "ron")) this.getPlayer(action.playerId).sameTurnFuriten = true;
     if (options.some((option) => ["ron", "pon", "kan"].includes(option.type) && option.fromPlayerId)) {
-      this.continueAfterDiscardCallWindow();
+      this.continueAfterDiscardCallWindow(options.find((option) => option.fromPlayerId)?.fromPlayerId);
       this.continueGameFlow();
     } else {
       this.waitForHumanDiscard(action.playerId);
@@ -4113,7 +4150,7 @@ class GameController {
       this.state.winAnnouncement = null;
       this.state.phase = "handEnded";
       this.emit();
-    }, 1100);
+    }, 1800);
     return score;
   }
   queueResponseAfterDiscard(fromPlayerId, tile) {
@@ -4140,10 +4177,16 @@ class GameController {
     if (!human || !tile) return false;
     if (!human.isRiichi && this.state.kanCount < 4 && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) return this.setPendingAction({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
     if (!human.isRiichi && human.hand.filter((t) => sameTileKind(t, tile)).length >= 2) return this.setPendingAction({ type: "pon", playerId: human.id, fromPlayerId, sourceTile: tile });
-    if (alreadySkippedRon) this.continueAfterDiscardCallWindow();
+    if (alreadySkippedRon) this.continueAfterDiscardCallWindow(fromPlayerId);
     return false;
   }
-  continueAfterDiscardCallWindow() { this.state.pendingAction = null; this.state.phase = "playing"; this.advanceTurn(); }
+  continueAfterDiscardCallWindow(fromPlayerId = null) {
+    this.state.pendingAction = null;
+    this.state.phase = "playing";
+    const fromIndex = this.state.players.findIndex((player) => player.id === fromPlayerId);
+    if (fromIndex >= 0) this.state.currentPlayerIndex = fromIndex;
+    this.advanceTurn();
+  }
   confirmTsumo(action) {
     const player = this.getPlayer(action.playerId);
     const tile = player.drawnTile ?? action.sourceTile;
@@ -4550,7 +4593,7 @@ class GameController {
         this.state.winAnnouncement = null;
         this.state.phase = "handEnded";
         this.emit();
-      }, 1100);
+      }, 1800);
       return;
     }
     const { tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments, paymentMap, finalScores } = calculateExhaustiveDrawPayments(this.state);
@@ -5404,6 +5447,7 @@ class GameView {
     if (!player) return "";
     const seatView = player.player ? player : null;
     player = seatView?.player ?? player;
+    const isDisconnected = Boolean(seatView?.isDisconnected);
     const faceDown = seatView ? !seatView.isViewer : player.type === "cpu";
     const handTiles = seatView?.handTiles?.length ? seatView.handTiles : player.hand.map((tile) => ({ tile, faceDown }));
     const drawnTile = seatView?.drawnTile ?? (player.drawnTile ? { tile: player.drawnTile, faceDown } : undefined);
@@ -5413,8 +5457,8 @@ class GameView {
     const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
-    return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""}">
-      <div class="seat-mini-name">${escapeHtml(player.name)}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
+    return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""}">
+      <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
       <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
       ${this.exposedAreaClean(player)}
