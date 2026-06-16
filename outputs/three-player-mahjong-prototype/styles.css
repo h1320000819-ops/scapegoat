@@ -1883,17 +1883,17 @@ button:hover {
 
   .center-info {
     border-radius: 6px;
-    font-size: 6px;
+    font-size: 5px;
     max-height: var(--center-info-height);
     min-height: var(--center-info-height);
     overflow: hidden;
-    padding: 2px;
+    padding: 1px 2px;
     top: 43%;
     width: var(--center-info-width);
   }
 
   .round-label {
-    font-size: 8px;
+    font-size: 7px;
     margin-bottom: 1px;
   }
 
@@ -1904,7 +1904,7 @@ button:hover {
 
   .center-scores li,
   .wall-info {
-    font-size: 6px;
+    font-size: 5px;
   }
 
   .center-scores li {
@@ -1915,13 +1915,13 @@ button:hover {
   .center-scores em,
   .dealer-badge,
   .seat-role {
-    font-size: 6px;
+    font-size: 5px;
     padding: 1px 3px;
   }
 
   .center-wall {
     gap: 2px 4px;
-    font-size: 6px;
+    font-size: 5px;
     margin-top: 1px;
     padding-top: 1px;
   }
@@ -1932,16 +1932,16 @@ button:hover {
   }
 
   .center-dora > span {
-    font-size: 6px;
+    font-size: 5px;
   }
 
   .center-dora .tile,
   .center-dora .tile-button,
   .center-dora .tile-image,
   .center-dora .tile-fallback {
-    height: 13px;
-    min-width: 10px;
-    width: 10px;
+    height: 12px;
+    min-width: 9px;
+    width: 9px;
   }
 
   .discard-area {
