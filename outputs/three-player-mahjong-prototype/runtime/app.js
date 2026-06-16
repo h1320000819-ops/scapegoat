@@ -3785,9 +3785,8 @@ class GameController {
   }
   stepReplay(delta) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
-    const { visible, position } = getReplayVisiblePosition(replay, this.state.replayIndex);
-    const nextPosition = Math.max(0, Math.min(Math.max(0, visible.length - 1), position + delta));
-    this.state.replayIndex = visible[nextPosition] ?? 0;
+    const max = Math.max(0, getReplaySnapshots(replay).length - 1);
+    this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     this.emit();
   }
   setReplayIndex(index) {
@@ -4930,14 +4929,14 @@ const renderHandLog = (state) => {
 const replayEventText = (event, state, nameFn = null) => {
   if (!event) return "開始状態";
   const name = nameFn || ((id) => state.players.find((p) => p.id === id)?.name ?? id);
-    if (event.type === "draw") return `${name(event.playerId)} ツモ ${formatTile(event.tile)}`;
+    if (event.type === "draw") return "";
     if (event.type === "discard") return "";
     if (event.type === "ron") return `${name(event.playerId)} ロン ${formatTile(event.tile)}`;
     if (event.type === "tsumo") return `${name(event.playerId)} ツモ和了 ${formatTile(event.tile)}`;
     if (event.type === "riichi") return `${name(event.playerId)} リーチ`;
     if (event.type === "pon") return `${name(event.playerId)} ポン ${formatTile(event.tile)}`;
     if (event.type === "kan") return `${name(event.playerId)} カン`;
-    if (event.type === "skipAction") return `${name(event.playerId)} ${event.actionType}をスキップ`;
+    if (event.type === "skipAction") return "";
     if (event.type === "nukiDora") return `${name(event.playerId)} 抜きドラ ${formatTile(event.tile)}`;
     if (event.type === "doraReveal") return `ドラ表示 ${formatTile(event.tile)}`;
     if (event.type === "win") return `${name(event.winnerId)} 和了 ${event.winType}`;
@@ -5558,8 +5557,7 @@ class GameView {
       return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p>${state.replayLoadError ? `<p>${escapeHtml(state.replayLoadError)}</p>` : ""}</section>`;
     }
     const snapshots = getReplaySnapshots(replay);
-    const { visible: visibleReplayIndexes, position: visibleReplayPosition } = getReplayVisiblePosition(replay, state.replayIndex);
-    const index = Math.max(0, Math.min(visibleReplayIndexes[visibleReplayPosition] ?? state.replayIndex, snapshots.length - 1));
+    const index = Math.max(0, Math.min(state.replayIndex, snapshots.length - 1));
     const snapshot = getCurrentReplaySnapshot(replay, index);
     if (!snapshot) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
     const displayState = {
@@ -5589,20 +5587,17 @@ class GameView {
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
-    const event = getReplayEventForSnapshotIndex(replay, index);
-    const eventLabel = replayEventText(event, displayState);
     const replayBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
         <a class="button-link" href="${replayBackUrl}">ロビーへ戻る</a>
-        <button type="button" data-replay-step="-1" ${visibleReplayPosition <= 0 ? "disabled" : ""}>前へ</button>
-        <strong>${visibleReplayPosition + 1} / ${visibleReplayIndexes.length || 1}</strong>
-        <button type="button" data-replay-step="1" ${visibleReplayPosition >= visibleReplayIndexes.length - 1 ? "disabled" : ""}>次へ</button>
+        <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
+        <strong>${index + 1} / ${snapshots.length}</strong>
+        <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
-        ${eventLabel ? `<span class="replay-event-label">${escapeHtml(eventLabel)}</span>` : ""}
       </div>
       ${handButtons}
     </section>`;
@@ -5643,6 +5638,7 @@ class GameView {
         seatView.handTiles = (seatView.handTiles ?? []).map((item) => ({ ...item, faceDown: false }));
         if (seatView.drawnTile) seatView.drawnTile = { ...seatView.drawnTile, faceDown: false };
         seatView.isViewer = true;
+        seatView.isReplayRevealHands = true;
       }
     }
     const seats = viewState.seats;
@@ -5742,7 +5738,8 @@ class GameView {
     const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
-    return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""}">
+    const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
+    return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
       <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}

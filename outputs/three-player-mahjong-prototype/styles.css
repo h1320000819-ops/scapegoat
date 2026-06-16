@@ -516,6 +516,22 @@ button:hover {
   transform-origin: center;
 }
 
+.replay-reveal-top .hand-row > .tile,
+.replay-reveal-top .hand-row > .tile-button,
+.replay-reveal-top .drawn-tile > .tile,
+.replay-reveal-top .drawn-tile > .tile-button {
+  transform: rotate(180deg);
+  transform-origin: center;
+}
+
+.replay-reveal-right .hand-row > .tile,
+.replay-reveal-right .hand-row > .tile-button,
+.replay-reveal-right .drawn-tile > .tile,
+.replay-reveal-right .drawn-tile > .tile-button {
+  transform: rotate(90deg);
+  transform-origin: center;
+}
+
 .drawn-tile {
   display: inline-flex;
   margin-left: 12px;
