@@ -65,7 +65,7 @@
     return element;
   };
   const has = (id) => !!document.getElementById(id);
-  const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
+  const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
   const isOnlineDebugLocalTableId = (value) => String(value || "").startsWith("online-debug-");
   const sourceTableIdFromLocalDebugId = (value) => {
     const text = String(value || "");
