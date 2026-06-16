@@ -180,6 +180,7 @@ const roomPlayerConnectionList = (room) => {
 };
 const markRoomPlayerConnected = (room, userId, socket) => {
   if (!room || !userId) return;
+  room.disconnectedLeaveSyncedUserIds?.delete?.(userId);
   const registry = ensureRoomPlayerRegistry(room);
   const seats = asArray(room.state?.seats);
   const seatIndex = seats.find((seat) => seat?.playerId === userId)?.seatIndex
@@ -216,11 +217,12 @@ const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
   return null;
 };
 const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
-  .filter((record) => !record.connected && record.userId && isUuid(record.userId))
+  .filter((record) => !record.connected && record.userId && isUuid(record.userId) && !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId))
   .map((record) => record.userId);
 const markDisconnectedPlayersAsLastHand = (room) => {
   if (!room?.state) return [];
-  const ids = disconnectedHumanPlayerIds(room);
+  const alreadyDeclared = new Set(asArray(room.state.lastHandDeclaredBy));
+  const ids = disconnectedHumanPlayerIds(room).filter((id) => !alreadyDeclared.has(id));
   if (!ids.length) return [];
   room.state.lastHandDeclaredBy = [...new Set([...(room.state.lastHandDeclaredBy || []), ...ids])];
   room.state.settings ??= {};
@@ -247,9 +249,13 @@ const syncSeatLeaveToDb = async (tableId, userId) => {
 };
 const syncDisconnectedLastHandLeaves = (room) => {
   if (!room?.state || room.state.phase !== "gameEnded") return;
+  if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
+    room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
+  }
   const ids = disconnectedHumanPlayerIds(room);
   if (!ids.length) return;
   for (const userId of ids) {
+    room.disconnectedLeaveSyncedUserIds.add(userId);
     for (const seat of asArray(room.state.seats)) {
       if (seat?.playerId !== userId) continue;
       seat.playerId = null;
@@ -288,6 +294,7 @@ const loadPersistedRoom = (tableId) => {
         sockets: new Map(),
         players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
         processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
+        disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
         updatedAt: Number(parsed.updatedAt || now()),
       };
     } catch (error) {
@@ -310,6 +317,7 @@ const roomFromPersistedPayload = (parsed, tableId) => {
     sockets: new Map(),
     players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
     processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
+    disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
     updatedAt: Number(parsed.updatedAt || now()),
   };
 };
@@ -432,6 +440,7 @@ const persistRoom = (room) => {
     events: room.events,
     players: roomPlayerConnectionList(room),
     processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
+    disconnectedLeaveSyncedUserIds: [...(room.disconnectedLeaveSyncedUserIds || [])].slice(-100),
     updatedAt: room.updatedAt || now(),
   };
   const serialized = JSON.stringify(payload);
@@ -2314,6 +2323,8 @@ const applyServerAction = (state, event) => {
 
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
+    if (state.phase === "gameEnded") return state;
+    if (asArray(state.resultOkPlayerIds).includes(player.id)) return state;
     state.resultOkPlayerIds = [...new Set([...(state.resultOkPlayerIds ?? []), player.id, ...ensureArray(state.players).filter((p) => p.type === "cpu").map((p) => p.id)])];
     state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
     appendHandEvent(state, { type: "resultOk", playerId: player.id, resultOkPlayerIds: [...state.resultOkPlayerIds], turnIndex: state.turnIndex ?? 0 });
@@ -3157,17 +3168,21 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
       gameId: gameId || `game-${key}`,
       version: 0,
       state: null,
-      events: [],
-      sockets: new Map(),
-      players: new Map(),
-      processedRequestIds: new Set(),
-      updatedAt: now(),
-    };
+    events: [],
+    sockets: new Map(),
+    players: new Map(),
+    processedRequestIds: new Set(),
+    disconnectedLeaveSyncedUserIds: new Set(),
+    updatedAt: now(),
+  };
     gameRooms.set(key, room);
   }
   if (gameId && !room.gameId) room.gameId = gameId;
   if (!(room.processedRequestIds instanceof Set)) {
     room.processedRequestIds = new Set(asArray(room.processedRequestIds));
+  }
+  if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
+    room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
   }
   return room;
 };
@@ -3189,6 +3204,7 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
   room.state = persisted.state;
   room.events = asArray(persisted.events);
   room.processedRequestIds = new Set(asArray(persisted.processedRequestIds));
+  room.disconnectedLeaveSyncedUserIds = new Set(asArray(persisted.disconnectedLeaveSyncedUserIds));
   room.updatedAt = Number(persisted.updatedAt || now());
   room.sockets = existingSockets;
   room.players = existingPlayers.size ? existingPlayers : persisted.players;
@@ -3504,6 +3520,13 @@ io.on("connection", (socket) => {
         clientVersion = room.version;
       }
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
+      if (actionType === "resultOk") {
+        const resultOkPlayerIds = asArray(room.state?.resultOkPlayerIds);
+        if (room.state?.phase === "gameEnded" || resultOkPlayerIds.includes(playerId)) {
+          ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
+          return;
+        }
+      }
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         queueReplayEffectsSnapshot(room);
         markDisconnectedPlayersAsLastHand(room);
