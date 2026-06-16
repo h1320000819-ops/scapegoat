@@ -430,6 +430,32 @@ button:hover {
   padding: 6px;
 }
 
+.hand-zone {
+  position: relative;
+}
+
+.hand-clock-badge {
+  background: rgba(3, 9, 16, 0.82);
+  border: 1px solid rgba(191, 239, 255, 0.58);
+  border-radius: 999px;
+  color: #d8f7ff;
+  font-size: 11px;
+  font-weight: 900;
+  left: 4px;
+  line-height: 1;
+  padding: 3px 7px;
+  pointer-events: none;
+  position: absolute;
+  top: -9px;
+  z-index: 12;
+}
+
+.hand-clock-badge.low {
+  background: rgba(116, 15, 15, 0.88);
+  border-color: rgba(255, 138, 138, 0.9);
+  color: #ffe0e0;
+}
+
 .seat-bottom .hand-row {
   justify-content: flex-start;
 }
@@ -1120,8 +1146,9 @@ button:hover {
   align-items: flex-end;
   flex-direction: column;
   gap: 6px;
-  right: 72px;
-  top: 0;
+  position: fixed;
+  right: 16px;
+  top: 58px;
   width: 260px;
 }
 
@@ -1464,6 +1491,31 @@ button:hover {
   margin: 10px 0;
 }
 
+.score-hand-and-melds {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.score-meld-block {
+  min-width: 0;
+}
+
+.score-meld-block strong,
+.score-hand-block strong,
+.score-winning-tile strong {
+  display: block;
+}
+
+.result-melds {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 .compact-yaku {
   display: grid;
   gap: 4px 16px;
@@ -1721,6 +1773,13 @@ button:hover {
     padding: 2px;
   }
 
+  .hand-clock-badge {
+    font-size: 9px;
+    left: 2px;
+    padding: 2px 5px;
+    top: -7px;
+  }
+
   .seat-top .tile,
   .seat-top .tile-button,
   .seat-top .tile-image,
@@ -1868,6 +1927,35 @@ button:hover {
     width: 26px;
   }
 
+  .seat-right .exposed-row {
+    align-items: flex-end;
+    gap: 3px;
+    right: 6px;
+    top: 38px;
+    width: min(42vw, 150px);
+    z-index: 15;
+  }
+
+  .seat-right .meld-area > span,
+  .seat-right .nuki-dora-area > span {
+    font-size: 8px;
+    margin-bottom: 1px;
+  }
+
+  .seat-right .meld-set {
+    gap: 1px;
+    margin-right: 2px;
+    min-height: 28px;
+  }
+
+  .seat-right .meld-tiles {
+    gap: 1px;
+  }
+
+  .seat-right .meld-area .exposed-tiles {
+    align-items: flex-end;
+  }
+
   .seat-right .hand-row > .tile,
   .seat-right .hand-row > .tile-button,
   .seat-right .drawn-tile > .tile,
@@ -1916,6 +2004,7 @@ button:hover {
     font-size: 8px;
     max-width: min(112vw, 600px);
     padding: 5px 6px 40px;
+    top: 46%;
     transform: translate(-50%, -50%) scale(0.84);
     width: 600px;
   }
@@ -1946,6 +2035,59 @@ button:hover {
     gap: 3px;
     grid-template-columns: minmax(0, 1fr) minmax(50px, auto);
     margin: 2px 0;
+  }
+
+  .score-main-tiles {
+    grid-template-columns: minmax(0, 1fr) minmax(36px, auto);
+  }
+
+  .score-hand-and-melds {
+    align-items: start;
+    gap: 3px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .score-meld-block {
+    max-width: 132px;
+  }
+
+  .score-meld-block strong,
+  .score-hand-block strong,
+  .score-winning-tile strong {
+    font-size: 8px;
+    line-height: 1;
+  }
+
+  .result-melds {
+    gap: 1px;
+    justify-content: flex-start;
+    margin-top: 1px;
+  }
+
+  .score-result .result-melds .meld-set {
+    gap: 1px;
+    margin-right: 2px;
+    min-height: 24px;
+  }
+
+  .score-result .result-melds .meld-tiles {
+    gap: 1px;
+  }
+
+  .score-result .result-melds .tile,
+  .score-result .result-melds .tile-image,
+  .score-result .result-melds .tile-fallback {
+    height: 20px;
+    min-width: 14px;
+    width: 14px;
+  }
+
+  .score-result .result-melds .meld-kakan {
+    padding-top: 8px;
+  }
+
+  .score-result .result-melds .kakan-added {
+    left: calc((var(--called-index, 1) * 15px) + 7px);
   }
 
   .compact-yaku {

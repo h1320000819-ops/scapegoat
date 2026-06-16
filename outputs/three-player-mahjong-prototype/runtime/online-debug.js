@@ -2296,13 +2296,15 @@
   };
   const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null) => {
     if (isLaunchInProgress(tableId)) return;
-    const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId);
+    const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId)
+      .map((seat) => ({ ...seat, is_last_hand_declared: false, isLastHandDeclared: false }));
     if (filledSeatCount(rows) < 3) {
       throw new Error("3席が埋まっていません。CPUを追加するか、プレイヤーが着席してください。");
     }
     const table = state.tables.find((item) => item.table_id === tableId) || {};
     const tableRuleConfig = parseRuleConfig(table.rule_config);
     const localTableId = `online-debug-${tableId}`;
+    const gameId = `socket-game-${tableId}-${Date.now()}`;
     const currentUser = requireUser();
     const localUsers = JSON.parse(localStorage.getItem("anmikaRocket.users") || "[]");
     const humanUser = {
@@ -2332,7 +2334,7 @@
         playerType: seat.player_type === "cpu" ? "cpu" : isOwnHumanSeat ? "human" : "remote",
         isOccupied: true,
         isReady: true,
-        isLastHandDeclared: Boolean(seat.is_last_hand_declared),
+        isLastHandDeclared: false,
       };
     });
     const localTable = {
@@ -2370,8 +2372,8 @@
       transport: "socketio",
       tableId,
       localTableId,
-      gameId: onlineGameState?.game_id || `socket-game-${tableId}`,
-      version: onlineGameState?.version ?? 0,
+      gameId,
+      version: 0,
       userId: currentUser.id,
       supabaseUrl: config.url,
       anonKey: config.anonKey,
@@ -2399,6 +2401,8 @@
   const startDebugGame = async (tableId = selectedTableId()) => {
     tableId = requireTableId(normalizeRemoteTableId(tableId) || getStartableTableId(), "デバッグ対局開始");
     setActiveTableId(tableId);
+    clearLocalUserLastHandFlagForTable(tableId);
+    await clearOwnLastHandFlag(tableId).catch((error) => log("新規対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
     let rows = [];
     let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
     try {

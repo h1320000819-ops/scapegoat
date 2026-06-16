@@ -219,6 +219,18 @@ const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
 const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
   .filter((record) => !record.connected && record.userId && isUuid(record.userId) && !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId))
   .map((record) => record.userId);
+const connectedHumanPlayerIds = (room) => new Set(roomPlayerConnectionList(room)
+  .filter((record) => record.connected && record.userId)
+  .map((record) => record.userId));
+const autoOkPlayerIdsForResult = (room, actingPlayerId = "") => {
+  if (!room?.state?.handLog?.result) return [];
+  const connectedIds = connectedHumanPlayerIds(room);
+  return ensureArray(room.state.players)
+    .filter((player) => player?.id && player.type !== "cpu")
+    .filter((player) => player.id !== actingPlayerId)
+    .filter((player) => !connectedIds.has(player.id))
+    .map((player) => player.id);
+};
 const markDisconnectedPlayersAsLastHand = (room) => {
   if (!room?.state) return [];
   const alreadyDeclared = new Set(asArray(room.state.lastHandDeclaredBy));
@@ -2324,8 +2336,14 @@ const applyServerAction = (state, event) => {
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
     if (state.phase === "gameEnded") return state;
-    if (asArray(state.resultOkPlayerIds).includes(player.id)) return state;
-    state.resultOkPlayerIds = [...new Set([...(state.resultOkPlayerIds ?? []), player.id, ...ensureArray(state.players).filter((p) => p.type === "cpu").map((p) => p.id)])];
+    const autoOkPlayerIds = asArray(payload.serverAutoOkPlayerIds);
+    if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
+    state.resultOkPlayerIds = [...new Set([
+      ...(state.resultOkPlayerIds ?? []),
+      player.id,
+      ...autoOkPlayerIds,
+      ...ensureArray(state.players).filter((p) => p.type === "cpu").map((p) => p.id),
+    ])];
     state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
     appendHandEvent(state, { type: "resultOk", playerId: player.id, resultOkPlayerIds: [...state.resultOkPlayerIds], turnIndex: state.turnIndex ?? 0 });
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
@@ -3154,8 +3172,21 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
   const key = makeRoomKey(tableId);
   if (!key) throw new Error("tableId is required");
   let room = gameRooms.get(key);
+  if (room && gameId && room.gameId && room.gameId !== gameId) {
+    console.log("[AnmikaGameServer] reset room for new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+    if (room.resultTimer) clearTimeout(room.resultTimer);
+    if (room.clockTimer) clearTimeout(room.clockTimer);
+    room = null;
+    gameRooms.delete(key);
+  }
   if (!room) {
     room = loadPersistedRoom(key);
+    if (room) {
+      if (gameId && room.gameId && room.gameId !== gameId) {
+        console.log("[AnmikaGameServer] ignore persisted room for new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+        room = null;
+      }
+    }
     if (room) {
       if (gameId && !room.gameId) room.gameId = gameId;
       gameRooms.set(key, room);
@@ -3189,6 +3220,10 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
 const hydrateRoomFromDbIfNeeded = async (room) => {
   if (!room || room.state) return room;
   const persisted = await loadPersistedRoomFromDb(room.tableId);
+  if (persisted?.state && room.gameId && persisted.gameId && persisted.gameId !== room.gameId) {
+    console.log("[AnmikaGameServer] ignore DB persisted room for new gameId", { tableId: room.tableId, previousGameId: persisted.gameId, nextGameId: room.gameId });
+    return room;
+  }
   if (!persisted?.state) {
     console.warn("[AnmikaGameServer] no DB persisted room found", {
       tableId: room.tableId,
@@ -3494,7 +3529,8 @@ io.on("connection", (socket) => {
     let room = null;
     let playerIdForAck = payload?.playerId || socket.data.userId || null;
     try {
-      const { tableId, gameId, playerId, actionType, turnVersion, payload: actionPayload } = payload;
+      const { tableId, gameId, playerId, actionType, turnVersion, payload: rawActionPayload } = payload;
+      let actionPayload = rawActionPayload;
       playerIdForAck = playerId || playerIdForAck;
       room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
@@ -3521,8 +3557,7 @@ io.on("connection", (socket) => {
       }
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
       if (actionType === "resultOk") {
-        const resultOkPlayerIds = asArray(room.state?.resultOkPlayerIds);
-        if (room.state?.phase === "gameEnded" || resultOkPlayerIds.includes(playerId)) {
+        if (room.state?.phase === "gameEnded") {
           ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
           return;
         }
@@ -3530,6 +3565,11 @@ io.on("connection", (socket) => {
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         queueReplayEffectsSnapshot(room);
         markDisconnectedPlayersAsLastHand(room);
+        const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
+        if (serverAutoOkPlayerIds.length) {
+          actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
+          console.log("[ResultOk] auto OK for disconnected players", { tableId: room.tableId, playerId, serverAutoOkPlayerIds });
+        }
       }
       const event = {
         id: `event-${randomUUID()}`,

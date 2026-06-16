@@ -4647,7 +4647,7 @@ const resultHand13Tiles = (score, winner, winningTile) => {
 };
 const resultMeldsView = (state, winner) => {
   const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld)).join("");
-  return melds ? `<div><strong>副露</strong><div class="result-melds exposed-tiles">${melds}</div></div>` : "";
+  return melds ? `<div class="score-meld-block"><strong>副露</strong><div class="result-melds exposed-tiles">${melds}</div></div>` : "";
 };
 class GameView {
   constructor(root, handlers) {
@@ -5361,9 +5361,13 @@ class GameView {
     const drawnTile = seatView?.drawnTile ?? (player.drawnTile ? { tile: player.drawnTile, faceDown } : undefined);
     const active = player.id === current.id;
     const isDealer = player.id === dealer?.id;
+    const clockMs = this.currentStateForClock ? getClockRemainingMs(this.currentStateForClock, player.id) : null;
+    const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
+      ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
+      : "";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
       ${this.exposedAreaClean(player)}
     </section>`;
@@ -5534,10 +5538,12 @@ class GameView {
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント・レーキ精算なし</p>` : ""}
-      <div class="score-tile-section">
-        <div><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
-        <div><strong>和了牌</strong><div class="result-tiles">${winningTile ? renderTileView({ tile: winningTile, isDrawnTile: true }) : ""}</div></div>
-        ${meldsView}
+      <div class="score-tile-section score-main-tiles">
+        <div class="score-hand-and-melds">
+          <div class="score-hand-block"><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
+          ${meldsView}
+        </div>
+        <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles">${winningTile ? renderTileView({ tile: winningTile, isDrawnTile: true }) : ""}</div></div>
       </div>
       <div class="score-tile-section">
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
