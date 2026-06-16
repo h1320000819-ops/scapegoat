@@ -1454,7 +1454,8 @@
     if (!state.user?.id) return false;
     return seats.some((seat) => seat.user_id === state.user.id);
   };
-  const openPlayingTableIfNeeded = async (table, seatRows = null) => {
+  const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true } = {}) => {
+    if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
     if (isLaunchInProgress(table.table_id)) return;
     clearRecentlyLeftTableIfExpired();
@@ -1517,7 +1518,6 @@
 
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
-      await openPlayingTableIfNeeded(table, seats);
       return state.activeGameState;
     }
 
@@ -1529,7 +1529,7 @@
       table.is_debug = isDebugTable;
       table.table_seats = seats;
       log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
-      await openPlayingTableIfNeeded(table, seats);
+      await openPlayingTableIfNeeded(table, seats, { navigate: true });
       return onlineGameState;
     } catch (error) {
       showError("自動対局開始に失敗しました", error);
@@ -3486,6 +3486,7 @@
           <div class="table-seats"></div>
           <div class="table-waiting-list"></div>
           <div class="table-card-actions">
+            <button type="button" data-action="startGame" class="primary">${table.status === "playing" ? "対局へ入る" : "対局開始"}</button>
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
             <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
             <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
@@ -3555,6 +3556,11 @@
           uiLog("waiting toggled", { tableId: table.table_id });
           clearError();
           toggleWaiting(table.table_id).catch((error) => showError("ウェイティング切替に失敗しました", error));
+        });
+        card.querySelector('[data-action="startGame"]').addEventListener("click", () => {
+          uiLog("start game clicked", { tableId: table.table_id });
+          clearError();
+          startDebugGame(table.table_id).catch((error) => showError("対局開始に失敗しました", error));
         });
         card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });
