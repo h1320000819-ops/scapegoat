@@ -2788,7 +2788,7 @@
     .join(" / ") || "対局者不明";
   const replayOpenUrl = (replayId) => {
     const encoded = encodeURIComponent(replayId);
-    if (window.location.protocol === "file:") return `../index.html#/replay/${encoded}`;
+    if (window.location.protocol === "file:") return `../replay.html#/replay/${encoded}`;
     return `${window.location.origin}/replay/${encoded}`;
   };
   const renderReplayListPage = async (body) => {

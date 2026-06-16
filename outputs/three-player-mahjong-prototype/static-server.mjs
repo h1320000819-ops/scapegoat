@@ -38,7 +38,10 @@ const server = http.createServer(async (request, response) => {
       const stat = await fs.stat(filePath);
       if (stat.isDirectory()) filePath = path.join(filePath, "index.html");
     } catch {
-      if (pathname.startsWith("/replay/") || pathname.startsWith("/table/") || pathname === "/online-debug") {
+      if (pathname.startsWith("/replay/")) {
+        filePath = path.join(root, "replay.html");
+      }
+      else if (pathname.startsWith("/table/") || pathname === "/online-debug") {
         filePath = path.join(root, "index.html");
       }
       else throw new Error("Not found");

@@ -1020,7 +1020,11 @@ const replayRepository = {
 };
 const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const sync = loadOnlineSync();
-  if (!sync?.supabaseUrl || !sync?.anonKey || !sync?.accessToken) return [];
+  const publicConfig = globalThis.ANMIKA_SUPABASE_CONFIG || {};
+  const supabaseUrl = sync?.supabaseUrl || publicConfig.url || "";
+  const anonKey = sync?.anonKey || publicConfig.anonKey || "";
+  const accessToken = sync?.accessToken || localStorage.getItem("anmikaAccessToken") || "";
+  if (!supabaseUrl || !anonKey || !accessToken) return [];
   if (replayId && !isUuidString(replayId)) return [];
   const filters = [
     "select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at",
@@ -1029,10 +1033,10 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   ];
   if (clubId) filters.push(`club_id=eq.${encodeURIComponent(clubId)}`);
   if (replayId) filters.push(`replay_id=eq.${encodeURIComponent(replayId)}`);
-  const response = await fetch(`${sync.supabaseUrl}/rest/v1/replays?${filters.join("&")}`, {
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/replays?${filters.join("&")}`, {
     headers: {
-      apikey: sync.anonKey,
-      Authorization: `Bearer ${sync.accessToken}`,
+      apikey: anonKey,
+      Authorization: `Bearer ${accessToken}`,
     },
   });
   const text = await response.text();
@@ -4507,7 +4511,12 @@ const renderActionPrompt = (pending, state = null) => {
 };
 const renderHandLog = (state) => {
   const name = (id) => state.players.find((p) => p.id === id)?.name ?? id;
-  const text = (event) => {
+  const text = (event) => replayEventText(event, state, name);
+  return `<section class="hand-log-viewer"><h2>牌譜</h2><p>${state.handLog.roundLabel}</p><ol>${state.handLog.events.map((event) => `<li>${text(event)}</li>`).join("")}</ol></section>`;
+};
+const replayEventText = (event, state, nameFn = null) => {
+  if (!event) return "開始状態";
+  const name = nameFn || ((id) => state.players.find((p) => p.id === id)?.name ?? id);
     if (event.type === "draw") return `${name(event.playerId)} ツモ ${formatTile(event.tile)}`;
     if (event.type === "discard") return `${name(event.playerId)} 打 ${formatTile(event.tile)} ${event.discardType === "tsumogiri" ? "ツモ切り" : "手出し"}`;
     if (event.type === "ron") return `${name(event.playerId)} ロン ${formatTile(event.tile)}`;
@@ -4520,8 +4529,6 @@ const renderHandLog = (state) => {
     if (event.type === "doraReveal") return `ドラ表示 ${formatTile(event.tile)}`;
     if (event.type === "win") return `${name(event.winnerId)} 和了 ${event.winType}`;
     return "流局";
-  };
-  return `<section class="hand-log-viewer"><h2>牌譜</h2><p>${state.handLog.roundLabel}</p><ol>${state.handLog.events.map((event) => `<li>${text(event)}</li>`).join("")}</ol></section>`;
 };
 const seatPositionForPlayer = (state, playerId) => {
   const human = state.players.find((player) => player.type === "human") ?? state.players[0];
@@ -5163,6 +5170,7 @@ class GameView {
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
     const event = (replay.events ?? [])[Math.max(0, index - 1)];
+    const eventLabel = replayEventText(event, displayState);
     const replayBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
@@ -5174,7 +5182,7 @@ class GameView {
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
-        <span class="replay-event-label">${event ? renderHandLog({ ...displayState, handLog: { ...displayState.handLog, events: [event] } }) : "開始状態"}</span>
+        <span class="replay-event-label">${escapeHtml(eventLabel)}</span>
       </div>
       ${handButtons}
     </section>`;
