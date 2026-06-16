@@ -1094,6 +1094,12 @@ const replayFromSupabaseRow = (row) => {
     initialState: row.initial_state,
     events: row.events || [],
     snapshots: row.snapshots || [],
+    simpleReplay: row.summary?.simpleReplay || (row.summary?.replayFormat === "anmika-simple-replay-v1" ? {
+      format: "anmika-simple-replay-v1",
+      initialState: row.initial_state,
+      events: row.events || [],
+      result: row.initial_state?.handLog?.result || null,
+    } : null),
   };
 };
 const mergeReplaysIntoLocalStore = (incoming = []) => {
@@ -1191,7 +1197,178 @@ const getCurrentReplaySnapshot = (replay, index) => {
   const snapshots = getReplaySnapshots(replay);
   return snapshots[Math.max(0, Math.min(index, snapshots.length - 1))];
 };
+const getSimpleReplayPayload = (replay) => {
+  const payload = replay?.simpleReplay || replay?.summary?.simpleReplay;
+  if (payload?.format === "anmika-simple-replay-v1") return payload;
+  if (!replay?.snapshots?.length && replay?.initialState && Array.isArray(replay?.events)) {
+    return {
+      format: "anmika-simple-replay-v1",
+      initialState: replay.initialState,
+      events: replay.events,
+      result: replay.initialState?.handLog?.result || null,
+    };
+  }
+  return null;
+};
+const cloneReplayState = (state) => JSON.parse(JSON.stringify(state || {}));
+const findReplayPlayer = (state, playerId) => state?.players?.find((player) => player.id === playerId);
+const removeReplayTileById = (tiles, tileId) => {
+  const index = Array.isArray(tiles) ? tiles.findIndex((tile) => tile?.id === tileId) : -1;
+  if (index < 0) return null;
+  return tiles.splice(index, 1)[0];
+};
+const removeReplayTileByKind = (tiles, target) => {
+  if (!target) return null;
+  const index = Array.isArray(tiles) ? tiles.findIndex((tile) => sameTileKind(tile, target)) : -1;
+  if (index < 0) return null;
+  return tiles.splice(index, 1)[0];
+};
+const removeReplayDrawnOrHandTile = (player, tile) => {
+  if (!player || !tile) return null;
+  if (player.drawnTile?.id === tile.id) {
+    const drawn = player.drawnTile;
+    player.drawnTile = null;
+    return drawn;
+  }
+  return removeReplayTileById(player.hand, tile.id) || removeReplayTileByKind(player.hand, tile);
+};
+const removeReplayWallTile = (state, tile, source = "liveWall") => {
+  const wall = source === "rinshanWall" ? state.rinshanWall : state.liveWall;
+  if (!Array.isArray(wall)) return null;
+  if (wall[0]?.id === tile?.id) return wall.shift();
+  return removeReplayTileById(wall, tile?.id) || wall.shift() || tile;
+};
+const removeReplayLastDiscard = (state, playerId, tile) => {
+  const player = findReplayPlayer(state, playerId);
+  const discards = player?.discardedTiles || [];
+  if (!tile) return null;
+  for (let index = discards.length - 1; index >= 0; index--) {
+    if (sameTileKind(discards[index]?.tile, tile)) return discards.splice(index, 1)[0]?.tile || tile;
+  }
+  return tile;
+};
+const setReplayActivePlayer = (state, playerId) => {
+  state.currentPlayerIndex = Math.max(0, state.players?.findIndex((player) => player.id === playerId) ?? 0);
+  for (const player of state.players || []) player.status = player.id === playerId ? "active" : "waiting";
+};
+const applySimpleReplayEvent = (state, event) => {
+  if (!state || !event?.type) return state;
+  state.handLog ??= createEmptyHandLog();
+  state.handLog.events ??= [];
+  const player = findReplayPlayer(state, event.playerId);
+  if (event.type === "doraReveal") {
+    state.doraIndicators = event.doraIndicators || [...(state.doraIndicators || []), event.tile].filter(Boolean);
+    return state;
+  }
+  if (event.type === "draw" && player) {
+    const tile = removeReplayWallTile(state, event.tile, event.from || "liveWall") || event.tile;
+    player.drawnTile = tile;
+    state.lastDrawnTile = tile;
+    state.phase = "waitingForHumanDiscard";
+    setReplayActivePlayer(state, player.id);
+    return state;
+  }
+  if (event.type === "discard" && player) {
+    const tile = removeReplayDrawnOrHandTile(player, event.tile) || event.tile;
+    if (player.drawnTile) {
+      player.hand.push(player.drawnTile);
+      player.drawnTile = null;
+      player.hand = sortHandTiles(player.hand);
+    }
+    player.discardedTiles ??= [];
+    player.discardedTiles.push({ tile, discardType: event.discardType || "tedashi", isRiichiDiscard: Boolean(event.isRiichiDiscard), turnIndex: event.turnIndex ?? state.turnIndex ?? 0 });
+    state.turnIndex = Math.max(Number(state.turnIndex || 0), Number(event.turnIndex || 0) + 1);
+    state.phase = "playing";
+    return state;
+  }
+  if (event.type === "riichi" && player) {
+    player.isRiichi = true;
+    player.ippatsu = true;
+    player.riichiTurnIndex = event.turnIndex ?? state.turnIndex ?? 0;
+    player.feverRiichiActive = Boolean(event.feverRiichiActive);
+    return state;
+  }
+  if (event.type === "pon" && player) {
+    const calledTile = removeReplayLastDiscard(state, event.fromPlayerId, event.tile);
+    const consumed = [removeReplayTileByKind(player.hand, event.tile), removeReplayTileByKind(player.hand, event.tile)].filter(Boolean);
+    player.melds ??= [];
+    player.melds.push({ type: "pon", tiles: [...consumed, calledTile], calledTile, fromPlayerId: event.fromPlayerId });
+    player.hand = sortHandTiles(player.hand);
+    setReplayActivePlayer(state, player.id);
+    state.phase = "waitingForHumanDiscard";
+    return state;
+  }
+  if (event.type === "kan" && player) {
+    const tiles = Array.isArray(event.tiles) ? event.tiles : [];
+    const kanType = event.kanType || (event.fromPlayerId ? "minkan" : "ankan");
+    if (kanType === "kakan") {
+      const target = player.melds?.find((meld) => meld.type === "pon" && sameTileKind(meld.tiles?.[0], event.addedTile || tiles[0]));
+      if (target) {
+        target.type = "kakan";
+        target.addedTile = event.addedTile || tiles.at(-1);
+        target.tiles = tiles.length ? tiles : [...(target.tiles || []), target.addedTile].filter(Boolean);
+      }
+    } else {
+      if (event.fromPlayerId) removeReplayLastDiscard(state, event.fromPlayerId, tiles[0]);
+      for (const tile of tiles) removeReplayDrawnOrHandTile(player, tile);
+      player.melds ??= [];
+      player.melds.push({ type: kanType, tiles, calledTile: event.fromPlayerId ? tiles[0] : undefined, fromPlayerId: event.fromPlayerId });
+    }
+    state.kanCount = Number(state.kanCount || 0) + 1;
+    setReplayActivePlayer(state, player.id);
+    return state;
+  }
+  if (event.type === "nukiDora" && player) {
+    const tile = removeReplayDrawnOrHandTile(player, event.tile) || event.tile;
+    player.nukiDoraTiles ??= [];
+    if (tile) player.nukiDoraTiles.push(tile);
+    if (event.replacementTile) player.drawnTile = event.replacementTile;
+    return state;
+  }
+  if ((event.type === "ron" || event.type === "tsumo") && player) {
+    state.phase = "handEnded";
+    for (const seat of state.players || []) seat.status = seat.id === player.id ? "declared-win" : "waiting";
+    state.handLog.result = {
+      type: "win",
+      winnerId: player.id,
+      loserId: event.fromPlayerId || null,
+      winType: event.type,
+      winningTile: event.tile,
+      scoringWinningTile: event.scoringTile,
+      scoreResult: event.scoreResult,
+      payments: event.scoreResult?.paymentDeltas || [],
+    };
+    return state;
+  }
+  if (event.type === "exhaustiveDraw") {
+    state.phase = "exhaustiveDraw";
+    state.handLog.result = { type: "exhaustiveDraw", reason: event.reason || "liveWallEmpty", payments: [] };
+    return state;
+  }
+  return state;
+};
+const buildSimpleReplaySnapshots = (replay) => {
+  const simple = getSimpleReplayPayload(replay);
+  if (!simple?.initialState) return [];
+  const state = cloneReplayState(simple.initialState);
+  state.handLog = { ...(state.handLog || createEmptyHandLog()), events: [], result: null };
+  state.replaySnapshots = undefined;
+  state.replayInitialState = undefined;
+  const snapshots = [cloneReplayState(state)];
+  for (const event of simple.events || []) {
+    state.handLog.events.push(event);
+    applySimpleReplayEvent(state, event);
+    snapshots.push(cloneReplayState(state));
+  }
+  if (simple.result && !state.handLog.result) {
+    state.handLog.result = simple.result;
+    snapshots.push(cloneReplayState(state));
+  }
+  return snapshots;
+};
 const getReplaySnapshots = (replay) => {
+  const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
+  if (simpleSnapshots.length) return simpleSnapshots;
   if (replay?.snapshots?.length) return replay.snapshots;
   if (!replay?.initialState) return [];
   const events = replay.events ?? [];

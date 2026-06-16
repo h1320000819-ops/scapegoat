@@ -1078,6 +1078,65 @@ const compactStateForRoomPersistence = (state) => {
   snapshot.rinshanWall = makeHiddenWallForReplay(asArray(state.rinshanWall).length);
   return snapshot;
 };
+const compactInitialStateForSimpleReplay = (state) => {
+  if (!state) return state;
+  const snapshot = cloneStateWithoutReplayPayload(state);
+  snapshot.pendingAction = null;
+  snapshot.clubPointDbSync = undefined;
+  snapshot.replayDbSync = undefined;
+  return snapshot;
+};
+const compactReplayEvent = (event) => {
+  if (!event || typeof event !== "object") return event;
+  const {
+    tile,
+    tiles,
+    scoringTile,
+    originalTile,
+    winningTile,
+    displayWinningTile,
+    doraIndicators,
+    scoreResult,
+    ...rest
+  } = event;
+  return {
+    ...rest,
+    ...(tile ? { tile } : {}),
+    ...(tiles ? { tiles } : {}),
+    ...(scoringTile ? { scoringTile } : {}),
+    ...(originalTile ? { originalTile } : {}),
+    ...(winningTile ? { winningTile } : {}),
+    ...(displayWinningTile ? { displayWinningTile } : {}),
+    ...(doraIndicators ? { doraIndicators } : {}),
+    ...(scoreResult ? { scoreResult } : {}),
+  };
+};
+const buildSimpleReplayPayload = (room, { scope = "hand", initialState = null, events = null, result = null } = {}) => {
+  const state = room?.state;
+  const baseInitial = initialState || state?.replayInitialState || state;
+  if (!room?.tableId || !state?.handLog?.handId || !baseInitial) return null;
+  const replayEvents = asArray(events || state.handLog?.events).map(compactReplayEvent);
+  return {
+    format: "anmika-simple-replay-v1",
+    tableId: String(room.tableId),
+    gameId: room.gameId || state.gameId || "",
+    handId: state.handLog.handId,
+    scope,
+    ruleId: state.settings?.ruleId || state.settings?.gameType || "anmika-rocket",
+    roundLabel: state.handLog.roundLabel || "",
+    initialState: compactInitialStateForSimpleReplay(baseInitial),
+    events: replayEvents,
+    result: result || state.handLog?.result || null,
+    wall: {
+      initialHands: baseInitial.handLog?.initialHands || null,
+      liveWall: asArray(baseInitial.liveWall),
+      rinshanWall: asArray(baseInitial.rinshanWall),
+      doraIndicators: asArray(baseInitial.doraIndicators),
+      uraDoraIndicators: asArray(baseInitial.uraDoraIndicators),
+    },
+    updatedAt: now(),
+  };
+};
 const compactReplaySnapshotList = (snapshots, limit) => asArray(snapshots)
   .slice(Math.max(0, asArray(snapshots).length - limit))
   .map(compactStateForReplay);
@@ -1100,6 +1159,7 @@ const buildRoomReplayPayload = (room) => {
       ? compactStateForReplay(state.hanchanReplayInitialState)
       : hanchanReplaySnapshots[0] || null,
     hanchanReplaySnapshots,
+    simpleReplay: buildSimpleReplayPayload(room),
     updatedAt: now(),
   };
 };
@@ -1364,6 +1424,12 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     return false;
   }
   const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
+  const simpleReplay = buildSimpleReplayPayload(room, {
+    scope,
+    initialState: initialState || compactSnapshots[0] || room.state,
+    events: room.state?.handLog?.events,
+    result,
+  });
   const replayId = randomUUID();
   const replaySummary = {
     replayId,
@@ -1379,6 +1445,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     resultSummary: replayResultSummary(room.state, result),
     players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
     handMarkers: handMarkersFromSnapshots(compactSnapshots),
+    replayFormat: simpleReplay?.format || "snapshot-v1",
     ...summary,
   };
   await supabaseRest("/replays", {
@@ -1390,9 +1457,9 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       table_id: table.table_id,
       game_id: isUuid(room.gameId) ? room.gameId : null,
       summary: replaySummary,
-      initial_state: compactStateForReplay(initialState || compactSnapshots[0] || room.state),
-      events: asArray(room.events),
-      snapshots: compactSnapshots,
+      initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || compactSnapshots[0] || room.state),
+      events: simpleReplay?.events || asArray(room.events),
+      snapshots: [],
     },
   });
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
