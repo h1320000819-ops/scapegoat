@@ -1312,7 +1312,7 @@ const renderResultOkButton = (state) => {
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
   const inlineOk = "event.preventDefault(); event.stopPropagation(); window.__anmikaController && window.__anmikaController.handleResultOk && window.__anmikaController.handleResultOk();";
-  return `<button type="button" class="primary-action" data-result-ok onclick="${inlineOk}" onmousedown="${inlineOk}" onpointerdown="${inlineOk}" ontouchstart="${inlineOk}" ${isConfirmed ? "disabled" : ""}>${isConfirmed ? `OK済み${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+  return `<button type="button" class="primary-action" data-result-ok onclick="${inlineOk}" onmousedown="${inlineOk}" onpointerdown="${inlineOk}" ontouchstart="${inlineOk}">${isConfirmed ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
 };
 const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   const viewerIndex = Math.max(0, gameState.players.findIndex((player) => player.id === viewerPlayerId));
@@ -2319,7 +2319,6 @@ class GameController {
   }
   tickResultCountdown() {
     if (!this.state.handLog.result) return;
-    if (isSocketAuthoritativeGame() && hasLocalPlayerConfirmedResult(this.state)) return;
     this.state.resultCountdownStartedAt ??= Date.now();
     this.state.resultCountdownSeconds ??= RESULT_COUNTDOWN_SECONDS;
     const nextSeconds = Math.max(0, RESULT_COUNTDOWN_SECONDS - Math.floor((Date.now() - this.state.resultCountdownStartedAt) / 1000));
@@ -3451,14 +3450,18 @@ class GameController {
     const result = this.state.handLog.result;
     if (isSocketAuthoritativeGame()) {
       const localPlayerId = getLocalHumanPlayerId(this.state);
-      if (!localPlayerId || getResultOkPlayerIds(this.state).includes(localPlayerId)) return;
-      if (this.state.resultOkSubmitted && Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 3000) return;
+      if (!localPlayerId) return;
+      if (this.state.resultOkSubmitted && Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 800) return;
       this.state.resultOkSubmitted = true;
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
       this.onStateChanged(this.state);
       submitOnlineGameAction("resultOk", { localPlayerId }).then(async (response) => {
-        if (response?.state?.phase !== "gameEnded") return;
+        if (response?.state?.phase !== "gameEnded") {
+          this.state.resultOkSubmitted = false;
+          this.emit();
+          return;
+        }
         const sync = loadOnlineSync();
         const activeTableId = this.state.activeTableId;
         if (shouldLeaveOnlineTableAfterGameEnded(response.state, sync)) {
@@ -4584,6 +4587,7 @@ class GameView {
     this.root.querySelectorAll("[data-remove-club-member]").forEach((b) => b.addEventListener("click", () => this.handlers.onRemoveClubMember?.(b.dataset.clubId, b.dataset.removeClubMember)));
   }
   appShell(state) {
+    if (state.screen === "replayViewer") return this.replayViewerScreen(state);
     const title = { auth: "ログイン", clubSelect: "クラブ選択", accountSettings: "アカウント設定", onlineTodo: "未決定仕様", clubHome: "クラブ内ホーム", clubTables: "クラブ内卓一覧", createTable: "卓作成", memberManagement: "メンバー管理", home: "ホーム", tableList: "卓一覧", tableRoom: "卓詳細", replayList: "牌譜一覧", replayViewer: "牌譜再生", clubList: "クラブ一覧", clubDetail: "クラブ詳細" }[state.screen] ?? "ホーム";
     return `<section class="lobby-shell">
       <header class="lobby-header"><h2>アンミカロケット</h2><p>${title}</p></header>
@@ -4599,7 +4603,6 @@ class GameView {
       ${state.screen === "tableList" ? this.tableListScreen(state) : ""}
       ${state.screen === "tableRoom" ? this.tableRoomScreen(state) : ""}
       ${state.screen === "replayList" ? this.replayListScreen(state) : ""}
-      ${state.screen === "replayViewer" ? this.replayViewerScreen(state) : ""}
       ${state.screen === "clubList" ? this.clubListScreen(state) : ""}
       ${state.screen === "clubDetail" ? this.clubDetailScreen(state) : ""}
       ${state.ruleHelpOpen ? this.ruleHelpModal() : ""}
@@ -4978,10 +4981,11 @@ class GameView {
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
     const event = (replay.events ?? [])[Math.max(0, index - 1)];
+    const replayBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
-        <button type="button" data-nav="replayList">牌譜一覧へ</button>
+        <a class="button-link" href="${replayBackUrl}">ロビーへ戻る</a>
         <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
         <strong>${index + 1} / ${snapshots.length}</strong>
         <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
@@ -5118,20 +5122,8 @@ class GameView {
     const drawnTile = seatView?.drawnTile ?? (player.drawnTile ? { tile: player.drawnTile, faceDown } : undefined);
     const active = player.id === current.id;
     const isDealer = player.id === dealer?.id;
-    const seatRole = getSeatRoleLabel(this.currentStateForClock ?? {}, player.id);
-    const avatarClass = player.type === "human" ? "avatar-human" : seat === "right" ? "avatar-cpu1" : "avatar-cpu2";
-    const userIcon = player.type === "human" || player.type === "remote" ? authRepository.getUser(player.id)?.iconUrl : null;
-    const avatarPath = userIcon || (player.type === "human" || player.type === "remote" ? UI_ASSETS.avatars.human : seat === "right" ? UI_ASSETS.avatars.cpu1 : UI_ASSETS.avatars.cpu2);
-    const shortName = player.type === "human" ? "P1" : player.type === "remote" ? "P" : seat === "right" ? "C1" : "C2";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""}">
-      <div class="seat-info">
-        <div class="player-avatar ${avatarClass}">${avatarPath ? `<img src="${avatarPath}" alt="${player.name}" />` : `<span>${shortName}</span>`}</div>
-        <div class="seat-meta">
-          <div class="seat-name">${player.name} ${seatRole ? `<b class="seat-role">（${seatRole}）</b>` : ""}</div>
-          <div class="seat-score">${player.score}点 ${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ中"}</span>` : ""}</div>
-          <div class="seat-clock ${getClockRemainingMs(this.currentStateForClock ?? {}, player.id) <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock ?? {}, player.id)}</div>
-        </div>
-      </div>
+      <div class="seat-mini-name">${escapeHtml(player.name)}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
       <div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
       ${this.exposedAreaClean(player)}
