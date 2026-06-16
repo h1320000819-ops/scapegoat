@@ -3088,6 +3088,7 @@ class GameController {
           gameId: latestSync?.gameId || sync.gameId,
           userId: latestSync?.userId || sync.userId,
           reason,
+          resetRoom: false,
         });
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
@@ -3154,6 +3155,7 @@ class GameController {
           gameId: sync.gameId,
           userId: sync.userId,
           reason,
+          resetRoom: Boolean(loadOnlineSync()?.resetRoom),
           state: recoveryState,
           allowCreateInitialState: true,
           players: this.state.players.map((player) => ({
@@ -3215,9 +3217,11 @@ class GameController {
       tableId: sync.tableId,
       gameId: sync.gameId,
       userId: sync.userId,
+      resetRoom: Boolean(sync.resetRoom),
     });
     didInitialJoin = true;
     this.socketInitialConnectRetryCount = 0;
+    if (sync.resetRoom) saveOnlineSync({ ...loadOnlineSync(), resetRoom: false });
     if (joinResponse?.state) {
       saveOnlineSync({ ...loadOnlineSync(), version: joinResponse.version ?? 0, lastServerState: joinResponse.state, lastSyncedAt: Date.now() });
       this.applyOnlineStateSnapshot(joinResponse.state);
@@ -5487,6 +5491,7 @@ class GameView {
     const winningTile = score.winningTile ?? score.selectedWait ?? result?.winningTile ?? null;
     const handTiles = resultHand13Tiles(score, winner, winningTile);
     const meldsView = resultMeldsView(state, winner);
+    const winnerRiichi = Boolean(winner?.isRiichi || winner?.riichiTurnIndex !== null || result?.riichi);
     const payments = Array.isArray(score.paymentDeltas)
       ? Object.fromEntries(score.paymentDeltas.map((payment) => [payment.playerId, payment.delta]))
       : Array.isArray(score.payments)
@@ -5500,7 +5505,7 @@ class GameView {
     const doraNormal = Number(score.dora?.normal ?? 0);
     const doraColored = Number(score.dora?.colored ?? 0);
     const doraNuki = Number(score.dora?.nuki ?? 0);
-    const uraCount = Math.floor(Number(bonus.uraDora ?? 0) / 5);
+    const uraCount = winnerRiichi ? Math.floor(Number(bonus.uraDora ?? 0) / 5) : 0;
     const goldCount = Math.floor(Number(bonus.goldTile ?? 0) / 5);
     const rocketCount = Math.floor(Number(bonus.blueTile ?? 0) / 20);
     if (doraNormal > 0) yakuRows.push(`<li>ドラ${doraNormal}</li>`);
@@ -5545,9 +5550,9 @@ class GameView {
         </div>
         <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles">${winningTile ? renderTileView({ tile: winningTile, isDrawnTile: true }) : ""}</div></div>
       </div>
-      <div class="score-tile-section">
+      <div class="score-tile-section score-dora-section">
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
-        <div><strong>裏ドラ表示牌</strong><div class="result-tiles">${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
+        ${winnerRiichi ? `<div><strong>裏ドラ表示牌</strong><div class="result-tiles">${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>` : ""}
       </div>
       <h3>役一覧</h3>
       <ul class="score-yaku compact-yaku">${yakuRows.join("")}</ul>

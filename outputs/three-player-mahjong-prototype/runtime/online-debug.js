@@ -2304,7 +2304,7 @@
     const table = state.tables.find((item) => item.table_id === tableId) || {};
     const tableRuleConfig = parseRuleConfig(table.rule_config);
     const localTableId = `online-debug-${tableId}`;
-    const gameId = `socket-game-${tableId}-${Date.now()}`;
+    const gameId = onlineGameState?.game_id || `socket-game-${tableId}`;
     const currentUser = requireUser();
     const localUsers = JSON.parse(localStorage.getItem("anmikaRocket.users") || "[]");
     const humanUser = {
@@ -2374,6 +2374,7 @@
       localTableId,
       gameId,
       version: 0,
+      resetRoom: Boolean(onlineGameState?.resetRoom),
       userId: currentUser.id,
       supabaseUrl: config.url,
       anonKey: config.anonKey,
@@ -2404,7 +2405,7 @@
     clearLocalUserLastHandFlagForTable(tableId);
     await clearOwnLastHandFlag(tableId).catch((error) => log("新規対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
     let rows = [];
-    let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
+    let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0, resetRoom: true };
     try {
       await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
       log("DBの対局開始RPCを実行しました。", { tableId });
@@ -2440,6 +2441,18 @@
     log("Socket.IO対局を開始します。局面はNode.jsゲームサーバーのメモリで同期します。", onlineGameState);
     clearLaunchingTable();
     startLocalDebugMahjong(tableId, rows, onlineGameState);
+  };
+  const enterPlayingGame = async (tableId) => {
+    tableId = requireTableId(normalizeRemoteTableId(tableId), "対局参加");
+    setActiveTableId(tableId);
+    const rows = await loadSeats().catch((error) => {
+      log("席情報の再取得に失敗しました。表示中の席情報で対局へ入ります。", rawErrorText(error));
+      return getKnownSeats(tableId);
+    });
+    log("ゲームサーバーの起動状態を確認しています。");
+    await waitForGameServerReady();
+    clearLaunchingTable();
+    startLocalDebugMahjong(tableId, rows, { game_id: `socket-game-${tableId}`, version: 0, resetRoom: false });
   };
   const copyTableUrl = async () => {
     const text = $("tableUrl").textContent;
@@ -3649,7 +3662,8 @@
         card.querySelector('[data-action="startGame"]').addEventListener("click", () => {
           uiLog("start game clicked", { tableId: table.table_id });
           clearError();
-          startDebugGame(table.table_id).catch((error) => showError("対局開始に失敗しました", error));
+          const action = table.status === "playing" ? enterPlayingGame : startDebugGame;
+          action(table.table_id).catch((error) => showError(table.status === "playing" ? "対局参加に失敗しました" : "対局開始に失敗しました", error));
         });
         card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });

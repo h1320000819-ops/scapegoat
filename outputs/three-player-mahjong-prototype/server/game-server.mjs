@@ -3168,12 +3168,12 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
   return state;
 };
 
-const getOrCreateRoom = ({ tableId, gameId }) => {
+const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
   const key = makeRoomKey(tableId);
   if (!key) throw new Error("tableId is required");
   let room = gameRooms.get(key);
-  if (room && gameId && room.gameId && room.gameId !== gameId) {
-    console.log("[AnmikaGameServer] reset room for new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+  if (room && resetRoom) {
+    console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
     if (room.resultTimer) clearTimeout(room.resultTimer);
     if (room.clockTimer) clearTimeout(room.clockTimer);
     room = null;
@@ -3181,11 +3181,9 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
   }
   if (!room) {
     room = loadPersistedRoom(key);
-    if (room) {
-      if (gameId && room.gameId && room.gameId !== gameId) {
-        console.log("[AnmikaGameServer] ignore persisted room for new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
-        room = null;
-      }
+    if (room && resetRoom) {
+      console.log("[AnmikaGameServer] ignore persisted room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+      room = null;
     }
     if (room) {
       if (gameId && !room.gameId) room.gameId = gameId;
@@ -3220,10 +3218,6 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
 const hydrateRoomFromDbIfNeeded = async (room) => {
   if (!room || room.state) return room;
   const persisted = await loadPersistedRoomFromDb(room.tableId);
-  if (persisted?.state && room.gameId && persisted.gameId && persisted.gameId !== room.gameId) {
-    console.log("[AnmikaGameServer] ignore DB persisted room for new gameId", { tableId: room.tableId, previousGameId: persisted.gameId, nextGameId: room.gameId });
-    return room;
-  }
   if (!persisted?.state) {
     console.warn("[AnmikaGameServer] no DB persisted room found", {
       tableId: room.tableId,
@@ -3429,8 +3423,8 @@ io.on("connection", (socket) => {
   });
   socket.on("game:join", async (payload = {}, ack) => {
     try {
-      const { tableId, gameId, userId } = payload;
-      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
+      const { tableId, gameId, userId, resetRoom = false } = payload;
+      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
       console.log("[AnmikaGameServer] join", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
       for (const [socketId, meta] of room.sockets.entries()) {
         if (meta?.userId === userId && socketId !== socket.id) room.sockets.delete(socketId);
@@ -3471,8 +3465,8 @@ io.on("connection", (socket) => {
 
   socket.on("game:initState", async (payload = {}, ack) => {
     try {
-      const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true } = payload;
-      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
+      const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true, resetRoom = false } = payload;
+      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
       console.log("[AnmikaGameServer] initState", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state), version: room.version });
       if (room.state) {
         const viewerId = userId || socket.data.userId || null;

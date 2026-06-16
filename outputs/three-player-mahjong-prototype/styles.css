@@ -1113,7 +1113,7 @@ button:hover {
   bottom: 76px;
   flex-direction: column;
   gap: 6px;
-  right: max(-64px, -4vw);
+  right: clamp(28px, 9vw, 96px);
   width: min(34vw, 340px);
 }
 
@@ -1143,13 +1143,44 @@ button:hover {
 }
 
 .seat-right .exposed-row {
-  align-items: flex-end;
-  flex-direction: column;
-  gap: 6px;
+  align-items: flex-start;
+  flex-direction: row;
+  gap: 8px;
   position: fixed;
-  right: 16px;
-  top: 58px;
-  width: 260px;
+  right: 10px;
+  top: 10px;
+  transform: none;
+  transform-origin: top right;
+  width: auto;
+  z-index: 24;
+}
+
+.seat-right .nuki-dora-area,
+.seat-right .meld-area {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+}
+
+.seat-right .nuki-dora-area .exposed-tiles,
+.seat-right .meld-area .exposed-tiles {
+  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.seat-right .meld-area .meld-set {
+  transform: rotate(90deg);
+  transform-origin: top left;
+}
+
+.seat-right .meld-area .meld-tile.sideways .tile {
+  transform: none;
+}
+
+.seat-right .meld-area .kakan-added {
+  transform: translateX(-50%);
 }
 
 .meld-area > span,
@@ -1927,13 +1958,20 @@ button:hover {
     width: 26px;
   }
 
+  .seat-bottom .exposed-row {
+    right: clamp(42px, 18vw, 126px);
+    transform-origin: bottom right;
+  }
+
   .seat-right .exposed-row {
-    align-items: flex-end;
-    gap: 3px;
+    align-items: flex-start;
+    flex-direction: row;
+    gap: 6px;
     right: 6px;
-    top: 38px;
-    width: min(42vw, 150px);
-    z-index: 15;
+    top: 6px;
+    transform: none;
+    width: auto;
+    z-index: 24;
   }
 
   .seat-right .meld-area > span,
@@ -1946,6 +1984,8 @@ button:hover {
     gap: 1px;
     margin-right: 2px;
     min-height: 28px;
+    transform: rotate(90deg);
+    transform-origin: top left;
   }
 
   .seat-right .meld-tiles {
@@ -1953,7 +1993,24 @@ button:hover {
   }
 
   .seat-right .meld-area .exposed-tiles {
-    align-items: flex-end;
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: nowrap;
+  }
+
+  .seat-right .nuki-dora-area .exposed-tiles {
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+  }
+
+  .seat-right .meld-area .meld-tile.sideways .tile {
+    transform: none;
+  }
+
+  .seat-right .meld-area .kakan-added {
+    transform: translateX(-50%);
   }
 
   .seat-right .hand-row > .tile,
@@ -2003,7 +2060,7 @@ button:hover {
   .score-result.result-modal {
     font-size: 8px;
     max-width: min(112vw, 600px);
-    padding: 5px 6px 40px;
+    padding: 5px 6px 10px;
     top: 46%;
     transform: translate(-50%, -50%) scale(0.84);
     width: 600px;
@@ -2012,7 +2069,7 @@ button:hover {
   .compact-score-result {
     font-size: 8px;
     max-width: min(112vw, 600px);
-    padding: 5px 6px 40px;
+    padding: 5px 6px 10px;
     width: 600px;
   }
 
@@ -2038,17 +2095,28 @@ button:hover {
   }
 
   .score-main-tiles {
-    grid-template-columns: minmax(0, 1fr) minmax(36px, auto);
+    grid-template-columns: minmax(0, max-content) max-content;
+    justify-content: start;
+    column-gap: 5px;
   }
 
   .score-hand-and-melds {
     align-items: start;
-    gap: 3px;
+    gap: 2px;
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .score-meld-block {
-    max-width: 132px;
+    max-width: 92px;
+  }
+
+  .score-winning-tile {
+    min-width: 18px;
+  }
+
+  .score-dora-section {
+    grid-template-columns: max-content max-content;
+    justify-content: start;
   }
 
   .score-meld-block strong,
@@ -2188,12 +2256,16 @@ button:hover {
   }
 
   .result-modal [data-result-ok] {
-    bottom: 5px;
-    font-size: 10px;
-    left: 8px;
-    min-height: 25px;
-    right: 8px;
-    width: calc(100% - 16px);
+    border-radius: 999px;
+    bottom: auto;
+    font-size: 9px;
+    left: auto;
+    min-height: 22px;
+    padding: 2px 8px;
+    position: absolute;
+    right: 6px;
+    top: 5px;
+    width: auto;
   }
 
   .win-announcement > div {
