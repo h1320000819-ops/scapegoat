@@ -66,6 +66,15 @@
   };
   const has = (id) => !!document.getElementById(id);
   const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value || "");
+  const isOnlineDebugLocalTableId = (value) => String(value || "").startsWith("online-debug-");
+  const sourceTableIdFromLocalDebugId = (value) => {
+    const text = String(value || "");
+    return isOnlineDebugLocalTableId(text) ? text.replace(/^online-debug-/, "") : text;
+  };
+  const normalizeRemoteTableId = (value) => {
+    const tableId = sourceTableIdFromLocalDebugId(value);
+    return isUuid(tableId) ? tableId : "";
+  };
   const extractClubSearchText = (input) => {
     const raw = String(input || "").trim();
     if (!raw) return "";
@@ -76,7 +85,7 @@
     return raw.replace(/^クラブID\s*[:：]\s*/i, "").trim();
   };
   const selectedClubId = () => state.activeClubId || (has("clubSelect") ? $("clubSelect").value : "") || "";
-  const selectedTableId = () => state.activeTableId || (has("tableSelect") ? $("tableSelect").value : "") || new URLSearchParams(location.search).get("tableId") || "";
+  const selectedTableId = () => normalizeRemoteTableId(state.activeTableId || (has("tableSelect") ? $("tableSelect").value : "") || new URLSearchParams(location.search).get("tableId") || "");
   const selectedMembership = () => state.memberships.find((row) => row.clubs && row.clubs.club_id === selectedClubId());
   const isAdmin = () => selectedMembership()?.role === "admin";
   const escapeHtml = (value) =>
@@ -320,7 +329,12 @@
     return tableId;
   };
   const setActiveTableId = (tableId) => {
-    if (!tableId) return;
+    tableId = normalizeRemoteTableId(tableId);
+    if (!tableId) {
+      state.activeTableId = "";
+      sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+      return;
+    }
     state.activeTableId = tableId;
     sessionStorage.setItem("anmikaOnlineDebugActiveTableId", tableId);
     if (!has("tableSelect")) return;
@@ -632,6 +646,7 @@
     return amount;
   };
   const loadActiveGameState = async (tableId = selectedTableId()) => {
+    tableId = normalizeRemoteTableId(tableId);
     if (!tableId || !state.accessToken) return null;
     const rows = await rest(`/game_states?select=*&table_id=eq.${encodeURIComponent(tableId)}&is_active=eq.true&order=updated_at.desc&limit=1`);
     state.activeGameState = rows[0] || null;
@@ -646,7 +661,7 @@
     return state.activeGameState;
   };
   const ensureOnlineGameForTable = async (tableId = selectedTableId()) => {
-    tableId = requireTableId(tableId, "オンライン対局準備");
+    tableId = requireTableId(normalizeRemoteTableId(tableId), "オンライン対局準備");
     const gameState = await rest("/rpc/ensure_online_game_for_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
     const nextGameState = Array.isArray(gameState) ? gameState[0] : gameState;
     if (!nextGameState?.game_id) {
@@ -1815,6 +1830,7 @@
   const loadSeats = async () => {
     const tableId = selectedTableId();
     if (!tableId) throw new Error(JA_MESSAGES.selectTable);
+    if (!isUuid(tableId)) throw new Error(`卓IDが不正です: ${tableId}`);
     try {
       let rows;
       try {
@@ -2358,7 +2374,7 @@
     window.location.href = targetUrl;
   };
   const startDebugGame = async (tableId = selectedTableId()) => {
-    tableId = requireTableId(tableId, "デバッグ対局開始");
+    tableId = requireTableId(normalizeRemoteTableId(tableId), "デバッグ対局開始");
     setActiveTableId(tableId);
     let rows = [];
     let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
@@ -3396,8 +3412,9 @@
     clearInterval(state.pollTimer);
     state.pollTimer = setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      if (selectedTableId() && state.accessToken) loadSeats().catch(() => {});
-      if (selectedTableId() && state.accessToken) loadActiveGameState().catch(() => {});
+      const tableId = selectedTableId();
+      if (tableId && state.accessToken) loadSeats().catch((error) => log("席の自動更新に失敗しました。", rawErrorText(error)));
+      if (tableId && state.accessToken) loadActiveGameState(tableId).catch((error) => log("対局状態の自動更新に失敗しました。", rawErrorText(error)));
     }, 10000);
     renderDebug("ポーリング中");
   };
@@ -3778,8 +3795,9 @@
         document.body.dataset.screen = "club-home";
         await loadTables().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       }
-      const tableIdFromUrl = new URLSearchParams(location.search).get("tableId");
+      const tableIdFromUrl = normalizeRemoteTableId(new URLSearchParams(location.search).get("tableId"));
       if (tableIdFromUrl) {
+        setActiveTableId(tableIdFromUrl);
         document.body.dataset.screen = "club-home";
         await loadSeats().catch((error) => showError(JA_MESSAGES.actionFailed, error));
         startPolling();
