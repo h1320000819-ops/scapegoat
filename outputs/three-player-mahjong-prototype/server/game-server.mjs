@@ -17,7 +17,9 @@ const DISCONNECTED_DISCARD_GRACE_MS = 30 * 1000;
 const DISCONNECTED_LAST_HAND_GRACE_MS = 5 * 60 * 1000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_STORE_DIR = path.join(__dirname, "game-state-store");
+const REPLAY_STORE_DIR = path.join(STATE_STORE_DIR, "replay-json");
 fs.mkdirSync(STATE_STORE_DIR, { recursive: true });
+fs.mkdirSync(REPLAY_STORE_DIR, { recursive: true });
 
 const createHealthServer = () => http.createServer((req, res) => {
   if (req.url === "/health") {
@@ -38,6 +40,7 @@ const serverDiagnostics = {
   startedAt: Date.now(),
   lastException: null,
   lastGameStateSyncFailure: null,
+  lastReplaySave: null,
 };
 
 const now = () => Date.now();
@@ -49,6 +52,9 @@ const safeStoreFileName = (tableId) => `${String(tableId || "").replace(/[^a-zA-
 const roomStorePath = (tableId) => path.join(STATE_STORE_DIR, safeStoreFileName(tableId));
 const roomBackupStorePath = (tableId) => `${roomStorePath(tableId)}.bak`;
 const roomTempStorePath = (tableId) => `${roomStorePath(tableId)}.tmp`;
+const roomReplayStorePath = (tableId) => path.join(REPLAY_STORE_DIR, safeStoreFileName(tableId));
+const roomReplayBackupStorePath = (tableId) => `${roomReplayStorePath(tableId)}.bak`;
+const roomReplayTempStorePath = (tableId) => `${roomReplayStorePath(tableId)}.tmp`;
 const asArray = (value) => Array.isArray(value) ? value : [];
 const compactError = (error) => ({
   name: error?.name || "Error",
@@ -76,19 +82,30 @@ const reportExceptionToSentry = (error, context = {}) => {
   }
 };
 const logServerException = (source, error, context = {}) => {
-  const exceptionId = context.exceptionId || `ex-${randomUUID()}`;
-  const payload = {
-    exceptionId,
-    source,
-    at: isoNow(),
-    error: compactError(error),
-    context,
-    memoryMb: compactMemoryUsage(),
-  };
-  serverDiagnostics.lastException = payload;
-  reportExceptionToSentry(error, payload);
-  console.error("[ExceptionMonitor]", payload);
-  return exceptionId;
+  try {
+    const exceptionId = context.exceptionId || `ex-${randomUUID()}`;
+    const payload = {
+      exceptionId,
+      source,
+      at: isoNow(),
+      error: compactError(error),
+      context: JSON.parse(JSON.stringify(context || {})),
+      memoryMb: compactMemoryUsage(),
+    };
+    serverDiagnostics.lastException = payload;
+    reportExceptionToSentry(error, payload);
+    console.error("[ExceptionMonitor]", payload);
+    return exceptionId;
+  } catch (loggingError) {
+    const fallbackId = `ex-${Date.now()}`;
+    console.error("[ExceptionMonitor] logging failed", {
+      exceptionId: fallbackId,
+      source,
+      error: error?.message || String(error),
+      loggingError: loggingError?.message || String(loggingError),
+    });
+    return fallbackId;
+  }
 };
 const logGameStateSyncFailure = (source, error, context = {}) => {
   const payload = {
@@ -106,14 +123,48 @@ const logGameStateSyncFailure = (source, error, context = {}) => {
   console.error("[GameStateSyncFailure]", payload);
   return payload;
 };
+const getReplayJsonDiagnostics = () => {
+  try {
+    const files = fs.readdirSync(REPLAY_STORE_DIR)
+      .filter((fileName) => fileName.endsWith(".json"))
+      .map((fileName) => {
+        const filePath = path.join(REPLAY_STORE_DIR, fileName);
+        const stat = fs.statSync(filePath);
+        return { fileName, bytes: stat.size, updatedAt: stat.mtimeMs };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return {
+      directory: REPLAY_STORE_DIR,
+      count: files.length,
+      latest: files.slice(0, 5),
+    };
+  } catch (error) {
+    return {
+      directory: REPLAY_STORE_DIR,
+      count: 0,
+      latest: [],
+      error: error?.message || String(error),
+    };
+  }
+};
 const getAnmikaServerDiagnostics = () => ({
   ok: true,
   socketIo: Boolean(io),
   rooms: gameRooms.size,
+  activeReplaySnapshots: [...gameRooms.values()].map((room) => ({
+    tableId: room.tableId,
+    gameId: room.gameId,
+    version: room.version,
+    handId: room.state?.handLog?.handId || "",
+    replaySnapshots: asArray(room.state?.replaySnapshots).length,
+    hanchanReplaySnapshots: asArray(room.state?.hanchanReplaySnapshots).length,
+  })),
+  replayJson: getReplayJsonDiagnostics(),
   uptimeMs: Date.now() - serverDiagnostics.startedAt,
   memoryMb: compactMemoryUsage(),
   lastException: serverDiagnostics.lastException,
   lastGameStateSyncFailure: serverDiagnostics.lastGameStateSyncFailure,
+  lastReplaySave: serverDiagnostics.lastReplaySave,
 });
 const createServerPlayerClocks = (players, initialMs = 20000) => Object.fromEntries(asArray(players).map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
 const ensureServerClocks = (state) => {
@@ -174,7 +225,7 @@ const hiddenTileArray = (count, prefix) => Array.from({ length: Math.max(0, Numb
 const isResultPhase = (state) => ["handEnded", "showingResult", "finalResult"].includes(state?.phase) || Boolean(state?.handResult || state?.handLog?.result);
 const buildViewStateForPlayer = (state, viewerId) => {
   if (!state) return null;
-  const viewState = clone(state);
+  const viewState = cloneStateWithoutReplayPayload(state);
   viewState.players = asArray(viewState.players).map((player) => {
     if (player.id === viewerId) {
       return {
@@ -433,7 +484,6 @@ const scheduleDisconnectedProgressTimeout = (room) => {
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
-      scheduleDisconnectedTimeouts(room);
     }
     scheduleDisconnectedProgressTimeout(room);
   }, delay);
@@ -540,7 +590,7 @@ const loadPersistedRoom = (tableId) => {
         gameId: parsed.gameId,
         version: parsed.version || parsed.state?.version || 0,
       });
-      return {
+      const room = {
         tableId: String(parsed.tableId),
         gameId: parsed.gameId || `game-${tableId}`,
         version: Number(parsed.version || parsed.state?.version || 0),
@@ -552,6 +602,8 @@ const loadPersistedRoom = (tableId) => {
         disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
         updatedAt: Number(parsed.updatedAt || now()),
       };
+      hydrateRoomReplayJson(room);
+      return room;
     } catch (error) {
       console.warn("[AnmikaGameServer] persisted room load failed", tableId, filePath, error);
     }
@@ -563,7 +615,7 @@ const roomDbPersistWarnings = new Set();
 const roomDbLoadWarnings = new Set();
 const roomFromPersistedPayload = (parsed, tableId) => {
   if (!parsed?.tableId || !parsed?.state) return null;
-  return {
+  const room = {
     tableId: String(parsed.tableId || tableId),
     gameId: parsed.gameId || `game-${tableId}`,
     version: Number(parsed.version || parsed.state?.version || 0),
@@ -575,6 +627,8 @@ const roomFromPersistedPayload = (parsed, tableId) => {
     disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
     updatedAt: Number(parsed.updatedAt || now()),
   };
+  hydrateRoomReplayJson(room);
+  return room;
 };
 const persistRoomToDb = async (room, payload) => {
   if (!ROOM_DB_PERSIST_ENABLED) return false;
@@ -712,8 +766,8 @@ const buildRoomPersistPayload = (room) => ({
   tableId: room.tableId,
   gameId: room.gameId,
   version: room.version,
-  state: room.state,
-  events: room.events,
+  state: compactStateForRoomPersistence(room.state),
+  events: asArray(room.events).slice(-500),
   players: roomPlayerConnectionList(room),
   processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
   disconnectedLeaveSyncedUserIds: [...(room.disconnectedLeaveSyncedUserIds || [])].slice(-100),
@@ -744,6 +798,7 @@ const flushRoomLocalPersist = (room) => {
   if (!payload) return;
   try {
     writeRoomPersistPayload(room, payload);
+    persistRoomReplayJson(room);
   } catch (error) {
     const exceptionId = logServerException("room:persist", error, {
       tableId: room?.tableId,
@@ -984,16 +1039,158 @@ const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}
   return true;
 };
 const makeHiddenWallForReplay = (length) => Array.from({ length: Math.max(0, Number(length || 0)) }, () => 0);
+const cloneStateWithoutReplayPayload = (state) => {
+  if (!state) return state;
+  const {
+    replaySnapshots,
+    hanchanReplaySnapshots,
+    replayInitialState,
+    hanchanReplayInitialState,
+    ...lightState
+  } = state;
+  return clone(lightState);
+};
+const cloneStateForAction = (state) => {
+  const next = cloneStateWithoutReplayPayload(state);
+  next.replaySnapshots = state?.replaySnapshots || [];
+  next.hanchanReplaySnapshots = state?.hanchanReplaySnapshots || [];
+  next.replayInitialState = state?.replayInitialState || null;
+  next.hanchanReplayInitialState = state?.hanchanReplayInitialState || null;
+  return next;
+};
 const compactStateForReplay = (state) => {
   if (!state) return state;
-  const snapshot = clone(state);
+  const snapshot = cloneStateWithoutReplayPayload(state);
   snapshot.liveWall = makeHiddenWallForReplay(asArray(state.liveWall).length);
   snapshot.rinshanWall = makeHiddenWallForReplay(asArray(state.rinshanWall).length);
   snapshot.replaySnapshots = undefined;
   snapshot.hanchanReplaySnapshots = undefined;
+  snapshot.replayInitialState = undefined;
+  snapshot.hanchanReplayInitialState = undefined;
   snapshot.clubPointDbSync = undefined;
   snapshot.replayDbSync = undefined;
   return snapshot;
+};
+const compactStateForRoomPersistence = (state) => {
+  if (!state) return state;
+  const snapshot = cloneStateWithoutReplayPayload(state);
+  snapshot.liveWall = makeHiddenWallForReplay(asArray(state.liveWall).length);
+  snapshot.rinshanWall = makeHiddenWallForReplay(asArray(state.rinshanWall).length);
+  return snapshot;
+};
+const compactReplaySnapshotList = (snapshots, limit) => asArray(snapshots)
+  .slice(Math.max(0, asArray(snapshots).length - limit))
+  .map(compactStateForReplay);
+const buildRoomReplayPayload = (room) => {
+  const state = room?.state;
+  if (!room?.tableId || !state?.handLog?.handId) return null;
+  const replaySnapshots = compactReplaySnapshotList(state.replaySnapshots, 220);
+  const hanchanReplaySnapshots = compactReplaySnapshotList(state.hanchanReplaySnapshots, 450);
+  if (!replaySnapshots.length && !hanchanReplaySnapshots.length) return null;
+  return {
+    schemaVersion: 1,
+    tableId: String(room.tableId),
+    gameId: room.gameId || state.gameId || "",
+    handId: state.handLog.handId,
+    roundLabel: state.handLog.roundLabel || "",
+    ruleId: state.settings?.ruleId || state.settings?.gameType || "anmika-rocket",
+    replayInitialState: state.replayInitialState ? compactStateForReplay(state.replayInitialState) : replaySnapshots[0] || null,
+    replaySnapshots,
+    hanchanReplayInitialState: state.hanchanReplayInitialState
+      ? compactStateForReplay(state.hanchanReplayInitialState)
+      : hanchanReplaySnapshots[0] || null,
+    hanchanReplaySnapshots,
+    updatedAt: now(),
+  };
+};
+const writeRoomReplayPayload = (room, payload) => {
+  if (!room?.tableId || !payload) return;
+  const filePath = roomReplayStorePath(room.tableId);
+  const backupPath = roomReplayBackupStorePath(room.tableId);
+  const tempPath = roomReplayTempStorePath(room.tableId);
+  fs.writeFileSync(tempPath, JSON.stringify(payload));
+  if (fs.existsSync(filePath)) {
+    fs.copyFileSync(filePath, backupPath);
+  }
+  fs.renameSync(tempPath, filePath);
+};
+const persistRoomReplayJson = (room) => {
+  const payload = buildRoomReplayPayload(room);
+  if (!payload) return false;
+  try {
+    writeRoomReplayPayload(room, payload);
+    serverDiagnostics.lastReplaySave = {
+      target: "local-json",
+      ok: true,
+      at: isoNow(),
+      tableId: room.tableId,
+      gameId: room.gameId,
+      handId: payload.handId,
+      snapshots: payload.replaySnapshots.length,
+      hanchanSnapshots: payload.hanchanReplaySnapshots.length,
+      fileName: safeStoreFileName(room.tableId),
+    };
+    return true;
+  } catch (error) {
+    const exceptionId = logServerException("replay-json:persist", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      handId: room?.state?.handLog?.handId,
+    });
+    logGameStateSyncFailure("replay-json:persist", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      exceptionId,
+    });
+    serverDiagnostics.lastReplaySave = {
+      target: "local-json",
+      ok: false,
+      at: isoNow(),
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      handId: room?.state?.handLog?.handId || "",
+      error: error?.message || String(error),
+      exceptionId,
+    };
+    return false;
+  }
+};
+const hydrateRoomReplayJson = (room) => {
+  const state = room?.state;
+  if (!room?.tableId || !state) return false;
+  state.replaySnapshots = asArray(state.replaySnapshots);
+  state.hanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
+  for (const filePath of [roomReplayStorePath(room.tableId), roomReplayBackupStorePath(room.tableId)]) {
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (String(payload?.tableId || "") !== String(room.tableId)) continue;
+      if (payload?.gameId && room.gameId && String(payload.gameId) !== String(room.gameId)) continue;
+      if (payload?.handId && state.handLog?.handId && String(payload.handId) !== String(state.handLog.handId)) continue;
+      state.replayInitialState = payload.replayInitialState || state.replayInitialState || null;
+      state.replaySnapshots = asArray(payload.replaySnapshots);
+      state.hanchanReplayInitialState = payload.hanchanReplayInitialState || state.hanchanReplayInitialState || null;
+      state.hanchanReplaySnapshots = asArray(payload.hanchanReplaySnapshots);
+      console.log("[ReplayJson] hydrated", {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        handId: state.handLog?.handId,
+        replaySnapshots: state.replaySnapshots.length,
+        hanchanReplaySnapshots: state.hanchanReplaySnapshots.length,
+      });
+      return true;
+    } catch (error) {
+      console.warn("[ReplayJson] hydrate failed", {
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        file: filePath,
+        error: error?.message || String(error),
+      });
+    }
+  }
+  return false;
 };
 const appendServerReplaySnapshot = (state) => {
   if (!state || state.screen !== "game" || !state.handLog?.handId) return;
@@ -1002,14 +1199,14 @@ const appendServerReplaySnapshot = (state) => {
   const last = state.replaySnapshots.at(-1);
   if (last?.version !== snapshot.version || last?.phase !== snapshot.phase || last?.turnIndex !== snapshot.turnIndex) {
     state.replaySnapshots.push(snapshot);
-    if (state.replaySnapshots.length > 420) state.replaySnapshots.shift();
+    if (state.replaySnapshots.length > 220) state.replaySnapshots.splice(0, state.replaySnapshots.length - 220);
   }
   if (isTsumoLossless3maState(state)) {
     state.hanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
     const lastHanchan = state.hanchanReplaySnapshots.at(-1);
     if (lastHanchan?.version !== snapshot.version || lastHanchan?.phase !== snapshot.phase || lastHanchan?.turnIndex !== snapshot.turnIndex) {
       state.hanchanReplaySnapshots.push(snapshot);
-      if (state.hanchanReplaySnapshots.length > 1200) state.hanchanReplaySnapshots.shift();
+      if (state.hanchanReplaySnapshots.length > 450) state.hanchanReplaySnapshots.splice(0, state.hanchanReplaySnapshots.length - 450);
     }
   }
 };
@@ -1138,6 +1335,15 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     room.state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
     room.state.replayDbSync.lastError = "SUPABASE_SERVICE_ROLE_KEY is not set. Renderの環境変数に設定してください。";
     room.state.replayDbSync.lastErrorAt = now();
+    serverDiagnostics.lastReplaySave = {
+      target: "supabase",
+      ok: false,
+      at: isoNow(),
+      tableId: room.tableId,
+      gameId: room.gameId,
+      scope,
+      reason: "SUPABASE_SERVICE_ROLE_KEY is not set",
+    };
     return false;
   }
   const table = await getRoomTableContext(room);
@@ -1146,6 +1352,15 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     room.state.replayDbSync ??= { appliedKeys: [], replayIds: {} };
     room.state.replayDbSync.lastError = "table club context is missing";
     room.state.replayDbSync.lastErrorAt = now();
+    serverDiagnostics.lastReplaySave = {
+      target: "supabase",
+      ok: false,
+      at: isoNow(),
+      tableId: room.tableId,
+      gameId: room.gameId,
+      scope,
+      reason: "table club context is missing",
+    };
     return false;
   }
   const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
@@ -1182,6 +1397,16 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
   });
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
   markReplaySyncApplied(room.state, key, replayId);
+  serverDiagnostics.lastReplaySave = {
+    target: "supabase",
+    ok: true,
+    at: isoNow(),
+    tableId: room.tableId,
+    gameId: room.gameId,
+    replayId,
+    scope,
+    snapshots: compactSnapshots.length,
+  };
   console.log("[ReplaySync] saved", { tableId: room.tableId, gameId: room.gameId, replayId, scope, snapshots: compactSnapshots.length });
   if (!room.skipPersistOnReplaySave) persistRoom(room);
   return true;
@@ -1233,7 +1458,23 @@ const syncReplayEffects = async (room) => {
       },
     });
   })().catch((error) => {
-    console.error("[ReplaySync] failed", { tableId: room?.tableId, gameId: room?.gameId, error });
+    const exceptionId = logServerException("replay:sync", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      handId: room?.state?.handLog?.handId || "",
+    });
+    serverDiagnostics.lastReplaySave = {
+      target: "supabase",
+      ok: false,
+      at: isoNow(),
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      handId: room?.state?.handLog?.handId || "",
+      error: error?.message || String(error),
+      exceptionId,
+    };
+    console.error("[ReplaySync] failed", { tableId: room?.tableId, gameId: room?.gameId, exceptionId, error });
   }).finally(() => {
     room.replaySyncInFlight = null;
   });
@@ -1317,7 +1558,7 @@ const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: false,
   baibaEnabled: false,
   otokogiEnabled: true,
-  feverRiichiEnabled: false,
+  feverRiichiEnabled: true,
   turquoise5pCount: 0,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
@@ -2395,6 +2636,8 @@ const beginServerRiichiAutoDiscard = (state, player) => {
 };
 const queueServerSelfDrawOptions = (state, player) => {
   if (!player || player.type === "cpu") return false;
+  const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+  if (feverPlayer && feverPlayer.id !== player.id) return beginServerRiichiAutoDiscard(state, player);
   const options = [];
   if (canServerTsumo(state, player)) {
     const option = { type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null };
@@ -2494,6 +2737,8 @@ const applyServerFlowerEffect = (state) => {
   return true;
 };
 const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
+  const feverPlayer = ensureArray(state.players).find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
+  if (feverPlayer && feverPlayer.id !== fromPlayerId) return false;
   const candidates = ensureArray(state.players).filter((player) => player.id !== fromPlayerId && player.type !== "cpu");
   for (const player of candidates) {
     const matchingCount = ensureArray(player.hand).filter((tile) => sameTileKind(tile, sourceTile)).length;
@@ -3247,8 +3492,12 @@ const calculateServerExhaustiveDraw = (state) => {
       finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
     };
   }
+  const activeFeverPlayer = ensureArray(state.players).find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
   const tenpaiResults = ensureArray(state.players).map((player) => {
     const handTiles = getHand13ForServerTenpai(player);
+    if (activeFeverPlayer && player.id !== activeFeverPlayer.id) {
+      return { playerId: player.id, isTenpai: false, waits: [], handTiles, forcedNotenByFeverRiichi: true };
+    }
     const waits = getWinningTilesForServerTenpai(player);
     return { playerId: player.id, isTenpai: waits.length > 0, waits, handTiles };
   });
@@ -3985,6 +4234,15 @@ io.on("connection", (socket) => {
           console.log("[ResultOk] auto OK for disconnected players", { tableId: room.tableId, playerId, serverAutoOkPlayerIds });
         }
       }
+      if (["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(actionType)) {
+        if (room.clockTimer) {
+          clearTimeout(room.clockTimer);
+          room.clockTimer = null;
+        }
+        if (playerId && room.state?.activeClockPlayerId === playerId) {
+          stopServerClockForPlayer(room.state, playerId, { recoverAfterDiscard: false });
+        }
+      }
       const event = {
         id: `event-${randomUUID()}`,
         tableId: room.tableId,
@@ -3995,10 +4253,11 @@ io.on("connection", (socket) => {
         payload: actionPayload || {},
         createdAt: now(),
       };
-      const nextState = clone(room.state);
+      const nextState = cloneStateForAction(room.state);
       applyServerAction(nextState, event);
       advanceServerCpuTurns(nextState);
       room.events.push(event);
+      if (room.events.length > 500) room.events.splice(0, room.events.length - 500);
       room.version = Number(room.version || 0) + 1;
       nextState.version = room.version;
       nextState.onlineMeta = {

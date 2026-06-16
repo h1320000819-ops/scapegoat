@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <title>牌譜再生</title>
+    <title>牌譜再生 | アンミカロケット</title>
     <script>
       (function () {
         var base = location.protocol === "file:" ? "./" : "/";
-        document.write('<link rel="stylesheet" href="' + base + 'styles.css?v=20260616-replay-db-fetch-a" />');
+        document.write('<link rel="stylesheet" href="' + base + 'styles.css?v=20260617-replay-json-a" />');
       })();
     </script>
   </head>
@@ -16,7 +16,7 @@
       <section id="game-root" class="game-root" aria-live="polite">
         <section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
           <h2>牌譜を読み込み中...</h2>
-          <p>しばらく変わらない場合はロビーへ戻ってください。</p>
+          <p>しばらく変わらない場合は、ロビーへ戻って牌譜一覧から開き直してください。</p>
           <button type="button" onclick="location.href='/online-debug'">ロビーへ戻る</button>
         </section>
       </section>
@@ -24,8 +24,8 @@
     <script>
       (function () {
         var base = location.protocol === "file:" ? "./" : "/";
-        document.write('<script src="' + base + 'runtime/supabase-public-config.js?v=20260616-replay-db-fetch-a"><\/script>');
-        document.write('<script src="' + base + 'runtime/app.js?v=20260616-replay-db-fetch-a"><\/script>');
+        document.write('<script src="' + base + 'runtime/supabase-public-config.js?v=20260617-replay-json-a"><\/script>');
+        document.write('<script src="' + base + 'runtime/app.js?v=20260617-replay-json-a"><\/script>');
       })();
     </script>
   </body>

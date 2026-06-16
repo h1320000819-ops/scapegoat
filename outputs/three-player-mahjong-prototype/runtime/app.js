@@ -40,7 +40,7 @@ const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
   rocket19Enabled: false,
   baibaEnabled: false,
   otokogiEnabled: true,
-  feverRiichiEnabled: false,
+  feverRiichiEnabled: true,
   turquoise5pCount: 0,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
@@ -2456,6 +2456,7 @@ class GameController {
     this.monitorDiscardRecover();
     const playerId = this.state.activeClockPlayerId;
     if (!playerId || this.state.screen !== "game" || this.state.handLog.result) return;
+    if (isSocketAuthoritativeGame() && this.state.optimisticDiscardRequestId) return;
     const player = this.getPlayer(playerId);
     const remainingMs = getClockRemainingMs(this.state, playerId);
     if (remainingMs > 0) {
@@ -2913,13 +2914,7 @@ class GameController {
           this.onStateChanged(this.state);
           if (isSocketDisconnectedAckError(error)) {
             this.socketInitialConnectRetryCount = (this.socketInitialConnectRetryCount || 0) + 1;
-            if (this.socketInitialConnectRetryCount <= 3) {
-              setTimeout(() => this.connectSocketGameServer().catch((retryError) => {
-                console.warn("[SocketGame] 初回接続の再試行に失敗しました", retryError);
-                this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${retryError?.message ?? retryError}`;
-                this.onStateChanged(this.state);
-              }), 1200 * this.socketInitialConnectRetryCount);
-            }
+            this.gameSocket?.connect?.();
           }
         });
         return;
@@ -3134,11 +3129,15 @@ class GameController {
     });
     await loadSocketIoClient(serverUrl);
     if (
-      this.gameSocket?.connected &&
+      this.gameSocket &&
       this.gameSocket.auth?.tableId === sync.tableId &&
       this.gameSocket.auth?.gameId === sync.gameId &&
       this.gameSocket.auth?.userId === sync.userId
     ) {
+      if (!this.gameSocket.connected) {
+        saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", socketUrl: serverUrl, lastReconnectReason: "reuseExistingSocket", lastError: "" });
+        await waitForSocketConnected(this.gameSocket, SOCKET_CONNECT_TIMEOUT_MS + 15000);
+      }
       saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: this.gameSocket.id, socketUrl: serverUrl, lastReconnectReason: "reuseExistingSocket", lastError: "" });
       return;
     }
@@ -3165,7 +3164,7 @@ class GameController {
       reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
       timeout: SOCKET_CONNECT_TIMEOUT_MS,
-      forceNew: true,
+      forceNew: false,
       auth: { userId: sync.userId, tableId: sync.tableId, gameId: sync.gameId },
     });
     this.gameSocket = socket;
@@ -4026,7 +4025,7 @@ class GameController {
       console.log("[DiscardPerf] クリック → UI反映", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
       console.log("[DiscardAction] sent", { onlineActionType, tileId, requestId, version: loadOnlineSync()?.version });
       console.log("[DiscardPerf] クリック → サーバー送信", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
-      submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id, discardRequestId: requestId }).catch((error) => {
+      submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id, discardRequestId: requestId }, { timeoutMs: 9000 }).catch((error) => {
         console.warn("[DiscardAction] rejected", error);
         if (error?.response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: error.response.version ?? loadOnlineSync()?.version ?? 0, lastServerState: error.response.state, lastSyncedAt: Date.now() });
@@ -4044,6 +4043,8 @@ class GameController {
         if (response) {
           console.log("[DiscardAction] accepted", { version: response.version });
           this.clearOptimisticDiscard();
+          this.state.discardDebugMessage = "";
+          this.onStateChanged(this.state);
         }
       });
       return;
