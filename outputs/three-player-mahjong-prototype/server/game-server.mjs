@@ -9,6 +9,8 @@ const PORT = Number(process.env.GAME_SERVER_PORT || 8787);
 const allowedOrigins = (process.env.GAME_SERVER_CORS || "*").split(",").map((item) => item.trim()).filter(Boolean);
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const ROOM_DB_PERSIST_INTERVAL_MS = Number(process.env.GAME_ROOM_DB_PERSIST_INTERVAL_MS || 15000);
+const ROOM_DB_PERSIST_ENABLED = String(process.env.GAME_ROOM_DB_PERSIST_ENABLED || "true").toLowerCase() !== "false";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_STORE_DIR = path.join(__dirname, "game-state-store");
 fs.mkdirSync(STATE_STORE_DIR, { recursive: true });
@@ -124,10 +126,144 @@ const publicRoomState = (room, viewerId = null) => ({
   tableId: room.tableId,
   gameId: room.gameId,
   version: room.version,
-  state: buildViewStateForPlayer(room.state, viewerId),
+  state: (() => {
+    const view = buildViewStateForPlayer(room.state, viewerId);
+    if (view) view.onlineConnections = roomPlayerConnectionList(room);
+    return view;
+  })(),
   updatedAt: room.updatedAt,
   eventCount: room.events.length,
+  connections: roomPlayerConnectionList(room),
 });
+
+const playerRecordsFromState = (state) => {
+  const seats = asArray(state?.seats);
+  return asArray(state?.players)
+    .filter((player) => player?.id && player.type !== "cpu")
+    .map((player, index) => {
+      const seatIndex = seats.find((seat) => seat?.playerId === player.id)?.seatIndex ?? index;
+      return {
+        userId: player.id,
+        seatIndex,
+        connected: false,
+        socketId: "",
+        lastSeenAt: 0,
+        disconnectedAt: 0,
+      };
+    });
+};
+const ensureRoomPlayerRegistry = (room) => {
+  if (!room) return new Map();
+  if (!(room.players instanceof Map)) {
+    room.players = new Map(asArray(room.players).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId));
+  }
+  for (const record of playerRecordsFromState(room.state)) {
+    if (!room.players.has(record.userId)) room.players.set(record.userId, record);
+    else {
+      const existing = room.players.get(record.userId);
+      existing.seatIndex = record.seatIndex;
+    }
+  }
+  return room.players;
+};
+const roomPlayerConnectionList = (room) => {
+  const registry = ensureRoomPlayerRegistry(room);
+  return [...registry.values()].map((record) => ({
+    userId: record.userId,
+    seatIndex: record.seatIndex,
+    connected: Boolean(record.connected),
+    socketId: record.socketId || "",
+    lastSeenAt: record.lastSeenAt || 0,
+    disconnectedAt: record.disconnectedAt || 0,
+  }));
+};
+const markRoomPlayerConnected = (room, userId, socket) => {
+  if (!room || !userId) return;
+  const registry = ensureRoomPlayerRegistry(room);
+  const seats = asArray(room.state?.seats);
+  const seatIndex = seats.find((seat) => seat?.playerId === userId)?.seatIndex
+    ?? asArray(room.state?.players).findIndex((player) => player?.id === userId);
+  for (const [existingUserId, record] of registry.entries()) {
+    if (existingUserId === userId) continue;
+    if (record.socketId === socket.id) {
+      record.connected = false;
+      record.socketId = "";
+      record.disconnectedAt = now();
+    }
+  }
+  registry.set(userId, {
+    ...(registry.get(userId) || {}),
+    userId,
+    seatIndex: seatIndex >= 0 ? seatIndex : registry.get(userId)?.seatIndex ?? -1,
+    connected: true,
+    socketId: socket.id,
+    lastSeenAt: now(),
+    disconnectedAt: 0,
+  });
+};
+const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
+  if (!room || !socketId) return null;
+  const registry = ensureRoomPlayerRegistry(room);
+  for (const record of registry.values()) {
+    if (record.socketId !== socketId) continue;
+    record.connected = false;
+    record.socketId = "";
+    record.disconnectedAt = now();
+    record.lastDisconnectReason = reason;
+    return record;
+  }
+  return null;
+};
+const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
+  .filter((record) => !record.connected && record.userId && isUuid(record.userId))
+  .map((record) => record.userId);
+const markDisconnectedPlayersAsLastHand = (room) => {
+  if (!room?.state) return [];
+  const ids = disconnectedHumanPlayerIds(room);
+  if (!ids.length) return [];
+  room.state.lastHandDeclaredBy = [...new Set([...(room.state.lastHandDeclaredBy || []), ...ids])];
+  room.state.settings ??= {};
+  room.state.settings.isLastHand = true;
+  for (const seat of asArray(room.state.seats)) {
+    if (ids.includes(seat?.playerId)) seat.isLastHandDeclared = true;
+  }
+  console.warn("[Reconnect] disconnected players marked as last hand", { tableId: room.tableId, gameId: room.gameId, playerIds: ids });
+  return ids;
+};
+const syncSeatLeaveToDb = async (tableId, userId) => {
+  if (!hasSupabaseServerWriter() || !isUuid(tableId) || !isUuid(userId)) return false;
+  await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(tableId)}&user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: {
+      user_id: null,
+      player_type: "empty",
+      display_name: null,
+      is_last_hand_declared: false,
+    },
+  });
+  return true;
+};
+const syncDisconnectedLastHandLeaves = (room) => {
+  if (!room?.state || room.state.phase !== "gameEnded") return;
+  const ids = disconnectedHumanPlayerIds(room);
+  if (!ids.length) return;
+  for (const userId of ids) {
+    for (const seat of asArray(room.state.seats)) {
+      if (seat?.playerId !== userId) continue;
+      seat.playerId = null;
+      seat.playerType = "empty";
+      seat.displayName = null;
+      seat.isLastHandDeclared = false;
+    }
+    room.players?.delete?.(userId);
+    syncSeatLeaveToDb(room.tableId, userId)
+      .then((updated) => console.warn("[Reconnect] disconnected player left after game end", { tableId: room.tableId, userId, dbUpdated: updated }))
+      .catch((error) => console.error("[Reconnect] failed to leave disconnected player", { tableId: room.tableId, userId, error: error?.message || String(error) }));
+  }
+  room.updatedAt = now();
+  persistRoom(room);
+};
 
 const loadPersistedRoom = (tableId) => {
   const filePaths = [roomStorePath(tableId), roomBackupStorePath(tableId)];
@@ -149,6 +285,7 @@ const loadPersistedRoom = (tableId) => {
         state: parsed.state,
         events: Array.isArray(parsed.events) ? parsed.events : [],
         sockets: new Map(),
+        players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
         processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
         updatedAt: Number(parsed.updatedAt || now()),
       };
@@ -170,11 +307,13 @@ const roomFromPersistedPayload = (parsed, tableId) => {
     state: parsed.state,
     events: Array.isArray(parsed.events) ? parsed.events : [],
     sockets: new Map(),
+    players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
     processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
     updatedAt: Number(parsed.updatedAt || now()),
   };
 };
 const persistRoomToDb = async (room, payload) => {
+  if (!ROOM_DB_PERSIST_ENABLED) return false;
   if (!hasSupabaseServerWriter() || !room?.tableId || !payload?.state) return false;
   try {
     await supabaseRest("/online_game_rooms?on_conflict=table_id", {
@@ -202,6 +341,46 @@ const persistRoomToDb = async (room, payload) => {
     return false;
   }
 };
+
+const shouldForceRoomDbPersist = (payload) => {
+  const state = payload?.state;
+  const phase = state?.phase;
+  return Boolean(
+    phase === "handEnded" ||
+    phase === "exhaustiveDraw" ||
+    phase === "gameEnded" ||
+    phase === "finalResult" ||
+    state?.handLog?.result ||
+    state?.finalResult
+  );
+};
+
+const scheduleRoomDbPersist = (room, payload) => {
+  if (!ROOM_DB_PERSIST_ENABLED) return;
+  if (!hasSupabaseServerWriter() || !room?.tableId || !payload?.state) return;
+  room.pendingDbPersistPayload = payload;
+  const force = shouldForceRoomDbPersist(payload);
+  const elapsed = now() - Number(room.lastDbPersistAt || 0);
+  const run = () => {
+    const nextPayload = room.pendingDbPersistPayload;
+    room.pendingDbPersistPayload = null;
+    if (room.dbPersistTimer) {
+      clearTimeout(room.dbPersistTimer);
+      room.dbPersistTimer = null;
+    }
+    if (!nextPayload) return;
+    room.lastDbPersistAt = now();
+    persistRoomToDb(room, nextPayload);
+  };
+  if (force || elapsed >= ROOM_DB_PERSIST_INTERVAL_MS) {
+    run();
+    return;
+  }
+  if (!room.dbPersistTimer) {
+    room.dbPersistTimer = setTimeout(run, Math.max(1000, ROOM_DB_PERSIST_INTERVAL_MS - elapsed));
+  }
+};
+
 const loadPersistedRoomFromDb = async (tableId) => {
   if (!hasSupabaseServerWriter() || !tableId) return null;
   try {
@@ -250,6 +429,7 @@ const persistRoom = (room) => {
     version: room.version,
     state: room.state,
     events: room.events,
+    players: roomPlayerConnectionList(room),
     processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
     updatedAt: room.updatedAt || now(),
   };
@@ -265,7 +445,7 @@ const persistRoom = (room) => {
     version: room.version,
     file: filePath,
   });
-  persistRoomToDb(room, payload);
+  scheduleRoomDbPersist(room, payload);
 };
 
 const isRecoverableClientState = (state, tableId, gameId) => {
@@ -2915,6 +3095,13 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       baibaMultiplier: 1,
     },
     activeTableId: tableId,
+    seats: normalizedPlayers.map((player, index) => ({
+      seatIndex: index,
+      playerId: player.id,
+      playerType: player.type === "cpu" ? "cpu" : "human",
+      displayName: player.name,
+      isLastHandDeclared: false,
+    })),
     screen: "game",
     rakePool: 0,
     playerClocks: createServerPlayerClocks(normalizedPlayers, 20000),
@@ -2971,6 +3158,7 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
       state: null,
       events: [],
       sockets: new Map(),
+      players: new Map(),
       processedRequestIds: new Set(),
       updatedAt: now(),
     };
@@ -2985,8 +3173,16 @@ const getOrCreateRoom = ({ tableId, gameId }) => {
 const hydrateRoomFromDbIfNeeded = async (room) => {
   if (!room || room.state) return room;
   const persisted = await loadPersistedRoomFromDb(room.tableId);
-  if (!persisted?.state) return room;
+  if (!persisted?.state) {
+    console.warn("[AnmikaGameServer] no DB persisted room found", {
+      tableId: room.tableId,
+      gameId: room.gameId,
+      hasSupabaseWriter: hasSupabaseServerWriter(),
+    });
+    return room;
+  }
   const existingSockets = room.sockets instanceof Map ? room.sockets : new Map();
+  const existingPlayers = room.players instanceof Map ? room.players : new Map();
   room.gameId = persisted.gameId || room.gameId;
   room.version = Number(persisted.version || persisted.state?.version || room.version || 0);
   room.state = persisted.state;
@@ -2994,7 +3190,10 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
   room.processedRequestIds = new Set(asArray(persisted.processedRequestIds));
   room.updatedAt = Number(persisted.updatedAt || now());
   room.sockets = existingSockets;
+  room.players = existingPlayers.size ? existingPlayers : persisted.players;
+  ensureRoomPlayerRegistry(room);
   gameRooms.set(room.tableId, room);
+  console.log("[AnmikaGameServer] hydrated room from DB", { tableId: room.tableId, gameId: room.gameId, version: room.version });
   return room;
 };
 
@@ -3051,6 +3250,7 @@ const scheduleRoomResultTimeout = (room) => {
     room.resultTimer = null;
     try {
       queueReplayEffectsSnapshot(room);
+      markDisconnectedPlayersAsLastHand(room);
       if (!applyAutoResultOk(room.state)) return;
       advanceServerCpuTurns(room.state);
       room.version = Number(room.version || 0) + 1;
@@ -3064,6 +3264,7 @@ const scheduleRoomResultTimeout = (room) => {
       };
       room.updatedAt = now();
       persistRoom(room);
+      syncDisconnectedLastHandLeaves(room);
       syncClubPointEffects(room);
       broadcastState(room);
       scheduleRoomServerEffect(room);
@@ -3152,6 +3353,7 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
     publishedAt: now(),
   };
   room.state = next;
+  ensureRoomPlayerRegistry(room);
   room.updatedAt = now();
   persistRoom(room);
   syncClubPointEffects(room);
@@ -3178,16 +3380,24 @@ io.on("connection", (socket) => {
       const { tableId, gameId, userId } = payload;
       const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       console.log("[AnmikaGameServer] join", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
+      for (const [socketId, meta] of room.sockets.entries()) {
+        if (meta?.userId === userId && socketId !== socket.id) room.sockets.delete(socketId);
+      }
       room.sockets.set(socket.id, { userId, joinedAt: now() });
       socket.join(`table:${room.tableId}`);
       socket.data.tableId = room.tableId;
+      socket.data.gameId = room.gameId;
       socket.data.userId = userId;
+      markRoomPlayerConnected(room, userId, socket);
       if (room.state) {
         if (clearRoomLastHandForUser(room, userId)) {
           room.updatedAt = now();
           persistRoom(room);
         }
+        room.updatedAt = now();
+        persistRoom(room);
         socket.emit("game:state", publicRoomState(room, userId));
+        broadcastState(room);
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
@@ -3246,7 +3456,16 @@ io.on("connection", (socket) => {
         settings,
         ruleConfig,
       });
+      console.log("[AnmikaGameServer] initial state source", {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        source: recoveredClientState ? "clientRecovery" : "newInitial",
+        allowCreateInitialState,
+        hasSupabaseWriter: hasSupabaseServerWriter(),
+      });
       acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
+      markRoomPlayerConnected(room, userId || socket.data.userId, socket);
+      persistRoom(room);
       ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
       console.error("[AnmikaGameServer] initState failed", { socketId: socket.id, payload: { tableId: payload?.tableId, gameId: payload?.gameId, userId: payload?.userId }, error: error?.message || String(error) });
@@ -3286,6 +3505,7 @@ io.on("connection", (socket) => {
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         queueReplayEffectsSnapshot(room);
+        markDisconnectedPlayersAsLastHand(room);
       }
       const event = {
         id: `event-${randomUUID()}`,
@@ -3314,6 +3534,7 @@ io.on("connection", (socket) => {
       room.state = nextState;
       room.updatedAt = now();
       persistRoom(room);
+      syncDisconnectedLastHandLeaves(room);
       if (requestId) {
         room.processedRequestIds.add(requestId);
         if (room.processedRequestIds.size > 500) {
@@ -3380,7 +3601,14 @@ io.on("connection", (socket) => {
     });
     if (!tableId) return;
     const room = gameRooms.get(tableId);
+    const record = markRoomPlayerDisconnected(room, socket.id, reason);
     room?.sockets.delete(socket.id);
+    if (room?.state) {
+      room.updatedAt = now();
+      persistRoom(room);
+      broadcastState(room);
+    }
+    if (record) console.warn("[Socket] player marked disconnected", { tableId, userId: record.userId, seatIndex: record.seatIndex, reason });
   });
 });
 };

@@ -23,6 +23,9 @@
     "normal-3ma": "ノーマル三麻",
     jewel: "ジュエル",
   };
+  const DEBUG_RENDER_MS = 5000;
+  const GAME_SERVER_PROBE_MS = 120000;
+
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
     refreshToken: localStorage.getItem("anmikaRefreshToken") || "",
@@ -3307,14 +3310,16 @@
   const startPolling = () => {
     clearInterval(state.pollTimer);
     state.pollTimer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       if (selectedTableId() && state.accessToken) loadSeats().catch(() => {});
       if (selectedTableId() && state.accessToken) loadActiveGameState().catch(() => {});
-    }, 2500);
+    }, 10000);
     renderDebug("ポーリング中");
   };
   const startClubPolling = () => {
     clearInterval(state.clubPollTimer);
     state.clubPollTimer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       if (!state.accessToken || !state.user) return;
       if (document.body.dataset.screen === "clubs") {
         loadClubs().catch((error) => log("クラブ自動更新に失敗しました。", rawErrorText(error)));
@@ -3323,7 +3328,7 @@
       if (document.body.dataset.screen === "club-home") {
         loadTables().catch((error) => log("卓状況の自動更新に失敗しました。", rawErrorText(error)));
       }
-    }, 5000);
+    }, 30000);
   };
   const render = () => {
     const activeClubId = selectedClubId();
@@ -3690,8 +3695,16 @@
       }
     }
     renderOnlineGamePanel();
-    window.setInterval(() => renderDebug(), 2000);
-    window.setInterval(() => probeGameServer().catch(() => {}), 30000);
+    window.setInterval(() => renderDebug(), DEBUG_RENDER_MS);
+    window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      probeGameServer().catch(() => {});
+    }, GAME_SERVER_PROBE_MS);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      renderDebug();
+      probeGameServer().catch(() => {});
+    });
   };
   init().catch((error) => showError(JA_MESSAGES.actionFailed, error));
 })();

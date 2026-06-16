@@ -3058,8 +3058,17 @@ class GameController {
             lastAction: `game:join:${reason}`,
             lastError: "",
           });
-          this.state.onlineLoadingMessage = "";
           this.applyOnlineStateSnapshot(response.state);
+          if (reason === "connect" || reason === "reconnect") {
+            this.state.onlineLoadingMessage = "対局へ復帰しました";
+            this.onStateChanged(this.state);
+            setTimeout(() => {
+              if (this.state.onlineLoadingMessage === "対局へ復帰しました") {
+                this.state.onlineLoadingMessage = "";
+                this.onStateChanged(this.state);
+              }
+            }, 1800);
+          }
         }
       } catch (error) {
         console.warn("[SocketGame] 再接続後の卓復帰に失敗しました", error);
@@ -3092,17 +3101,20 @@ class GameController {
       this.onStateChanged(this.state);
       try {
         const latestSync = loadOnlineSync();
-        const hadServerStateBefore = Boolean(latestSync?.lastSyncedAt || latestSync?.lastServerState);
         const localRecoveryState = isUsableOnlineGameState(this.state) && !this.state.onlineMeta?.redacted
           ? cloneOnlineGameState(this.state)
           : null;
+        const cachedRecoveryState = isUsableOnlineGameState(latestSync?.lastServerState) && !latestSync?.lastServerState?.onlineMeta?.redacted
+          ? latestSync.lastServerState
+          : null;
+        const recoveryState = localRecoveryState || cachedRecoveryState;
         const response = await socketEmitWithAck(socket, "game:initState", {
           tableId: sync.tableId,
           gameId: sync.gameId,
           userId: sync.userId,
           reason,
-          state: localRecoveryState,
-          allowCreateInitialState: Boolean(localRecoveryState) || !hadServerStateBefore,
+          state: recoveryState,
+          allowCreateInitialState: true,
           players: this.state.players.map((player) => ({
             id: player.id,
             name: player.name,
@@ -3137,7 +3149,7 @@ class GameController {
       if (reason === "io client disconnect") return;
       console.warn("[SocketGame] disconnected", { reason, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
       saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastDisconnectReason: reason, lastReconnectReason: "socketDisconnect", lastError: reason });
-      this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... (${reason})`;
+      this.state.onlineLoadingMessage = `接続が切れました。再接続中... (${reason})`;
       this.onStateChanged(this.state);
     });
     socket.on("connect_error", (error) => {
