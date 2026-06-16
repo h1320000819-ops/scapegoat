@@ -1733,11 +1733,11 @@ button:hover {
   }
 
   .mahjong-table {
-    --center-info-height: 86px;
-    --center-info-width: 118px;
+    --center-info-height: 74px;
+    --center-info-width: 108px;
     --discard-gap: 2px;
-    --discard-tile-height: 25px;
-    --discard-tile-width: 18px;
+    --discard-tile-height: 20px;
+    --discard-tile-width: 14px;
     --river-center-gap: 2px;
     --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 4px);
     --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 4px);
@@ -1859,28 +1859,28 @@ button:hover {
 
   .center-info {
     border-radius: 6px;
-    font-size: 7px;
+    font-size: 6px;
     max-height: var(--center-info-height);
     min-height: var(--center-info-height);
     overflow: hidden;
-    padding: 3px;
+    padding: 2px;
     top: 43%;
     width: var(--center-info-width);
   }
 
   .round-label {
-    font-size: 10px;
-    margin-bottom: 2px;
+    font-size: 8px;
+    margin-bottom: 1px;
   }
 
   .center-scores {
     gap: 1px;
-    margin: 1px 0 2px;
+    margin: 0 0 1px;
   }
 
   .center-scores li,
   .wall-info {
-    font-size: 7px;
+    font-size: 6px;
   }
 
   .center-scores li {
@@ -1891,28 +1891,33 @@ button:hover {
   .center-scores em,
   .dealer-badge,
   .seat-role {
-    font-size: 7px;
+    font-size: 6px;
     padding: 1px 3px;
   }
 
   .center-wall {
     gap: 2px 4px;
-    margin-top: 2px;
-    padding-top: 2px;
+    font-size: 6px;
+    margin-top: 1px;
+    padding-top: 1px;
   }
 
   .center-dora {
     gap: 1px;
-    margin-top: 1px;
+    margin-top: 0;
+  }
+
+  .center-dora > span {
+    font-size: 6px;
   }
 
   .center-dora .tile,
   .center-dora .tile-button,
   .center-dora .tile-image,
   .center-dora .tile-fallback {
-    height: 16px;
-    min-width: 12px;
-    width: 12px;
+    height: 13px;
+    min-width: 10px;
+    width: 10px;
   }
 
   .discard-area {

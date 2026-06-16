@@ -545,10 +545,15 @@
     }
     try {
       const response = await fetchWithTimeout(`${location.origin}/health`, { cache: "no-store" });
+      const diagnostic = await response.json().catch(() => null);
       state.gameServerProbe = {
         status: response.ok ? "OK" : "NG",
         lastError: response.ok ? "" : `HTTP ${response.status}`,
         checkedAt: new Date().toLocaleString("ja-JP"),
+        diagnostics: diagnostic,
+        lastException: diagnostic?.lastException || null,
+        lastGameStateSyncFailure: diagnostic?.lastGameStateSyncFailure || null,
+        memoryMb: diagnostic?.memoryMb || null,
       };
     } catch (error) {
       state.gameServerProbe = { status: "NG", lastError: error?.message || String(error), checkedAt: new Date().toLocaleString("ja-JP") };
@@ -3735,7 +3740,31 @@
     if (!has("debugSummary")) return;
     const socketDebug = loadSocketDebugStatus();
     const socketUpdatedAt = socketDebug.updatedAt ? new Date(socketDebug.updatedAt).toLocaleString("ja-JP") : "なし";
+    const serverException = state.gameServerProbe.lastException;
+    const serverSyncFailure = state.gameServerProbe.lastGameStateSyncFailure;
+    const socketExceptionAt = socketDebug.lastExceptionAt ? new Date(socketDebug.lastExceptionAt).toLocaleString("ja-JP") : "";
+    const memory = state.gameServerProbe.memoryMb;
+    const serverExceptionLine = serverException
+      ? `${serverException.exceptionId || "no-id"} ${serverException.source || ""}: ${serverException.error?.message || ""}`
+      : "なし";
+    const socketExceptionLine = socketDebug.lastExceptionId
+      ? `${socketDebug.lastExceptionId}: ${socketDebug.lastException || socketDebug.lastError || ""}${socketExceptionAt ? ` (${socketExceptionAt})` : ""}`
+      : "なし";
+    const syncFailureLine = serverSyncFailure
+      ? `${serverSyncFailure.source || ""}: gameId=${serverSyncFailure.gameId || "なし"} playerId=${serverSyncFailure.playerId || "なし"} version=${serverSyncFailure.version ?? "なし"} ${serverSyncFailure.error?.message || ""}`
+      : "なし";
+    const memoryLine = memory
+      ? `rss=${memory.rss ?? "?"}MB heapUsed=${memory.heapUsed ?? "?"}MB external=${memory.external ?? "?"}MB`
+      : "未取得";
     $("debugSummary").textContent = [
+      `Server Status: ${state.gameServerProbe.status || "NG"}`,
+      `Socket Status: ${socketDebug.socket || "DISCONNECTED"}`,
+      `Last Error: ${socketDebug.lastError || state.gameServerProbe.lastError || "なし"}`,
+      `Last Exception: ${socketExceptionLine}`,
+      `Server Last Exception: ${serverExceptionLine}`,
+      `GameState Sync Failure: ${syncFailureLine}`,
+      `Server Memory: ${memoryLine}`,
+      "",
       `Supabase URL: ${config.url || "未設定"}`,
       `Supabase: ${config.url && config.anonKey ? "OK" : "設定不足"}`,
       `Socket: ${socketDebug.socket || "DISCONNECTED"}`,

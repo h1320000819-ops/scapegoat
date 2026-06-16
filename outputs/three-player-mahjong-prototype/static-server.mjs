@@ -1,9 +1,10 @@
 import http from "node:http";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { attachAnmikaGameServer } from "./server/game-server.mjs";
+import { attachAnmikaGameServer, getAnmikaServerDiagnostics } from "./server/game-server.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PORT ?? 5173);
@@ -19,13 +20,26 @@ const mimeTypes = {
   ".webp": "image/webp",
 };
 
+const cacheControlFor = (filePath, url, pathname) => {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".html") return "no-store";
+  if (pathname.startsWith("/tiles/") || [".png", ".jpg", ".jpeg", ".webp", ".svg"].includes(ext)) {
+    return "public, max-age=31536000, immutable";
+  }
+  if (url.searchParams.has("v") && [".js", ".css"].includes(ext)) {
+    return "public, max-age=31536000, immutable";
+  }
+  if ([".js", ".css"].includes(ext)) return "public, max-age=300, must-revalidate";
+  return "public, max-age=3600";
+};
+
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
     const pathname = decodeURIComponent(url.pathname);
     if (pathname === "/health") {
       response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ ok: true, socketIo: true }));
+      response.end(JSON.stringify(getAnmikaServerDiagnostics()));
       return;
     }
     if (pathname === "/.env" || pathname.startsWith("/.env.")) throw new Error("Not found");
@@ -47,12 +61,24 @@ const server = http.createServer(async (request, response) => {
       else throw new Error("Not found");
     }
 
-    const bytes = await fs.readFile(filePath);
+    const finalStat = await fs.stat(filePath);
+    if (finalStat.isDirectory()) throw new Error("Not found");
     response.writeHead(200, {
-      "Cache-Control": "no-store",
+      "Cache-Control": cacheControlFor(filePath, url, pathname),
+      "Content-Length": finalStat.size,
       "Content-Type": mimeTypes[path.extname(filePath)] ?? "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
     });
-    response.end(bytes);
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    const stream = createReadStream(filePath);
+    stream.on("error", () => {
+      if (!response.headersSent) response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Not found");
+    });
+    stream.pipe(response);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Not found");

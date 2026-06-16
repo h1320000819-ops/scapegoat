@@ -280,8 +280,12 @@ const saveSocketDebugStatus = (patch = {}) => {
     currentVersion: patch.currentVersion ?? sync.version ?? previous.currentVersion ?? "",
     lastAction: patch.lastAction ?? sync.lastActionType ?? previous.lastAction ?? "",
     lastError: patch.lastError ?? previous.lastError ?? "",
+    lastException: patch.lastException ?? previous.lastException ?? "",
+    lastExceptionId: patch.lastExceptionId ?? previous.lastExceptionId ?? "",
+    lastExceptionAt: patch.lastExceptionAt ?? previous.lastExceptionAt ?? "",
     lastDisconnectReason: patch.lastDisconnectReason ?? previous.lastDisconnectReason ?? "",
     lastReconnectReason: patch.lastReconnectReason ?? previous.lastReconnectReason ?? "",
+    lastReconnectAt: patch.lastReconnectAt ?? previous.lastReconnectAt ?? "",
     updatedAt: Date.now(),
   };
   safeWriteJson(APP_STORAGE_KEYS.socketDebug, next);
@@ -411,9 +415,13 @@ const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_
     if (response?.ok === false) {
       const errorObject = new Error(response.error || "ゲームサーバー処理に失敗しました");
       errorObject.response = response;
+      errorObject.exceptionId = response.exceptionId || "";
       saveSocketDebugStatus({
         lastAction: eventName,
         lastError: errorObject.message,
+        lastException: response.exceptionId ? errorObject.message : "",
+        lastExceptionId: response.exceptionId || "",
+        lastExceptionAt: response.exceptionId ? Date.now() : "",
         serverVersion: response?.version,
         currentVersion: response?.version,
         gameServer: "OK",
@@ -3157,6 +3165,18 @@ class GameController {
     });
     this.gameSocket = socket;
     globalThis.anmikaGameSocket = socket;
+    socket.io?.on?.("reconnect_attempt", (attempt) => {
+      console.warn("[SocketGame] reconnect_attempt", { attempt, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastReconnectReason: `reconnect_attempt:${attempt}`, lastReconnectAt: Date.now() });
+    });
+    socket.io?.on?.("reconnect", (attempt) => {
+      console.log("[SocketGame] reconnect", { attempt, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", lastReconnectReason: `reconnect:${attempt}`, lastReconnectAt: Date.now(), lastError: "" });
+    });
+    socket.io?.on?.("reconnect_error", (error) => {
+      console.warn("[SocketGame] reconnect_error", { error: error?.message ?? error, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastReconnectReason: "reconnect_error", lastReconnectAt: Date.now(), lastError: error?.message || String(error) });
+    });
     let didInitialJoin = false;
     const rejoinSocketRoom = async (reason = "reconnect") => {
       if (!didInitialJoin || !socket.connected) return;
@@ -5437,9 +5457,12 @@ class GameView {
       return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${player.score}点</strong><em>${role}</em></li>`;
     }).join("");
     const doraTiles = (state.doraIndicators ?? []).map((tile) => renderTileView({ tile })).join("");
+    const liveWallCount = state.liveWall?.length ?? 0;
+    const rinshanWallCount = state.rinshanWall?.length ?? 0;
     return `<section class="center-info">
       <div class="round-label">${roundLabel}</div>
       <ul class="center-scores">${playerRows}</ul>
+      <div class="center-wall"><span>山 ${liveWallCount}枚</span><span>嶺上 ${rinshanWallCount}枚</span></div>
       <div class="center-dora"><span>ドラ表示牌</span><div class="center-dora-tiles">${doraTiles || "なし"}</div></div>
     </section>`;
   }

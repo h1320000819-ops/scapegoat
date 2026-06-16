@@ -320,6 +320,10 @@
         </section>
 
         <h3>卓一覧</h3>
+        <section class="online-state-summary">
+          <h3>Server Status</h3>
+          <pre id="debugSummary">確認中...</pre>
+        </section>
         <div id="tableCards" class="table-list"></div>
 
         <section id="tableRoomPanel" class="modal-panel">
@@ -388,12 +392,12 @@
         <button id="loadRakeButton">レーキ履歴</button>
         <pre id="rakeSummary">未取得</pre>
         <pre id="rakeHistory">未取得</pre>
-        <pre id="debugSummary">確認中...</pre>
+        <pre id="debugSummaryLegacy">確認中...</pre>
         <pre id="logOutput">ログはここに表示されます</pre>
       </section>
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/online-debug.js?v=20260616-auto-start-guard-a"></script>
+    <script src="../runtime/online-debug.js?v=20260616-server-diagnostics-a"></script>
   </body>
 </html>

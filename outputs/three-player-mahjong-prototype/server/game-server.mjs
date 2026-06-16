@@ -11,6 +11,8 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL 
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const ROOM_DB_PERSIST_INTERVAL_MS = Number(process.env.GAME_ROOM_DB_PERSIST_INTERVAL_MS || 15000);
 const ROOM_DB_PERSIST_ENABLED = String(process.env.GAME_ROOM_DB_PERSIST_ENABLED || "true").toLowerCase() !== "false";
+const ROOM_LOCAL_PERSIST_DEBOUNCE_MS = Number(process.env.GAME_ROOM_LOCAL_PERSIST_DEBOUNCE_MS || 500);
+const ACTION_DEBUG_LOGS = String(process.env.GAME_ACTION_DEBUG_LOGS || "false").toLowerCase() === "true";
 const DISCONNECTED_DISCARD_GRACE_MS = 30 * 1000;
 const DISCONNECTED_LAST_HAND_GRACE_MS = 5 * 60 * 1000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,7 +22,7 @@ fs.mkdirSync(STATE_STORE_DIR, { recursive: true });
 const createHealthServer = () => http.createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, rooms: gameRooms.size }));
+    res.end(JSON.stringify(getAnmikaServerDiagnostics()));
     return;
   }
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
@@ -31,8 +33,15 @@ let io = null;
 
 const gameRooms = new Map();
 let shutdownHandlersInstalled = false;
+let processExceptionHandlersInstalled = false;
+const serverDiagnostics = {
+  startedAt: Date.now(),
+  lastException: null,
+  lastGameStateSyncFailure: null,
+};
 
 const now = () => Date.now();
+const isoNow = () => new Date().toISOString();
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
 const makeRoomKey = (tableId) => String(tableId || "");
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -41,6 +50,71 @@ const roomStorePath = (tableId) => path.join(STATE_STORE_DIR, safeStoreFileName(
 const roomBackupStorePath = (tableId) => `${roomStorePath(tableId)}.bak`;
 const roomTempStorePath = (tableId) => `${roomStorePath(tableId)}.tmp`;
 const asArray = (value) => Array.isArray(value) ? value : [];
+const compactError = (error) => ({
+  name: error?.name || "Error",
+  message: error?.message || String(error),
+  stack: error?.stack || "",
+  code: error?.code || "",
+});
+const compactMemoryUsage = () => {
+  try {
+    const usage = process.memoryUsage();
+    return Object.fromEntries(Object.entries(usage).map(([key, value]) => [key, Math.round(Number(value || 0) / 1024 / 1024)]));
+  } catch {
+    return {};
+  }
+};
+const reportExceptionToSentry = (error, context = {}) => {
+  const sentry = globalThis.Sentry;
+  if (!sentry?.captureException) return false;
+  try {
+    sentry.captureException(error, { extra: context });
+    return true;
+  } catch (sentryError) {
+    console.warn("[ExceptionMonitor] Sentry capture failed", compactError(sentryError));
+    return false;
+  }
+};
+const logServerException = (source, error, context = {}) => {
+  const exceptionId = context.exceptionId || `ex-${randomUUID()}`;
+  const payload = {
+    exceptionId,
+    source,
+    at: isoNow(),
+    error: compactError(error),
+    context,
+    memoryMb: compactMemoryUsage(),
+  };
+  serverDiagnostics.lastException = payload;
+  reportExceptionToSentry(error, payload);
+  console.error("[ExceptionMonitor]", payload);
+  return exceptionId;
+};
+const logGameStateSyncFailure = (source, error, context = {}) => {
+  const payload = {
+    source,
+    at: isoNow(),
+    error: compactError(error),
+    gameId: context.gameId || "",
+    playerId: context.playerId || "",
+    version: context.version ?? "",
+    tableId: context.tableId || "",
+    actionType: context.actionType || "",
+    exceptionId: context.exceptionId || "",
+  };
+  serverDiagnostics.lastGameStateSyncFailure = payload;
+  console.error("[GameStateSyncFailure]", payload);
+  return payload;
+};
+const getAnmikaServerDiagnostics = () => ({
+  ok: true,
+  socketIo: Boolean(io),
+  rooms: gameRooms.size,
+  uptimeMs: Date.now() - serverDiagnostics.startedAt,
+  memoryMb: compactMemoryUsage(),
+  lastException: serverDiagnostics.lastException,
+  lastGameStateSyncFailure: serverDiagnostics.lastGameStateSyncFailure,
+});
 const createServerPlayerClocks = (players, initialMs = 20000) => Object.fromEntries(asArray(players).map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
 const ensureServerClocks = (state) => {
   if (!state) return {};
@@ -513,6 +587,18 @@ const shouldForceRoomDbPersist = (payload) => {
   );
 };
 
+const shouldSyncRoomDbEffects = (state) => {
+  const phase = state?.phase;
+  return Boolean(
+    phase === "handEnded" ||
+    phase === "exhaustiveDraw" ||
+    phase === "gameEnded" ||
+    phase === "finalResult" ||
+    state?.handLog?.result ||
+    state?.finalResult
+  );
+};
+
 const scheduleRoomDbPersist = (room, payload) => {
   if (!ROOM_DB_PERSIST_ENABLED) return;
   if (!hasSupabaseServerWriter() || !room?.tableId || !payload?.state) return;
@@ -578,33 +664,74 @@ const loadPersistedRoomFromDb = async (tableId) => {
 const persistRoom = (room) => {
   if (!room?.tableId || !room.state) return;
   appendServerReplaySnapshot(room.state);
+  const payload = buildRoomPersistPayload(room);
+  room.pendingLocalPersistPayload = payload;
+  scheduleRoomDbPersist(room, payload);
+  if (shouldForceRoomDbPersist(payload)) {
+    flushRoomLocalPersist(room);
+    return;
+  }
+  if (!room.localPersistTimer) {
+    room.localPersistTimer = setTimeout(() => flushRoomLocalPersist(room), Math.max(50, ROOM_LOCAL_PERSIST_DEBOUNCE_MS));
+  }
+};
+
+const buildRoomPersistPayload = (room) => ({
+  tableId: room.tableId,
+  gameId: room.gameId,
+  version: room.version,
+  state: room.state,
+  events: room.events,
+  players: roomPlayerConnectionList(room),
+  processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
+  disconnectedLeaveSyncedUserIds: [...(room.disconnectedLeaveSyncedUserIds || [])].slice(-100),
+  updatedAt: room.updatedAt || now(),
+});
+
+const writeRoomPersistPayload = (room, payload) => {
+  if (!room?.tableId || !payload?.state) return;
   const filePath = roomStorePath(room.tableId);
   const backupPath = roomBackupStorePath(room.tableId);
   const tempPath = roomTempStorePath(room.tableId);
-  const payload = {
-    tableId: room.tableId,
-    gameId: room.gameId,
-    version: room.version,
-    state: room.state,
-    events: room.events,
-    players: roomPlayerConnectionList(room),
-    processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
-    disconnectedLeaveSyncedUserIds: [...(room.disconnectedLeaveSyncedUserIds || [])].slice(-100),
-    updatedAt: room.updatedAt || now(),
-  };
   const serialized = JSON.stringify(payload);
   fs.writeFileSync(tempPath, serialized);
   if (fs.existsSync(filePath)) {
     fs.copyFileSync(filePath, backupPath);
   }
   fs.renameSync(tempPath, filePath);
-  console.log("[AnmikaGameServer] persisted room", {
-    tableId: room.tableId,
-    gameId: room.gameId,
-    version: room.version,
-    file: filePath,
-  });
-  scheduleRoomDbPersist(room, payload);
+};
+
+const flushRoomLocalPersist = (room) => {
+  if (!room?.tableId) return;
+  if (room.localPersistTimer) {
+    clearTimeout(room.localPersistTimer);
+    room.localPersistTimer = null;
+  }
+  const payload = room.pendingLocalPersistPayload || (room.state ? buildRoomPersistPayload(room) : null);
+  room.pendingLocalPersistPayload = null;
+  if (!payload) return;
+  try {
+    writeRoomPersistPayload(room, payload);
+  } catch (error) {
+    const exceptionId = logServerException("room:persist", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+    });
+    logGameStateSyncFailure("room:persist", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      exceptionId,
+    });
+    console.error("[AnmikaGameServer] room persist failed", {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      exceptionId,
+      error: error?.message || String(error),
+    });
+  }
 };
 
 const isRecoverableClientState = (state, tableId, gameId) => {
@@ -1151,6 +1278,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
+const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 
 const DEFAULT_RULE_CONFIG = {
@@ -2470,6 +2598,17 @@ const applyServerAction = (state, event) => {
   const active = currentPlayer(state);
   const payload = event.payload || {};
   const action = event.actionType;
+  const actionContext = {
+    tableId: event.tableId || state.tableId || "",
+    gameId: event.gameId || state.gameId || "",
+    playerId: event.playerId || "",
+    version: state.version ?? event.turnVersion ?? "",
+    actionType: action,
+    eventId: event.id || "",
+    phase: state.phase || "",
+  };
+
+  try {
 
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
@@ -2778,6 +2917,16 @@ const applyServerAction = (state, event) => {
   }
 
   return state;
+  } catch (error) {
+    if (GUARDED_ACTION_TYPES.has(action)) {
+      const exceptionId = logServerException(`game:action:${action}`, error, actionContext);
+      logGameStateSyncFailure(`game:action:${action}`, error, { ...actionContext, exceptionId });
+      const wrappedError = new Error(`${error?.message || "操作中にサーバー例外が発生しました"} (exceptionId: ${exceptionId})`);
+      wrappedError.exceptionId = exceptionId;
+      throw wrappedError;
+    }
+    throw error;
+  }
 };
 
 const autoDiscardForCpu = (state, player) => {
@@ -3321,6 +3470,7 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     if (room.clockTimer) clearTimeout(room.clockTimer);
     if (room.disconnectedLastHandTimer) clearTimeout(room.disconnectedLastHandTimer);
     if (room.disconnectedProgressTimer) clearTimeout(room.disconnectedProgressTimer);
+    if (room.localPersistTimer) clearTimeout(room.localPersistTimer);
     room = null;
     gameRooms.delete(key);
   }
@@ -3390,7 +3540,24 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
 
 const broadcastState = (room) => {
   for (const [socketId, meta] of room.sockets.entries()) {
-    io.to(socketId).emit("game:state", publicRoomState(room, meta?.userId || null));
+    try {
+      io.to(socketId).emit("game:state", publicRoomState(room, meta?.userId || null));
+    } catch (error) {
+      const exceptionId = logServerException("game:state:broadcast", error, {
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        playerId: meta?.userId || "",
+        version: room?.version,
+        socketId,
+      });
+      logGameStateSyncFailure("game:state:broadcast", error, {
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        playerId: meta?.userId || "",
+        version: room?.version,
+        exceptionId,
+      });
+    }
   }
 };
 const clearRoomLastHandForUser = (room, userId) => {
@@ -3598,12 +3765,39 @@ const registerGameSocketHandlers = () => {
 io.on("connection", (socket) => {
   console.log("[Socket] connected", {
     socketId: socket.id,
+    recovered: Boolean(socket.recovered),
     address: socket.handshake?.address,
     origin: socket.handshake?.headers?.origin || "",
     userId: socket.handshake?.auth?.userId || "",
     tableId: socket.handshake?.auth?.tableId || "",
     gameId: socket.handshake?.auth?.gameId || "",
     transport: socket.conn?.transport?.name || "",
+  });
+  if (socket.recovered) {
+    console.log("[Socket] reconnect recovered", {
+      socketId: socket.id,
+      userId: socket.handshake?.auth?.userId || "",
+      tableId: socket.handshake?.auth?.tableId || "",
+      gameId: socket.handshake?.auth?.gameId || "",
+    });
+  }
+  socket.conn?.on?.("upgrade", (transport) => {
+    console.log("[Socket] transport upgraded", {
+      socketId: socket.id,
+      userId: socket.data.userId || socket.handshake?.auth?.userId || "",
+      tableId: socket.data.tableId || socket.handshake?.auth?.tableId || "",
+      gameId: socket.data.gameId || socket.handshake?.auth?.gameId || "",
+      transport: transport?.name || "",
+    });
+  });
+  socket.on("error", (error) => {
+    logServerException("socket:error", error, {
+      socketId: socket.id,
+      userId: socket.data.userId || socket.handshake?.auth?.userId || "",
+      tableId: socket.data.tableId || socket.handshake?.auth?.tableId || "",
+      gameId: socket.data.gameId || socket.handshake?.auth?.gameId || "",
+      version: gameRooms.get(makeRoomKey(socket.data.tableId || socket.handshake?.auth?.tableId || ""))?.version ?? "",
+    });
   });
   socket.on("game:join", async (payload = {}, ack) => {
     try {
@@ -3720,16 +3914,18 @@ io.on("connection", (socket) => {
       playerIdForAck = playerId || playerIdForAck;
       room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
-      console.log("[Action] received", {
-        socketId: socket.id,
-        tableId,
-        gameId,
-        playerId,
-        actionType,
-        clientVersion: turnVersion,
-        serverVersion: room.version,
-        phase: room.state?.phase,
-      });
+      if (ACTION_DEBUG_LOGS) {
+        console.log("[Action] received", {
+          socketId: socket.id,
+          tableId,
+          gameId,
+          playerId,
+          actionType,
+          clientVersion: turnVersion,
+          serverVersion: room.version,
+          phase: room.state?.phase,
+        });
+      }
       const requestId = actionPayload?.discardRequestId || actionPayload?.requestId || payload.requestId || "";
       if (requestId && room.processedRequestIds?.has(requestId)) {
         ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
@@ -3783,22 +3979,43 @@ io.on("connection", (socket) => {
       room.state = nextState;
       room.updatedAt = now();
       persistRoom(room);
-      syncDisconnectedLastHandLeaves(room);
       if (requestId) {
         room.processedRequestIds.add(requestId);
         if (room.processedRequestIds.size > 500) {
           room.processedRequestIds = new Set([...room.processedRequestIds].slice(-300));
         }
       }
-      syncClubPointEffects(room);
       io.to(`table:${room.tableId}`).emit("game:event", event);
       broadcastState(room);
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
-      console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
+      if (ACTION_DEBUG_LOGS) {
+        console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
+      }
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
+      syncDisconnectedLastHandLeaves(room);
+      if (shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
     } catch (error) {
+      const alreadyTraced = Boolean(error?.exceptionId) || String(error?.message || "").includes("exceptionId:");
+      const exceptionId = error?.exceptionId || (alreadyTraced ? "" : logServerException("game:action:rejected", error, {
+        socketId: socket.id,
+        tableId: payload?.tableId,
+        gameId: payload?.gameId,
+        playerId: playerIdForAck,
+        actionType: payload?.actionType,
+        clientVersion: payload?.turnVersion,
+        serverVersion: room?.version,
+        phase: room?.state?.phase,
+      }));
+      logGameStateSyncFailure("game:action:rejected", error, {
+        tableId: payload?.tableId || room?.tableId,
+        gameId: payload?.gameId || room?.gameId,
+        playerId: playerIdForAck,
+        version: room?.version,
+        actionType: payload?.actionType,
+        exceptionId,
+      });
       console.error("[Action] rejected", {
         socketId: socket.id,
         tableId: payload?.tableId,
@@ -3808,9 +4025,10 @@ io.on("connection", (socket) => {
         clientVersion: payload?.turnVersion,
         serverVersion: room?.version,
         phase: room?.state?.phase,
+        exceptionId,
         error: error?.message || String(error),
       });
-      ack?.({ ok: false, error: error.message, ...(room?.state ? publicRoomState(room, playerIdForAck) : {}) });
+      ack?.({ ok: false, error: error.message, exceptionId, ...(room?.state ? publicRoomState(room, playerIdForAck) : {}) });
     }
   });
 
@@ -3874,7 +4092,7 @@ const persistAllRoomsForShutdown = (signal) => {
   console.warn("[AnmikaGameServer] shutdown requested", { signal, rooms: gameRooms.size });
   for (const room of gameRooms.values()) {
     try {
-      persistRoom(room);
+      flushRoomLocalPersist(room);
     } catch (error) {
       console.error("[AnmikaGameServer] shutdown room persist failed", {
         tableId: room?.tableId,
@@ -3900,8 +4118,27 @@ const installShutdownHandlers = () => {
   }
 };
 
+const installProcessExceptionHandlers = () => {
+  if (processExceptionHandlersInstalled || typeof process === "undefined") return;
+  processExceptionHandlersInstalled = true;
+  process.on("uncaughtException", (error) => {
+    logServerException("process:uncaughtException", error, { processWillExit: false });
+  });
+  process.on("unhandledRejection", (reason) => {
+    let message = "";
+    try {
+      message = typeof reason === "string" ? reason : JSON.stringify(reason);
+    } catch {
+      message = String(reason);
+    }
+    const error = reason instanceof Error ? reason : new Error(message || "Unhandled rejection");
+    logServerException("process:unhandledRejection", error, { processWillExit: false });
+  });
+};
+
 export const attachAnmikaGameServer = (httpServer) => {
   if (io) return io;
+  installProcessExceptionHandlers();
   console.log("[AnmikaGameServer] starting", {
     cors: allowedOrigins.includes("*") ? "*" : allowedOrigins,
     pingInterval: 25000,
@@ -3926,6 +4163,8 @@ export const attachAnmikaGameServer = (httpServer) => {
   installShutdownHandlers();
   return io;
 };
+
+export { getAnmikaServerDiagnostics };
 
 export const createAnmikaGameHttpServer = () => {
   const httpServer = createHealthServer();
