@@ -1621,6 +1621,30 @@ button:hover {
   z-index: 28;
 }
 
+.online-loading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.online-loading-actions .button-link,
+.online-loading-actions button {
+  align-items: center;
+  background: #123f62;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 34px;
+  padding: 7px 10px;
+  text-decoration: none;
+}
+
 .tenpai-results {
   display: grid;
   gap: 10px;

@@ -277,6 +277,9 @@ const markRoomPlayerConnected = (room, userId, socket) => {
     socketId: socket.id,
     lastSeenAt: now(),
     disconnectedAt: 0,
+    disconnectedAutoPlay: false,
+    disconnectedAutoPlayAt: 0,
+    disconnectedProgressWaitStartedAt: 0,
   });
 };
 const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
@@ -287,10 +290,20 @@ const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
     record.connected = false;
     record.socketId = "";
     record.disconnectedAt = now();
+    record.disconnectedAutoPlay = false;
+    record.disconnectedAutoPlayAt = 0;
+    record.disconnectedProgressWaitStartedAt = 0;
     record.lastDisconnectReason = reason;
     return record;
   }
   return null;
+};
+const isDisconnectedPlayerProgressTarget = (room, playerId) => {
+  if (!room?.state || !playerId) return false;
+  if (room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase)) return false;
+  if (room.state.pendingAction?.playerId === playerId) return true;
+  const active = currentPlayer(room.state);
+  return active?.id === playerId && ["playing", "waitingForHumanDiscard", "waitingForRiichiDiscard"].includes(room.state.phase);
 };
 const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
   .filter((record) => !record.connected && record.userId && isUuid(record.userId) && !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId))
@@ -373,16 +386,34 @@ const scheduleDisconnectedProgressTimeout = (room) => {
   }
   const registry = ensureRoomPlayerRegistry(room);
   const candidates = [...registry.values()]
-    .filter((record) => record.userId && !record.connected && Number(record.disconnectedAt || 0) > 0);
+    .filter((record) => record.userId && !record.connected && Number(record.disconnectedAt || 0) > 0)
+    .filter((record) => isDisconnectedPlayerProgressTarget(room, record.userId))
+    .map((record) => {
+      if (!record.disconnectedAutoPlay && !Number(record.disconnectedProgressWaitStartedAt || 0)) {
+        record.disconnectedProgressWaitStartedAt = now();
+      }
+      return record;
+    });
   if (!candidates.length) return;
-  const nextAt = Math.min(...candidates.map((record) => Number(record.disconnectedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS));
+  const nextAt = Math.min(...candidates.map((record) =>
+    record.disconnectedAutoPlay
+      ? now() + 700
+      : Number(record.disconnectedProgressWaitStartedAt || now()) + DISCONNECTED_DISCARD_GRACE_MS
+  ));
   const delay = Math.max(0, nextAt - now());
   room.disconnectedProgressTimer = setTimeout(() => {
     room.disconnectedProgressTimer = null;
-    const cutoff = now() - DISCONNECTED_DISCARD_GRACE_MS;
     const ids = disconnectedHumanPlayerIds(room)
       .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
-      .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) <= cutoff);
+      .filter((id) => registry.get(id)?.disconnectedAutoPlay || Number(registry.get(id)?.disconnectedProgressWaitStartedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS <= now())
+      .filter((id) => {
+        const record = registry.get(id);
+        if (!record?.disconnectedAutoPlay && Number(record?.disconnectedProgressWaitStartedAt || 0) > 0) {
+          record.disconnectedAutoPlay = true;
+          record.disconnectedAutoPlayAt = now();
+        }
+        return isDisconnectedPlayerProgressTarget(room, id);
+      });
     const progressed = applyDisconnectedGraceActions(room, ids);
     if (progressed) {
       advanceServerCpuTurns(room.state);
@@ -402,6 +433,7 @@ const scheduleDisconnectedProgressTimeout = (room) => {
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
+      scheduleDisconnectedTimeouts(room);
     }
     scheduleDisconnectedProgressTimeout(room);
   }, delay);
@@ -3688,6 +3720,7 @@ const scheduleRoomServerEffect = (room) => {
     scheduleRoomServerEffect(room);
     scheduleRoomClockTimeout(room);
     scheduleRoomResultTimeout(room);
+    scheduleDisconnectedTimeouts(room);
   }, delay);
 };
 
@@ -3990,6 +4023,7 @@ io.on("connection", (socket) => {
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
+      scheduleDisconnectedTimeouts(room);
       if (ACTION_DEBUG_LOGS) {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }

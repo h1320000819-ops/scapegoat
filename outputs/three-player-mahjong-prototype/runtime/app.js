@@ -212,6 +212,11 @@ const renderStartupFallback = (message) => {
     </div>
   </section>`;
 };
+const onlineLoadingReturnUrl = () => {
+  const sync = loadOnlineSync();
+  const clubId = localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || "";
+  return normalizeOnlineDebugReturnUrl(sync?.returnUrl || onlineDebugLobbyUrl(clubId), clubId, sync?.tableId || "");
+};
 const setCurrentUserSession = (user) => {
   safeWriteJson(APP_STORAGE_KEYS.currentUser, user);
   safeWriteJson(APP_STORAGE_KEYS.currentUserId, user?.id ?? null);
@@ -3893,6 +3898,23 @@ class GameController {
     }
     this.emit();
   }
+  async leaveOnlineGameToLobby() {
+    const sync = loadOnlineSync();
+    const activeTableId = this.state.activeTableId || sync?.localTableId || sync?.tableId || "";
+    const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
+    const returnUrl = onlineLoadingReturnUrl();
+    try {
+      await leaveOnlineTableForSync(sync);
+    } catch (error) {
+      console.warn("[SocketGame] leave on loading failed", error);
+    }
+    if (activeTableId && leavePlayerId) {
+      try { this.leaveSeat(activeTableId, leavePlayerId); } catch {}
+    }
+    forgetLocalOnlineDebugTable(activeTableId);
+    saveOnlineSync(null);
+    window.location.href = returnUrl;
+  }
   toggleSettings() {
     this.state.settingsOpen = !this.state.settingsOpen;
     this.emit();
@@ -4827,6 +4849,7 @@ class GameView {
       }
     };
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
+    this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
@@ -5403,7 +5426,7 @@ class GameView {
       ${state.phase === "idle" ? this.startOverlay() : ""}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
-      ${state.onlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}</div>` : ""}
+      ${state.onlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>退席してロビーへ</button><a class="button-link" href="${escapeHtml(onlineLoadingReturnUrl())}">ロビーへ戻る</a><button type="button" onclick="location.reload()">再接続</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
       ${state.phase === "showingWinAnnouncement" ? this.winAnnouncement(state) : ""}
       ${state.serverAnnouncement && state.phase !== "showingWinAnnouncement" ? this.serverAnnouncement(state) : ""}
@@ -5702,6 +5725,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onSkipAction: () => controller.skipPendingAction(),
   onResultOk: () => controller.handleResultOk(),
   onFinalResultOk: () => controller.handleFinalResultOk(),
+  onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
   onToggleSettings: () => controller.toggleSettings(),
   onUpdateSettings: (partial) => controller.updateSettings(partial),
   onAssistSettings: (playerId, partial) => controller.updateAssistSettings(playerId, partial),
