@@ -25,6 +25,9 @@
   };
   const DEBUG_RENDER_MS = 5000;
   const GAME_SERVER_PROBE_MS = 120000;
+  const GAME_SERVER_STARTUP_TIMEOUT_MS = 60000;
+  const GAME_SERVER_STARTUP_RETRY_MS = 2500;
+  const GAME_SERVER_HEALTH_TIMEOUT_MS = 6000;
 
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -418,13 +421,22 @@
     return `${mobileOrigin()}${normalizedPath}`;
   };
   const buildTableShareUrl = (tableId) => buildAppUrl(`/table/${encodeURIComponent(tableId)}`);
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = GAME_SERVER_HEALTH_TIMEOUT_MS) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const probeGameServer = async () => {
     if (location.protocol === "file:") {
       state.gameServerProbe = { status: "NG", lastError: "file://ではゲームサーバー疎通確認ができません", checkedAt: new Date().toLocaleString("ja-JP") };
       return state.gameServerProbe;
     }
     try {
-      const response = await fetch(`${location.origin}/socket.io/socket.io.js`, { cache: "no-store" });
+      const response = await fetchWithTimeout(`${location.origin}/health`, { cache: "no-store" });
       state.gameServerProbe = {
         status: response.ok ? "OK" : "NG",
         lastError: response.ok ? "" : `HTTP ${response.status}`,
@@ -435,6 +447,19 @@
     }
     renderDebug();
     return state.gameServerProbe;
+  };
+  const waitForGameServerReady = async () => {
+    if (location.protocol === "file:") return;
+    const startedAt = Date.now();
+    let lastError = "";
+    while (Date.now() - startedAt < GAME_SERVER_STARTUP_TIMEOUT_MS) {
+      const probe = await probeGameServer();
+      if (probe.status === "OK") return;
+      lastError = probe.lastError || "未応答";
+      log("ゲームサーバー起動待ちです。少し待ってから再確認します。", { lastError });
+      await new Promise((resolve) => setTimeout(resolve, GAME_SERVER_STARTUP_RETRY_MS));
+    }
+    throw new Error(`ゲームサーバーが応答しません。しばらく待ってからもう一度開始してください。最後の状態: ${lastError || "未応答"}`);
   };
   const buildOnlineDebugReturnUrl = () => {
     if (location.protocol === "file:") {
@@ -2268,11 +2293,12 @@
       onlineSync,
     });
     log("デバッグ対局を開始します。", localTable);
+    const tablePath = `/table/${encodeURIComponent(localTableId)}`;
     const tableHash = `#/table/${encodeURIComponent(localTableId)}`;
     const targetUrl =
       window.location.protocol === "file:"
         ? new URL(`../index.html${tableHash}`, window.location.href).href
-        : `${window.location.origin}/${tableHash}`;
+        : `${window.location.origin}${tablePath}`;
     window.location.href = targetUrl;
   };
   const startDebugGame = async (tableId = selectedTableId()) => {
@@ -2297,6 +2323,8 @@
     state.onlineGameOpened = true;
     if (has("onlineGamePanel")) $("onlineGamePanel").classList.add("open");
     renderOnlineGamePanel();
+    log("ゲームサーバーの起動状態を確認しています。");
+    await waitForGameServerReady();
     log("Socket.IO対局を開始します。局面はNode.jsゲームサーバーのメモリで同期します。", onlineGameState);
     startLocalDebugMahjong(tableId, rows, onlineGameState);
   };
