@@ -2995,6 +2995,19 @@ class GameController {
     this.isApplyingOnlineState = true;
     this.state = { ...this.state, ...next };
     this.isApplyingOnlineState = false;
+    if (this.state.phase === "showingFlowerAnnouncement" && isSocketAuthoritativeGame()) {
+      if (this.flowerAnnouncementWatchdog) clearTimeout(this.flowerAnnouncementWatchdog);
+      const effectId = `${this.state.pendingServerEffect?.playerId || ""}:${this.state.pendingServerEffect?.tileId || ""}:${this.state.turnIndex || 0}`;
+      this.flowerAnnouncementWatchdog = setTimeout(() => {
+        if (this.state.phase !== "showingFlowerAnnouncement") return;
+        const currentEffectId = `${this.state.pendingServerEffect?.playerId || ""}:${this.state.pendingServerEffect?.tileId || ""}:${this.state.turnIndex || 0}`;
+        if (currentEffectId !== effectId) return;
+        this.resyncSocketGameState("flowerAnnouncementWatchdog").catch(() => {});
+      }, 1800);
+    } else if (this.flowerAnnouncementWatchdog) {
+      clearTimeout(this.flowerAnnouncementWatchdog);
+      this.flowerAnnouncementWatchdog = null;
+    }
     if (next.handLog?.result && nextResultKey !== previousResultKey) {
       this.saveReplayForCurrentHand();
     }

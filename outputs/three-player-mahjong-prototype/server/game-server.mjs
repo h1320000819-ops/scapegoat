@@ -3325,27 +3325,43 @@ const scheduleRoomResultTimeout = (room) => {
     }
   }, delay);
 };
+const applyPendingRoomServerEffect = (room) => {
+  if (!room?.state?.pendingServerEffect) return false;
+  if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
+  else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
+  else if (room.state.pendingServerEffect.type === "riichiAutoDiscard") applyServerRiichiAutoDiscardEffect(room.state);
+  else if (room.state.pendingServerEffect.type === "winAnnouncement") {
+    room.state.pendingServerEffect = null;
+    room.state.winAnnouncement = null;
+    room.state.serverAnnouncement = null;
+    room.state.phase = "handEnded";
+  } else {
+    room.state.pendingServerEffect = null;
+  }
+  advanceServerCpuTurns(room.state);
+  room.version = Number(room.version || 0) + 1;
+  room.state.version = room.version;
+  room.updatedAt = now();
+  persistRoom(room);
+  syncClubPointEffects(room);
+  return true;
+};
+const applyDueRoomServerEffect = (room) => {
+  if (!room?.state?.pendingServerEffect) return false;
+  if (Number(room.state.pendingServerEffect.resumeAt || 0) > Date.now()) return false;
+  return applyPendingRoomServerEffect(room);
+};
 const scheduleRoomServerEffect = (room) => {
-  if (!room?.state?.pendingServerEffect || room.effectTimer) return;
+  if (!room?.state?.pendingServerEffect) return;
+  if (room.effectTimer) {
+    clearTimeout(room.effectTimer);
+    room.effectTimer = null;
+  }
   const delay = Math.max(0, Number(room.state.pendingServerEffect.resumeAt || Date.now()) - Date.now());
   room.effectTimer = setTimeout(() => {
     room.effectTimer = null;
     if (!room.state?.pendingServerEffect) return;
-    if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
-    else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
-    else if (room.state.pendingServerEffect.type === "riichiAutoDiscard") applyServerRiichiAutoDiscardEffect(room.state);
-    else if (room.state.pendingServerEffect.type === "winAnnouncement") {
-      room.state.pendingServerEffect = null;
-      room.state.winAnnouncement = null;
-      room.state.serverAnnouncement = null;
-      room.state.phase = "handEnded";
-    }
-    advanceServerCpuTurns(room.state);
-    room.version = Number(room.version || 0) + 1;
-    room.state.version = room.version;
-    room.updatedAt = now();
-    persistRoom(room);
-    syncClubPointEffects(room);
+    applyPendingRoomServerEffect(room);
     broadcastState(room);
     scheduleRoomServerEffect(room);
     scheduleRoomClockTimeout(room);
@@ -3436,6 +3452,9 @@ io.on("connection", (socket) => {
       socket.data.userId = userId;
       markRoomPlayerConnected(room, userId, socket);
       if (room.state) {
+        if (applyDueRoomServerEffect(room)) {
+          broadcastState(room);
+        }
         if (clearRoomLastHandForUser(room, userId)) {
           room.updatedAt = now();
           persistRoom(room);
@@ -3637,6 +3656,9 @@ io.on("connection", (socket) => {
       const viewerId = payload.userId || socket.data.userId || null;
       ack?.({ ok: true, ...publicRoomState(room, viewerId) });
       if (room.state) {
+        if (applyDueRoomServerEffect(room)) {
+          broadcastState(room);
+        }
         socket.emit("game:state", publicRoomState(room, viewerId));
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);

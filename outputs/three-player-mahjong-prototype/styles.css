@@ -2058,24 +2058,24 @@ button:hover {
   }
 
   .score-result.result-modal {
-    font-size: 8px;
-    max-width: min(112vw, 600px);
-    padding: 5px 6px 10px;
+    font-size: 7px;
+    max-width: min(108vw, 560px);
+    padding: 4px 5px 8px;
     top: 46%;
-    transform: translate(-50%, -50%) scale(0.84);
-    width: 600px;
+    transform: translate(-50%, -50%) scale(0.78);
+    width: 560px;
   }
 
   .compact-score-result {
-    font-size: 8px;
-    max-width: min(112vw, 600px);
-    padding: 5px 6px 10px;
-    width: 600px;
+    font-size: 7px;
+    max-width: min(108vw, 560px);
+    padding: 4px 5px 8px;
+    width: 560px;
   }
 
   .result-modal h2 {
-    font-size: 13px;
-    margin-bottom: 3px;
+    font-size: 12px;
+    margin-bottom: 2px;
   }
 
   .result-modal h3 {
@@ -2084,8 +2084,8 @@ button:hover {
   }
 
   .score-winner-line {
-    font-size: 10px;
-    margin-bottom: 2px;
+    font-size: 9px;
+    margin-bottom: 1px;
   }
 
   .score-tile-section {
@@ -2250,9 +2250,9 @@ button:hover {
   .result-tiles .tile,
   .result-tiles .tile-image,
   .result-tiles .tile-fallback {
-    height: 20px;
-    min-width: 14px;
-    width: 14px;
+    height: 18px;
+    min-width: 13px;
+    width: 13px;
   }
 
   .result-modal [data-result-ok] {
