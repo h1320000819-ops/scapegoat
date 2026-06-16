@@ -1363,11 +1363,40 @@ const getTileImagePath = (tile, faceDown = false) => {
   if (tile.kind === "white" && tile.pochiColor) return tileAssetPath(`haku_${tile.pochiColor}.png`);
   return tileAssetPath(`${{ east: "east", south: "south", west: "west", north: "north", white: "haku", green: "hatsu", red: "chun" }[tile.kind]}.png`);
 };
+const preloadedTileImagePaths = new Set();
+const preloadTileImagePath = (src) => {
+  if (!src || preloadedTileImagePaths.has(src) || typeof document === "undefined") return;
+  preloadedTileImagePaths.add(src);
+  const link = document.createElement("link");
+  link.rel = "preload";
+  link.as = "image";
+  link.href = src;
+  document.head?.appendChild(link);
+  const img = new Image();
+  img.decoding = "sync";
+  img.loading = "eager";
+  img.src = src;
+};
+const preloadTileImages = () => {
+  const paths = ["tile_back.png", "back.png", "east.png", "south.png", "west.png", "north.png", "haku.png", "hatsu.png", "chun.png"];
+  for (let rank = 1; rank <= 9; rank++) {
+    paths.push(`man${rank}.png`, `pin${rank}.png`, `sou${rank}.png`);
+  }
+  for (const suit of ["man", "pin", "sou"]) for (const rank of [1, 5, 9]) paths.push(`${suit}${rank}_rocket.jpg`);
+  for (const color of ["red", "blue", "gold"]) paths.push(`pin5_${color}.png`, `sou5_${color}.png`);
+  paths.push("pin5_turquoise.jpg");
+  for (const color of ["red", "blue"]) paths.push(`flower_${color}.png`);
+  for (const color of ["red", "yellow", "green", "blue"]) paths.push(`haku_${color}.png`);
+  for (const path of paths) preloadTileImagePath(tileAssetPath(path));
+};
+preloadTileImages();
 const renderTileView = ({ tile, isDrawnTile = false, isTsumogiri = false, faceDown = false, buttonTileId, buttonAction = "discard", disabledForRiichi = false }) => {
   tile = normalizeTileForView(tile);
   const classes = ["tile", isDrawnTile ? "drawn" : "", isTsumogiri ? "tsumogiri" : "", disabledForRiichi ? "disabled-for-riichi" : ""].filter(Boolean).join(" ");
   const label = faceDown ? "■" : formatTile(tile);
-  const content = `<img class="tile-image" src="${getTileImagePath(tile, faceDown)}" alt="${label}" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
+  const imagePath = getTileImagePath(tile, faceDown);
+  preloadTileImagePath(imagePath);
+  const content = `<img class="tile-image" src="${imagePath}" alt="${label}" decoding="sync" loading="eager" draggable="false" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
   if (!buttonTileId) return `<span class="${classes}">${content}</span>`;
   const attr = buttonAction === "nuki" ? "data-nuki-tile-id" : "data-discard-tile-id";
   return `<button class="${classes} tile-button" type="button" ${attr}="${buttonTileId}" oncontextmenu="event.preventDefault(); event.stopPropagation(); window.__anmikaController && window.__anmikaController.handleContextMenuAction && window.__anmikaController.handleContextMenuAction(); return false;">${content}</button>`;
@@ -2344,7 +2373,7 @@ class GameController {
     this.setupGlobalResultOkHandler();
     document.addEventListener("anmika-result-ok", (event) => {
       event?.preventDefault?.();
-      this.handleResultOk();
+      this.handleResultOk({ autoAllResultOk: true });
     });
   }
   setupGlobalResultOkHandler() {
@@ -3690,7 +3719,7 @@ class GameController {
     console.log("[NextHand]", nextDealerId);
     this.startGame({ preserveScores: true });
   }
-  async handleResultOk() {
+  async handleResultOk(options = {}) {
     console.log("[ResultOk] clicked", this.state.handLog.result?.type, this.state.phase);
     const result = this.state.handLog.result;
     if (isSocketAuthoritativeGame()) {
@@ -3701,7 +3730,7 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId }, { timeoutMs: 12000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, autoAllResultOk: Boolean(options.autoAllResultOk) }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
           this.emit();
@@ -4054,12 +4083,14 @@ class GameController {
       if (!isFeverContinuation) winner.feverRiichiActive = false;
     }
     for (const player of this.state.players) player.status = player.id === winner.id ? "declared-win" : "waiting";
-    const winningTile = score.selectedWait ?? input.selectedWait ?? winningTiles.at(-1);
-    appendHandLogEvent(this.state.handLog, { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile, scoreResult: score, turnIndex: this.state.turnIndex });
-    appendHandLogEvent(this.state.handLog, input.winType === "tsumo" ? { type: "tsumo", playerId: winner.id, tile: winningTile, scoreResult: score, turnIndex: this.state.turnIndex } : { type: "ron", playerId: winner.id, fromPlayerId: input.discarderId, tile: winningTile, scoreResult: score, turnIndex: this.state.turnIndex });
-    this.state.handLog.result = { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
+    const scoringWinningTile = score.selectedWait ?? input.selectedWait ?? winningTiles.at(-1);
+    const displayWinningTile = input.displayWinningTile ?? score.displayWinningTile ?? scoringWinningTile;
+    appendHandLogEvent(this.state.handLog, { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
+    appendHandLogEvent(this.state.handLog, input.winType === "tsumo" ? { type: "tsumo", playerId: winner.id, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex } : { type: "ron", playerId: winner.id, fromPlayerId: input.discarderId, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
+    this.state.handLog.result = { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
     score.winningTiles ??= winningTiles;
-    score.winningTile ??= winningTile;
+    score.winningTile ??= scoringWinningTile;
+    score.displayWinningTile ??= displayWinningTile;
     bumpGameStateVersion(this.state);
     appendReplaySnapshot(this.state);
     if (!isFeverContinuation) this.saveReplayForCurrentHand();
@@ -4118,7 +4149,7 @@ class GameController {
     const tile = player.drawnTile ?? action.sourceTile;
     const pochiResolution = resolvePochiWin(this.state, player, tile, this.ruleEngine);
     if (pochiResolution) {
-      this.finishHand({ winnerId: player.id, winType: "tsumo", yaku: pochiResolution.scoreResult.yaku ?? action.options?.yaku ?? [], winningTiles: player.hand, selectedWait: pochiResolution.selectedWait, drawnTile: pochiResolution.selectedWait, scoreResult: pochiResolution.scoreResult, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
+      this.finishHand({ winnerId: player.id, winType: "tsumo", yaku: pochiResolution.scoreResult.yaku ?? action.options?.yaku ?? [], winningTiles: player.hand, selectedWait: pochiResolution.selectedWait, drawnTile: pochiResolution.selectedWait, displayWinningTile: tile, scoreResult: pochiResolution.scoreResult, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
       return;
     }
     this.finishHand({ winnerId: player.id, winType: "tsumo", yaku: action.options?.yaku ?? [], winningTiles: player.hand, selectedWait: tile, drawnTile: tile, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
@@ -5501,8 +5532,9 @@ class GameView {
     const playerName = (playerId) => state.players.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
     const bonus = score.bonuses ?? {};
     const yakuList = score.yakuList ?? score.yaku ?? [];
-    const winningTile = score.winningTile ?? score.selectedWait ?? result?.winningTile ?? null;
-    const handTiles = resultHand13Tiles(score, winner, winningTile);
+    const displayWinningTile = score.displayWinningTile ?? result?.winningTile ?? score.winningTile ?? score.selectedWait ?? null;
+    const scoringWinningTile = score.selectedWait ?? result?.scoringWinningTile ?? score.winningTile ?? displayWinningTile;
+    const handTiles = resultHand13Tiles(score, winner, scoringWinningTile);
     const meldsView = resultMeldsView(state, winner);
     const winnerRiichi = Boolean(winner?.isRiichi || winner?.riichiTurnIndex !== null || result?.riichi);
     const payments = Array.isArray(score.paymentDeltas)
@@ -5533,8 +5565,8 @@ class GameView {
     const multiplierTotal = baibaMultiplier * pochiMultiplier;
     const multiplierLabels = score.baibaDetails?.labels?.length ? `（${score.baibaDetails.labels.join("・")}）` : "";
     const pochiLabel = score.pochiColor ? (pochiText[score.pochiColor] ?? `${score.pochiColor}ぽっち`) : "";
-    const selectedWaitLine = score.pochiActivated && winningTile
-      ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(winningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
+    const selectedWaitLine = score.pochiActivated && scoringWinningTile
+      ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(scoringWinningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
       : "";
     const chipSettlement = result?.chipSettlement || score.chipSettlement;
     const tobiPrize = result?.tobiPrize || score.tobiPrize;
@@ -5561,7 +5593,7 @@ class GameView {
           <div class="score-hand-block"><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
           ${meldsView}
         </div>
-        <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles">${winningTile ? renderTileView({ tile: winningTile, isDrawnTile: true }) : ""}</div></div>
+        <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles">${displayWinningTile ? renderTileView({ tile: displayWinningTile, isDrawnTile: true }) : ""}</div></div>
       </div>
       <div class="score-tile-section score-dora-section">
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>

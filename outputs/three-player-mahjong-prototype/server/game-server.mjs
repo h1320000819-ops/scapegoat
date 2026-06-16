@@ -1014,7 +1014,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
-const RESULT_AUTO_OK_DELAY_MS = 17000;
+const RESULT_AUTO_OK_DELAY_MS = 15000;
 
 const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: false,
@@ -1953,6 +1953,7 @@ const resolveServerPochiWin = (state, player, pochiTile, winType = "tsumo", lose
     scoreResult.afterMultiplierPoints = scoreResult.totalPoints;
     scoreResult.selectedWait = candidateTile;
     scoreResult.winningTile = candidateTile;
+    scoreResult.displayWinningTile = pochiTile;
     scoreResult.pochiTile = pochiTile;
     scoreResult.pochiColor = pochiTile.pochiColor;
     scoreResult.payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
@@ -2336,7 +2337,8 @@ const applyServerAction = (state, event) => {
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
     if (state.phase === "gameEnded") return state;
-    const autoOkPlayerIds = asArray(payload.serverAutoOkPlayerIds);
+    const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
+    const autoOkPlayerIds = payload.autoAllResultOk ? requiredOkPlayerIds : asArray(payload.serverAutoOkPlayerIds);
     if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
     state.resultOkPlayerIds = [...new Set([
       ...(state.resultOkPlayerIds ?? []),
@@ -2346,7 +2348,6 @@ const applyServerAction = (state, event) => {
     ])];
     state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
     appendHandEvent(state, { type: "resultOk", playerId: player.id, resultOkPlayerIds: [...state.resultOkPlayerIds], turnIndex: state.turnIndex ?? 0 });
-    const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
     const allOk = requiredOkPlayerIds.length === 0 || requiredOkPlayerIds.every((id) => state.resultOkPlayerIds.includes(id));
     if (!allOk) return state;
     if (continueAfterServerFeverWin(state)) return state;
@@ -2581,6 +2582,7 @@ const applyServerAction = (state, event) => {
     const loserId = payload.action?.fromPlayerId || payload.discarderId || payload.fromPlayerId;
     const pochiResolution = action === "tsumo" ? resolveServerPochiWin(state, player, winningTile, action, loserId) : null;
     const effectiveWinningTile = pochiResolution?.selectedWait || winningTile;
+    const displayWinningTile = pochiResolution?.scoreResult?.displayWinningTile || winningTile;
     const winCheck = pochiResolution?.winCheck || evaluateServerWin(state, player, effectiveWinningTile, action);
     if (!winCheck.canWin) {
       if (action === "ron") console.log("[Ron] rejected", { tableId: state.tableId, playerId: player.id, reason: winCheck.reason || "和了できません", version: state.version });
@@ -2620,7 +2622,8 @@ const applyServerAction = (state, event) => {
       winnerId: player.id,
       loserId,
       winType: action,
-      winningTile: effectiveWinningTile,
+      winningTile: displayWinningTile,
+      scoringWinningTile: effectiveWinningTile,
       scoreResult,
       payments: scoreResult.paymentDeltas,
       chipSettlement,
@@ -2629,7 +2632,8 @@ const applyServerAction = (state, event) => {
       feverWinCount: player.feverWinCount ?? 0,
     };
     if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
-    appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
+    scoreResult.displayWinningTile ??= displayWinningTile;
+    appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: displayWinningTile, scoringTile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
     beginServerWinAnnouncement(state, player, action);
     return state;
   }
@@ -3272,6 +3276,17 @@ const applyAutoResultOk = (state) => {
   state.resultOkPlayerIds = [...new Set([...(state.resultOkPlayerIds ?? []), ...requiredOkPlayerIds, ...cpuPlayerIds])];
   state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
   appendHandEvent(state, { type: "resultOkAuto", playerId: null, resultOkPlayerIds: [...state.resultOkPlayerIds], turnIndex: state.turnIndex ?? 0 });
+  if (continueAfterServerFeverWin(state)) return true;
+  if (isTsumoLossless3maState(state)) {
+    const result = state.handLog?.result;
+    if (isTsumoLosslessHanchanFinished(state)) {
+      prepareTsumoLosslessGameEnd(state, ensureArray(state.players).some((p) => Number(p.score || 0) <= 0) ? "tobi" : "south3End");
+      return true;
+    }
+    applyTsumoLosslessRoundAdvance(state, result);
+    startNextServerHand(state);
+    return true;
+  }
   if (state.settings?.isLastHand) {
     state.pendingAction = null;
     state.phase = "gameEnded";
