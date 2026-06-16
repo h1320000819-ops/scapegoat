@@ -178,7 +178,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260616-socket-transport-fallback-a";
+    const assetVersion = "20260616-launch-loop-guard-a";
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>

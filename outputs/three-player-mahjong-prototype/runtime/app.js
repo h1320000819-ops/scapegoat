@@ -188,6 +188,7 @@ const hydrateDebugLaunchFromWindowName = () => {
       safeWriteJson(APP_STORAGE_KEYS.currentUserId, payload.currentUser.id);
     }
     if (payload.onlineSync) safeWriteJson(APP_STORAGE_KEYS.onlineSync, payload.onlineSync);
+    try { sessionStorage.removeItem("anmikaOnlineDebug.launchingTable"); } catch {}
     window.name = "";
   } catch (error) {
     console.warn("[DebugLaunch] デバッグ対局情報の復元に失敗しました", error);

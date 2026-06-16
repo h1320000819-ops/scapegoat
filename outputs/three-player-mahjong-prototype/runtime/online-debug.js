@@ -28,6 +28,8 @@
   const GAME_SERVER_STARTUP_TIMEOUT_MS = 60000;
   const GAME_SERVER_STARTUP_RETRY_MS = 2500;
   const GAME_SERVER_HEALTH_TIMEOUT_MS = 6000;
+  const DEBUG_LAUNCHING_TABLE_KEY = "anmikaOnlineDebug.launchingTable";
+  const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
 
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -149,6 +151,20 @@
     return [...byClub.values()];
   };
   const localSeatKey = (tableId) => String(tableId || "default");
+  const launchingTablePayload = () => readJsonStorage(DEBUG_LAUNCHING_TABLE_KEY, null);
+  const clearLaunchingTable = () => sessionStorage.removeItem(DEBUG_LAUNCHING_TABLE_KEY);
+  const markLaunchingTable = (tableId) => {
+    sessionStorage.setItem(DEBUG_LAUNCHING_TABLE_KEY, JSON.stringify({ tableId, startedAt: Date.now() }));
+  };
+  const isLaunchInProgress = (tableId = "") => {
+    const payload = launchingTablePayload();
+    if (!payload?.tableId || !payload?.startedAt) return false;
+    if (Date.now() - Number(payload.startedAt) > DEBUG_LAUNCHING_SUPPRESS_MS) {
+      clearLaunchingTable();
+      return false;
+    }
+    return !tableId || String(payload.tableId) === String(tableId);
+  };
   const RECENTLY_LEFT_SUPPRESS_MS = 180000;
   const isRecentlyLeftTable = (tableId) =>
     Boolean(
@@ -1440,6 +1456,7 @@
   };
   const openPlayingTableIfNeeded = async (table, seatRows = null) => {
     if (!table?.table_id || table.status !== "playing") return;
+    if (isLaunchInProgress(table.table_id)) return;
     clearRecentlyLeftTableIfExpired();
     if (isRecentlyLeftTable(table.table_id)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
@@ -1479,6 +1496,7 @@
   };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
     tableId = requireTableId(tableId, "自動対局開始");
+    if (isLaunchInProgress(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
     clearRecentlyLeftTableIfExpired();
     if (isRecentlyLeftTable(tableId)) {
@@ -1522,6 +1540,8 @@
     }
   };
   const maybeAutoStartTables = async () => {
+    if (document.body.dataset.screen !== "club-home") return;
+    if (state.onlineGameOpened || isLaunchInProgress()) return;
     for (const table of state.tables || []) {
       if (!table?.table_id || table.status === "ended") continue;
       const seats = visibleTableSeats(table);
@@ -1530,6 +1550,8 @@
     }
   };
   const scheduleAutoStartFromVisibleTables = () => {
+    if (document.body.dataset.screen !== "club-home") return;
+    if (state.onlineGameOpened || isLaunchInProgress()) return;
     if (state.autoStartRenderScheduled) return;
     state.autoStartRenderScheduled = true;
     window.setTimeout(async () => {
@@ -2201,6 +2223,7 @@
     return window.location.origin;
   };
   const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null) => {
+    if (isLaunchInProgress(tableId)) return;
     const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId);
     if (filledSeatCount(rows) < 3) {
       throw new Error("3席が埋まっていません。CPUを追加するか、プレイヤーが着席してください。");
@@ -2299,6 +2322,7 @@
       window.location.protocol === "file:"
         ? new URL(`../index.html${tableHash}`, window.location.href).href
         : `${window.location.origin}${tablePath}`;
+    markLaunchingTable(tableId);
     window.location.href = targetUrl;
   };
   const startDebugGame = async (tableId = selectedTableId()) => {
@@ -2326,6 +2350,7 @@
     log("ゲームサーバーの起動状態を確認しています。");
     await waitForGameServerReady();
     log("Socket.IO対局を開始します。局面はNode.jsゲームサーバーのメモリで同期します。", onlineGameState);
+    clearLaunchingTable();
     startLocalDebugMahjong(tableId, rows, onlineGameState);
   };
   const copyTableUrl = async () => {
