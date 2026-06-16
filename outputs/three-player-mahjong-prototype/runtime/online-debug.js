@@ -400,6 +400,16 @@
     if (parts.length) return [...new Set(parts.map(String))].join("\n");
     return stringify(error);
   };
+  const isMissingRpcError = (error, rpcName = "") => {
+    const raw = rawErrorText(error);
+    return (
+      Number(error?.status) === 404 ||
+      raw.includes("PGRST202") ||
+      raw.includes("schema cache") ||
+      raw.includes("Could not find the function") ||
+      (rpcName && raw.includes(rpcName))
+    );
+  };
 
   const toJapaneseError = (message) => {
     if (!message) return "詳細不明のエラーです。";
@@ -2393,19 +2403,32 @@
     let rows = [];
     let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
     try {
+      await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      log("DBの対局開始RPCを実行しました。", { tableId });
+    } catch (sharedError) {
       try {
-        await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
-      } catch (sharedError) {
-        const raw = rawErrorText(sharedError);
-        if (!raw.includes("shared_start_debug_table_game") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
         await rest("/rpc/start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+        log("旧DBの対局開始RPCを実行しました。", { tableId });
+      } catch (legacyError) {
+        const sharedMissing = isMissingRpcError(sharedError, "shared_start_debug_table_game");
+        const legacyMissing = isMissingRpcError(legacyError, "start_debug_table_game");
+        const detail = `${rawErrorText(sharedError)}\n${rawErrorText(legacyError)}`;
+        if (!sharedMissing && !legacyMissing) {
+          log("DBの対局開始RPCに失敗しました。Socket.IO対局として続行します。", detail);
+        } else {
+          log("DBの対局開始RPCが未適用です。Socket.IO対局として続行します。", detail);
+        }
+        await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+          method: "PATCH",
+          body: JSON.stringify({ status: "playing" }),
+        }).catch((error) => log("卓ステータス更新はスキップしました。", rawErrorText(error)));
       }
-      rows = await loadSeats();
-      await loadTables();
-    } catch (error) {
-      log("DBのデバッグ対局開始に失敗しました。", rawErrorText(error));
-      throw error;
     }
+    rows = await loadSeats().catch((error) => {
+      log("席情報の再取得に失敗しました。表示中の席情報で続行します。", rawErrorText(error));
+      return getKnownSeats(tableId);
+    });
+    loadTables().catch((error) => log("卓一覧の再取得に失敗しました。対局開始は続行します。", rawErrorText(error)));
     state.onlineGameOpened = true;
     if (has("onlineGamePanel")) $("onlineGamePanel").classList.add("open");
     renderOnlineGamePanel();
