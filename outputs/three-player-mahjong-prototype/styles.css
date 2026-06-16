@@ -5,7 +5,7 @@
   --discard-tile-width: 28px;
   --discard-tile-height: 39px;
   --discard-gap: 5px;
-  --center-info-width: 190px;
+  --center-info-width: 220px;
   --center-info-height: 148px;
   --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 16px);
   --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 31px);
@@ -215,12 +215,23 @@ button:hover {
 }
 
 .center-wall {
-  border-top: 1px solid rgba(255, 255, 255, 0.18);
   display: flex;
-  flex-wrap: wrap;
-  font-size: 10px;
-  gap: 5px 8px;
+  flex-direction: column;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 3px;
   justify-content: center;
+  line-height: 1.15;
+  min-width: 48px;
+  text-align: left;
+}
+
+.center-bottom-info {
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  display: grid;
+  gap: 9px;
+  grid-template-columns: max-content minmax(0, 1fr);
   margin-top: 6px;
   padding-top: 6px;
 }
@@ -229,9 +240,9 @@ button:hover {
   align-items: center;
   display: grid;
   gap: 3px 5px;
-  justify-content: center;
+  justify-content: start;
   line-height: 1;
-  margin-top: 4px;
+  min-width: 0;
 }
 
 .center-dora > span {
@@ -243,9 +254,10 @@ button:hover {
 .center-dora-tiles {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 2px;
-  justify-content: center;
+  justify-content: flex-start;
+  min-width: 0;
 }
 
 .center-baiba {
@@ -1041,7 +1053,7 @@ button:hover {
 .replay-toolbar select {
   border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 8px;
-  padding: 10px;
+  padding: 4px 6px;
 }
 
 .club-search input {
@@ -1051,23 +1063,49 @@ button:hover {
 .replay-toolbar {
   align-items: center;
   background: rgba(0, 0, 0, 0.34);
-  border-radius: 10px;
+  border-radius: 8px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-wrap: nowrap;
+  gap: 5px;
   margin-bottom: 12px;
-  padding: 10px;
+  overflow-x: auto;
+  padding: 5px 6px;
+  white-space: nowrap;
 }
 
 .replay-toolbar-bottom {
-  bottom: 96px;
+  bottom: 70px;
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.38);
   left: 50%;
   margin: 0;
-  max-width: min(92vw, 780px);
+  max-width: min(96vw, 720px);
   position: absolute;
   transform: translateX(-50%);
   z-index: 30;
+}
+
+.replay-toolbar button,
+.replay-toolbar .button-link {
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.replay-toolbar label,
+.replay-toolbar strong,
+.replay-event-label {
+  align-items: center;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  line-height: 1;
+}
+
+.replay-toolbar input[type="checkbox"] {
+  height: 13px;
+  margin: 0;
+  width: 13px;
 }
 
 .replay-toolbar button:disabled {
@@ -1758,7 +1796,7 @@ button:hover {
 
   .mahjong-table {
     --center-info-height: 74px;
-    --center-info-width: 108px;
+    --center-info-width: 132px;
     --discard-gap: 2px;
     --discard-tile-height: 20px;
     --discard-tile-width: 14px;
@@ -1920,28 +1958,33 @@ button:hover {
   }
 
   .center-wall {
-    gap: 2px 4px;
-    font-size: 5px;
+    font-size: 6px;
+    gap: 1px;
+    min-width: 28px;
+  }
+
+  .center-bottom-info {
+    gap: 4px;
     margin-top: 1px;
     padding-top: 1px;
   }
 
   .center-dora {
     gap: 1px;
-    margin-top: 0;
+    justify-content: start;
   }
 
   .center-dora > span {
-    font-size: 5px;
+    font-size: 6px;
   }
 
   .center-dora .tile,
   .center-dora .tile-button,
   .center-dora .tile-image,
   .center-dora .tile-fallback {
-    height: 12px;
-    min-width: 9px;
-    width: 9px;
+    height: 15px;
+    min-width: 11px;
+    width: 11px;
   }
 
   .discard-area {

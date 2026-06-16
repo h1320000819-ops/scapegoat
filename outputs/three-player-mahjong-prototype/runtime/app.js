@@ -1392,6 +1392,39 @@ const getReplaySnapshots = (replay) => {
     })),
   ];
 };
+const getReplayEvents = (replay) => getSimpleReplayPayload(replay)?.events || replay?.events || [];
+const isSkippedReplayStepEvent = (event) => {
+  if (!event?.type) return false;
+  if (event.type === "draw") return true;
+  if (event.type === "skipAction") return true;
+  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichiAutoDiscardWait", "feverForcedDiscardWait"].includes(event.type)) return true;
+  return false;
+};
+const getReplayVisibleSnapshotIndexes = (replay) => {
+  const snapshots = getReplaySnapshots(replay);
+  if (snapshots.length <= 1) return snapshots.map((_, index) => index);
+  const events = getReplayEvents(replay);
+  if (!events.length) return snapshots.map((_, index) => index);
+  const indexes = [0];
+  events.forEach((event, eventIndex) => {
+    const snapshotIndex = eventIndex + 1;
+    if (snapshotIndex < snapshots.length && !isSkippedReplayStepEvent(event)) indexes.push(snapshotIndex);
+  });
+  if (indexes.at(-1) !== snapshots.length - 1) {
+    const last = snapshots.at(-1);
+    if (last?.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "finalResult"].includes(last?.phase)) indexes.push(snapshots.length - 1);
+  }
+  return [...new Set(indexes)].sort((a, b) => a - b);
+};
+const getReplayVisiblePosition = (replay, snapshotIndex) => {
+  const visible = getReplayVisibleSnapshotIndexes(replay);
+  if (!visible.length) return { visible, position: 0 };
+  const exact = visible.indexOf(snapshotIndex);
+  if (exact >= 0) return { visible, position: exact };
+  const next = visible.findIndex((index) => index > snapshotIndex);
+  return { visible, position: next < 0 ? visible.length - 1 : Math.max(0, next - 1) };
+};
+const getReplayEventForSnapshotIndex = (replay, snapshotIndex) => getReplayEvents(replay)[Math.max(0, snapshotIndex - 1)];
 const getValidReplayViewerId = (snapshot, requestedViewerId, replay) => {
   const players = snapshot?.players ?? [];
   if (players.some((player) => player.id === requestedViewerId)) return requestedViewerId;
@@ -3752,8 +3785,9 @@ class GameController {
   }
   stepReplay(delta) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
-    const max = Math.max(0, getReplaySnapshots(replay).length - 1);
-    this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
+    const { visible, position } = getReplayVisiblePosition(replay, this.state.replayIndex);
+    const nextPosition = Math.max(0, Math.min(Math.max(0, visible.length - 1), position + delta));
+    this.state.replayIndex = visible[nextPosition] ?? 0;
     this.emit();
   }
   setReplayIndex(index) {
@@ -4891,13 +4925,13 @@ const renderActionPrompt = (pending, state = null) => {
 const renderHandLog = (state) => {
   const name = (id) => state.players.find((p) => p.id === id)?.name ?? id;
   const text = (event) => replayEventText(event, state, name);
-  return `<section class="hand-log-viewer"><h2>牌譜</h2><p>${state.handLog.roundLabel}</p><ol>${state.handLog.events.map((event) => `<li>${text(event)}</li>`).join("")}</ol></section>`;
+  return `<section class="hand-log-viewer"><h2>牌譜</h2><p>${state.handLog.roundLabel}</p><ol>${state.handLog.events.map((event) => text(event)).filter(Boolean).map((label) => `<li>${label}</li>`).join("")}</ol></section>`;
 };
 const replayEventText = (event, state, nameFn = null) => {
   if (!event) return "開始状態";
   const name = nameFn || ((id) => state.players.find((p) => p.id === id)?.name ?? id);
     if (event.type === "draw") return `${name(event.playerId)} ツモ ${formatTile(event.tile)}`;
-    if (event.type === "discard") return `${name(event.playerId)} 打 ${formatTile(event.tile)} ${event.discardType === "tsumogiri" ? "ツモ切り" : "手出し"}`;
+    if (event.type === "discard") return "";
     if (event.type === "ron") return `${name(event.playerId)} ロン ${formatTile(event.tile)}`;
     if (event.type === "tsumo") return `${name(event.playerId)} ツモ和了 ${formatTile(event.tile)}`;
     if (event.type === "riichi") return `${name(event.playerId)} リーチ`;
@@ -5524,7 +5558,8 @@ class GameView {
       return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p>${state.replayLoadError ? `<p>${escapeHtml(state.replayLoadError)}</p>` : ""}</section>`;
     }
     const snapshots = getReplaySnapshots(replay);
-    const index = Math.max(0, Math.min(state.replayIndex, snapshots.length - 1));
+    const { visible: visibleReplayIndexes, position: visibleReplayPosition } = getReplayVisiblePosition(replay, state.replayIndex);
+    const index = Math.max(0, Math.min(visibleReplayIndexes[visibleReplayPosition] ?? state.replayIndex, snapshots.length - 1));
     const snapshot = getCurrentReplaySnapshot(replay, index);
     if (!snapshot) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
     const displayState = {
@@ -5554,20 +5589,20 @@ class GameView {
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
-    const event = (replay.events ?? [])[Math.max(0, index - 1)];
+    const event = getReplayEventForSnapshotIndex(replay, index);
     const eventLabel = replayEventText(event, displayState);
     const replayBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
         <a class="button-link" href="${replayBackUrl}">ロビーへ戻る</a>
-        <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
-        <strong>${index + 1} / ${snapshots.length}</strong>
-        <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
+        <button type="button" data-replay-step="-1" ${visibleReplayPosition <= 0 ? "disabled" : ""}>前へ</button>
+        <strong>${visibleReplayPosition + 1} / ${visibleReplayIndexes.length || 1}</strong>
+        <button type="button" data-replay-step="1" ${visibleReplayPosition >= visibleReplayIndexes.length - 1 ? "disabled" : ""}>次へ</button>
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
-        <span class="replay-event-label">${escapeHtml(eventLabel)}</span>
+        ${eventLabel ? `<span class="replay-event-label">${escapeHtml(eventLabel)}</span>` : ""}
       </div>
       ${handButtons}
     </section>`;
@@ -5604,7 +5639,7 @@ class GameView {
     const viewer = state.players.find((player) => player.id === viewerPlayerId) ?? state.players.find((player) => player.type !== "cpu") ?? state.players[0];
     const viewState = buildViewStateForPlayer(state, viewer.id);
     if (state.isReplayRevealHands) {
-      for (const seatView of viewState.seats ?? []) {
+      for (const seatView of Object.values(viewState.seats ?? {})) {
         seatView.handTiles = (seatView.handTiles ?? []).map((item) => ({ ...item, faceDown: false }));
         if (seatView.drawnTile) seatView.drawnTile = { ...seatView.drawnTile, faceDown: false };
         seatView.isViewer = true;
@@ -5687,8 +5722,10 @@ class GameView {
     return `<section class="center-info">
       <div class="round-label">${roundLabel}</div>
       <ul class="center-scores">${playerRows}</ul>
-      <div class="center-wall"><span>山 ${liveWallCount}枚</span><span>嶺上 ${rinshanWallCount}枚</span></div>
-      <div class="center-dora"><span>ドラ表示牌</span><div class="center-dora-tiles">${doraTiles || "なし"}</div></div>
+      <div class="center-bottom-info">
+        <div class="center-wall"><span>山 ${liveWallCount}枚</span><span>嶺上 ${rinshanWallCount}枚</span></div>
+        <div class="center-dora"><span>ドラ表示牌</span><div class="center-dora-tiles">${doraTiles || "なし"}</div></div>
+      </div>
     </section>`;
   }
   playerSeatClean(player, seat, current, dealer) {
