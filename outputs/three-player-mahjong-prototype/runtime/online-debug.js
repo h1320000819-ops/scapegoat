@@ -1570,6 +1570,7 @@
     }
   };
   const maybeAutoStartTables = async () => {
+    return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     for (const table of state.tables || []) {
@@ -1580,6 +1581,7 @@
     }
   };
   const scheduleAutoStartFromVisibleTables = () => {
+    return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     if (state.autoStartRenderScheduled) return;

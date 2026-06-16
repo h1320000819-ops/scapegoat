@@ -178,7 +178,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260616-launch-loop-guard-a";
+    const assetVersion = "20260616-disable-auto-loop-a";
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>

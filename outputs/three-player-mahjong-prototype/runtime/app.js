@@ -207,13 +207,10 @@ const renderStartupFallback = (message) => {
     <h2>麻雀画面を開けませんでした</h2>
     <p>原因: ${escapeHtml(message || "起動情報を取得できませんでした。")}</p>
     <div class="screen-actions">
-      <button type="button" data-startup-return>卓一覧へ戻る</button>
+      <a class="button-link" href="${onlineDebugLobbyUrl(clubId)}">卓一覧へ戻る</a>
       <button type="button" onclick="location.reload()">再読み込み</button>
     </div>
   </section>`;
-  root.querySelector("[data-startup-return]")?.addEventListener("click", () => {
-    location.href = onlineDebugLobbyUrl(clubId);
-  });
 };
 const setCurrentUserSession = (user) => {
   safeWriteJson(APP_STORAGE_KEYS.currentUser, user);
@@ -2677,8 +2674,7 @@ class GameController {
     const table = loadTables().find((item) => item.id === tableId);
     if (!table) {
       if (isOnlineDebugLocalTableId(tableId)) {
-        const returnClubId = localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || "";
-        window.location.href = onlineDebugLobbyUrl(returnClubId);
+        renderStartupFallback(`対局開始用の卓データが見つかりません: ${tableId || "未指定"}`);
         return;
       }
       this.refreshStoredData();
@@ -2701,8 +2697,7 @@ class GameController {
       return;
     }
     if (isOnlineDebugLocalTableId(tableId)) {
-      const returnClubId = table.clubId || localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || "";
-      window.location.href = onlineDebugLobbyUrl(returnClubId);
+      renderStartupFallback("この卓はまだ対局中ではありません。卓一覧に戻って、対局開始ボタンから開始してください。");
       return;
     }
     this.state.screen = "tableRoom";
