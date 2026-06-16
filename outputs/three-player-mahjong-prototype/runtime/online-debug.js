@@ -32,6 +32,7 @@
   const DEBUG_AUTO_OPENED_TABLES_KEY = "anmikaOnlineDebug.autoOpenedTables";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
+  const ENABLE_AUTO_TABLE_START = false;
 
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -327,6 +328,19 @@
   const requireTableId = (tableId, actionName = "操作") => {
     if (!tableId) throw new Error(`${actionName}に失敗しました。原因: tableId が取得できません。`);
     return tableId;
+  };
+  const getStartableTableId = () => {
+    const direct =
+      normalizeRemoteTableId(state.activeTableId) ||
+      normalizeRemoteTableId(has("tableSelect") ? $("tableSelect").value : "") ||
+      normalizeRemoteTableId(new URLSearchParams(location.search).get("tableId"));
+    if (direct) return direct;
+    const tables = Array.isArray(state.tables) ? state.tables : [];
+    const ownTable = tables.find((table) => isCurrentUserSeatedAt(visibleTableSeats(table)));
+    if (ownTable?.table_id) return normalizeRemoteTableId(ownTable.table_id);
+    const fullTable = tables.find((table) => filledSeatCount(visibleTableSeats(table)) >= 3);
+    if (fullTable?.table_id) return normalizeRemoteTableId(fullTable.table_id);
+    return normalizeRemoteTableId(tables.find((table) => table?.table_id)?.table_id);
   };
   const setActiveTableId = (tableId) => {
     tableId = normalizeRemoteTableId(tableId);
@@ -1496,6 +1510,7 @@
     return seats.some((seat) => seat.user_id === state.user.id);
   };
   const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true } = {}) => {
+    if (!ENABLE_AUTO_TABLE_START) return;
     if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
     if (isLaunchInProgress(table.table_id)) return;
@@ -1539,6 +1554,7 @@
     return table;
   };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
+    if (!ENABLE_AUTO_TABLE_START) return null;
     tableId = requireTableId(tableId, "自動対局開始");
     if (isLaunchInProgress(tableId)) return null;
     if (wasAutoOpenedRecently(tableId)) return null;
@@ -1585,7 +1601,7 @@
     }
   };
   const maybeAutoStartTables = async () => {
-    return;
+    if (!ENABLE_AUTO_TABLE_START) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     for (const table of state.tables || []) {
@@ -1596,7 +1612,7 @@
     }
   };
   const scheduleAutoStartFromVisibleTables = () => {
-    return;
+    if (!ENABLE_AUTO_TABLE_START) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     if (state.autoStartRenderScheduled) return;
@@ -1844,14 +1860,12 @@
       renderSeatRows(normalizedFromDb, tableId);
       saveLocalSeats(tableId, normalizedFromDb);
       renderDebug();
-      await tryAutoStartTableFromSeats(tableId, normalizedFromDb).catch((error) => log("席取得後の自動開始判定に失敗しました。", rawErrorText(error)));
       return normalizedFromDb;
     } catch (error) {
       const rows = getLocalSeats(tableId);
       renderSeatRows(rows, tableId);
       log("DBの席取得に失敗したため、ローカルデバッグ席を表示しました。", rawErrorText(error));
       renderDebug();
-      await tryAutoStartTableFromSeats(tableId, rows).catch((startError) => log("ローカル席での自動開始判定に失敗しました。", rawErrorText(startError)));
       return rows;
     }
   };
@@ -2374,7 +2388,7 @@
     window.location.href = targetUrl;
   };
   const startDebugGame = async (tableId = selectedTableId()) => {
-    tableId = requireTableId(normalizeRemoteTableId(tableId), "デバッグ対局開始");
+    tableId = requireTableId(normalizeRemoteTableId(tableId) || getStartableTableId(), "デバッグ対局開始");
     setActiveTableId(tableId);
     let rows = [];
     let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
@@ -3505,7 +3519,7 @@
     if (activeClubId && state.clubs.some((club) => club.club_id === activeClubId)) $("clubSelect").value = activeClubId;
     $("tableSelect").innerHTML = "";
     if (has("tableCards")) $("tableCards").innerHTML = "";
-    const urlTableId = new URLSearchParams(location.search).get("tableId");
+    const urlTableId = normalizeRemoteTableId(new URLSearchParams(location.search).get("tableId"));
     if (urlTableId && !state.tables.some((table) => table.table_id === urlTableId)) {
       const option = document.createElement("option");
       option.value = urlTableId;
@@ -3629,7 +3643,7 @@
         $("tableCards").append(card);
       }
     });
-    const nextTableId = activeTableId || urlTableId || "";
+    const nextTableId = normalizeRemoteTableId(activeTableId) || urlTableId || getStartableTableId();
     if (nextTableId) setActiveTableId(nextTableId);
     const tableId = selectedTableId();
     $("tableUrl").textContent = tableId ? buildTableShareUrl(tableId) : "なし";
