@@ -28,6 +28,7 @@ const createHealthServer = () => http.createServer((req, res) => {
 let io = null;
 
 const gameRooms = new Map();
+let shutdownHandlersInstalled = false;
 
 const now = () => Date.now();
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -3613,6 +3614,36 @@ io.on("connection", (socket) => {
 });
 };
 
+const persistAllRoomsForShutdown = (signal) => {
+  console.warn("[AnmikaGameServer] shutdown requested", { signal, rooms: gameRooms.size });
+  for (const room of gameRooms.values()) {
+    try {
+      persistRoom(room);
+    } catch (error) {
+      console.error("[AnmikaGameServer] shutdown room persist failed", {
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        error: error?.message || String(error),
+      });
+    }
+  }
+};
+
+const installShutdownHandlers = () => {
+  if (shutdownHandlersInstalled || typeof process === "undefined") return;
+  shutdownHandlersInstalled = true;
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.once(signal, () => {
+      persistAllRoomsForShutdown(signal);
+      try {
+        io?.emit("server:shutdown", { reason: signal, reconnect: true, at: now() });
+        io?.close?.();
+      } catch {}
+      setTimeout(() => process.exit(0), 250).unref?.();
+    });
+  }
+};
+
 export const attachAnmikaGameServer = (httpServer) => {
   if (io) return io;
   console.log("[AnmikaGameServer] starting", {
@@ -3636,6 +3667,7 @@ export const attachAnmikaGameServer = (httpServer) => {
     transports: ["websocket", "polling"],
   });
   registerGameSocketHandlers();
+  installShutdownHandlers();
   return io;
 };
 

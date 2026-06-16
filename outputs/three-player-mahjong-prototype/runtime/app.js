@@ -1026,6 +1026,24 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const accessToken = sync?.accessToken || localStorage.getItem("anmikaAccessToken") || "";
   if (!supabaseUrl || !anonKey || !accessToken) return [];
   if (replayId && !isUuidString(replayId)) return [];
+  const baseUrl = supabaseUrl.replace(/\/$/, "");
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+  if (replayId) {
+    const rpcResponse = await fetch(`${baseUrl}/rest/v1/rpc/get_my_replay`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ p_replay_id: replayId }),
+    }).catch(() => null);
+    if (rpcResponse?.ok) {
+      const text = await rpcResponse.text();
+      const data = text ? JSON.parse(text) : [];
+      return Array.isArray(data) ? data : data ? [data] : [];
+    }
+  }
   const filters = [
     "select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at",
     "order=created_at.desc",
@@ -1033,12 +1051,7 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   ];
   if (clubId) filters.push(`club_id=eq.${encodeURIComponent(clubId)}`);
   if (replayId) filters.push(`replay_id=eq.${encodeURIComponent(replayId)}`);
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/rest/v1/replays?${filters.join("&")}`, {
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+  const response = await fetch(`${baseUrl}/rest/v1/replays?${filters.join("&")}`, { headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : [];
   if (!response.ok) throw new Error(data?.message || response.statusText || "牌譜の取得に失敗しました");
@@ -3022,6 +3035,7 @@ class GameController {
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
       this.gameSocket.off("game:needInitialState");
+      this.gameSocket.off("server:shutdown");
       this.gameSocket.off("connect");
       this.gameSocket.off("disconnect");
       this.gameSocket.off("connect_error");
@@ -3029,7 +3043,11 @@ class GameController {
     }
     this.socketInitialStateInFlight = false;
     const socket = globalThis.io(serverUrl, {
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
+      upgrade: true,
+      rememberUpgrade: false,
+      autoConnect: false,
+      closeOnBeforeunload: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 500,
@@ -3144,6 +3162,17 @@ class GameController {
       }
     };
     socket.on("game:needInitialState", () => sendInitialSocketState("needInitialState"));
+    socket.on("server:shutdown", (payload = {}) => {
+      console.warn("[SocketGame] server shutdown", payload);
+      saveSocketDebugStatus({
+        socket: "DISCONNECTED",
+        gameServer: "NG",
+        lastReconnectReason: "server_shutdown",
+        lastError: "ゲームサーバーが再起動中です",
+      });
+      this.state.onlineLoadingMessage = "ゲームサーバーが再起動中です。自動で復帰します...";
+      this.onStateChanged(this.state);
+    });
     socket.on("connect", () => {
       console.log("[SocketGame] connected", { socketId: socket.id, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
       saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: socket.id, socketUrl: serverUrl, lastReconnectReason: didInitialJoin ? "reconnect" : "initialConnect", lastError: "" });
@@ -5634,6 +5663,7 @@ window.addEventListener("touchend", (event) => {
 }, { passive: false });
 setInterval(() => controller.tickClock(), 500);
 setInterval(() => {
+  if (isSocketAuthoritativeGame()) return;
   refreshOnlineSyncFromServer().catch((error) => {
     console.warn("[OnlineSync] 最新局面の取得に失敗しました", error);
   });
