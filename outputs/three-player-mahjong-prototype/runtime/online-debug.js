@@ -38,6 +38,7 @@
     onlineGameOpened: false,
     autoStartingTableIds: new Set(),
     autoOpenedPlayingTableIds: new Set(),
+    gameServerProbe: { status: "未確認", lastError: "", checkedAt: "" },
     activeClubId: sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
     activeTableId: new URLSearchParams(location.search).get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
     recentlyLeftTableId: new URLSearchParams(location.search).get("leftTableId") || "",
@@ -75,6 +76,14 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
   const asArray = (value) => Array.isArray(value) ? value : value ? [value] : [];
+  const readJsonStorage = (key, fallback = null) => {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "null") ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  const loadSocketDebugStatus = () => readJsonStorage("anmikaRocket.socketDebug", {});
   const loadClubIconCache = () => {
     try {
       return JSON.parse(localStorage.getItem("anmikaClubIconCache") || "{}") || {};
@@ -406,6 +415,24 @@
     return `${mobileOrigin()}${normalizedPath}`;
   };
   const buildTableShareUrl = (tableId) => buildAppUrl(`/table/${encodeURIComponent(tableId)}`);
+  const probeGameServer = async () => {
+    if (location.protocol === "file:") {
+      state.gameServerProbe = { status: "NG", lastError: "file://ではゲームサーバー疎通確認ができません", checkedAt: new Date().toLocaleString("ja-JP") };
+      return state.gameServerProbe;
+    }
+    try {
+      const response = await fetch(`${location.origin}/socket.io/socket.io.js`, { cache: "no-store" });
+      state.gameServerProbe = {
+        status: response.ok ? "OK" : "NG",
+        lastError: response.ok ? "" : `HTTP ${response.status}`,
+        checkedAt: new Date().toLocaleString("ja-JP"),
+      };
+    } catch (error) {
+      state.gameServerProbe = { status: "NG", lastError: error?.message || String(error), checkedAt: new Date().toLocaleString("ja-JP") };
+    }
+    renderDebug();
+    return state.gameServerProbe;
+  };
   const buildOnlineDebugReturnUrl = () => {
     if (location.protocol === "file:") {
       const path = String(location.pathname || "").replace(/\\/g, "/");
@@ -3500,16 +3527,28 @@
   };
   const renderDebug = (realtimeStatus) => {
     if (!has("debugSummary")) return;
+    const socketDebug = loadSocketDebugStatus();
+    const socketUpdatedAt = socketDebug.updatedAt ? new Date(socketDebug.updatedAt).toLocaleString("ja-JP") : "なし";
     $("debugSummary").textContent = [
       `Supabase URL: ${config.url || "未設定"}`,
       `Supabase: ${config.url && config.anonKey ? "OK" : "設定不足"}`,
+      `Socket: ${socketDebug.socket || "DISCONNECTED"}`,
+      `Game Server: ${state.gameServerProbe.status || socketDebug.gameServer || "NG"}`,
+      `Game Server確認: ${state.gameServerProbe.checkedAt || "なし"} ${state.gameServerProbe.lastError ? `(${state.gameServerProbe.lastError})` : ""}`,
+      `Socket URL: ${socketDebug.socketUrl || "未接続"}`,
       `認証状態: ${state.user ? "ログイン済み" : "未ログイン"}`,
       `現在ユーザー: ${state.user ? `${state.user.displayName} / ${state.user.id}` : "なし"}`,
       `現在クラブ: ${selectedClubId() || "なし"}`,
       `権限: ${selectedMembership() ? (selectedMembership().role === "admin" ? "管理者" : "メンバー") : "なし"}`,
       `読み込み済み卓数: ${state.tables.length}`,
       `現在卓: ${selectedTableId() || "なし"}`,
-      `現在gameId: ${state.activeGameState?.game_id || "なし"}`,
+      `Current Game: ${socketDebug.gameId || state.activeGameState?.game_id || "なし"}`,
+      `Version: client=${socketDebug.clientVersion ?? state.activeGameState?.version ?? "なし"} / server=${socketDebug.serverVersion ?? state.activeGameState?.version ?? "なし"}`,
+      `Last Action: ${socketDebug.lastAction || "なし"}`,
+      `Last Error: ${socketDebug.lastError || "なし"}`,
+      `切断理由: ${socketDebug.lastDisconnectReason || "なし"}`,
+      `再接続理由: ${socketDebug.lastReconnectReason || "なし"}`,
+      `Socket状態更新: ${socketUpdatedAt}`,
       `現在version: ${state.activeGameState?.version ?? "なし"}`,
       `イベント数: ${state.activeGameEvents.length}`,
       `最終同期: ${state.lastGameSyncAt || "なし"}`,
@@ -3631,6 +3670,7 @@
     if (has("rakePercent")) $("rakePercent").addEventListener("input", updateRangeLabels);
     if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
     updateRangeLabels();
+    probeGameServer().catch(() => {});
     render();
     if (state.user && state.accessToken) {
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
@@ -3650,6 +3690,8 @@
       }
     }
     renderOnlineGamePanel();
+    window.setInterval(() => renderDebug(), 2000);
+    window.setInterval(() => probeGameServer().catch(() => {}), 30000);
   };
   init().catch((error) => showError(JA_MESSAGES.actionFailed, error));
 })();

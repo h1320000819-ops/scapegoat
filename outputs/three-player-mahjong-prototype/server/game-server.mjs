@@ -1503,7 +1503,7 @@ const evaluateServerWin = (state, player, tile, winType) => {
   const riichiYakuEnabled = isClosed || turquoiseOpenRiichi;
   const baseYaku = [];
   if (riichiYakuEnabled && player.isRiichi) baseYaku.push({ name: "リーチ", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
-  if (riichiYakuEnabled && player.isRiichi && player.ippatsu && !player.ippatsuOwnDrawStarted) baseYaku.push({ name: "一発", han: 1 });
+  if (riichiYakuEnabled && player.isRiichi && player.ippatsu) baseYaku.push({ name: "一発", han: 1 });
   if (riichiYakuEnabled && isTsumo) baseYaku.push({ name: "門前清自摸和", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
   if (ensureArray(state?.liveWall).length === 0) {
     baseYaku.push({ name: isTsumo ? "ハイテイ" : "ホウテイ", han: 1 });
@@ -1867,6 +1867,17 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
 };
 const hasServerFeverRiichiTriplet = (player) =>
   hasServerPureClosedTriplet(player, "pinzu", 7) || hasServerPureClosedTriplet(player, "souzu", 7);
+const clearServerIppatsu = (state, reason, exceptPlayerId = null) => {
+  let changed = false;
+  for (const player of ensureArray(state?.players)) {
+    if (!player?.ippatsu || player.id === exceptPlayerId) continue;
+    player.ippatsu = false;
+    player.ippatsuOwnDrawStarted = false;
+    changed = true;
+  }
+  if (changed) appendHandEvent(state, { type: "ippatsuCleared", reason, turnIndex: state.turnIndex ?? 0 });
+  return changed;
+};
 const beginServerRiichiAutoDiscard = (state, player) => {
   if (!player?.isRiichi || !player.drawnTile || player.type === "cpu") return false;
   state.pendingAction = null;
@@ -2070,6 +2081,11 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   player.discardedTiles ??= [];
   player.discardedTiles.push({ tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
   appendHandEvent(state, { type: "discard", playerId: player.id, tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
+  if (player.isRiichi && player.ippatsu && !isRiichiDiscard) {
+    player.ippatsu = false;
+    player.ippatsuOwnDrawStarted = false;
+    appendHandEvent(state, { type: "ippatsuCleared", playerId: player.id, reason: "ownDrawPassed", turnIndex: state.turnIndex ?? 0 });
+  }
   state.turnIndex = Number(state.turnIndex || 0) + 1;
   state.phase = "playing";
   state.pendingAction = null;
@@ -2190,6 +2206,7 @@ const applyServerAction = (state, event) => {
       player.isRiichi = true;
       player.ippatsu = true;
       player.riichiTurnIndex = state.turnIndex ?? 0;
+      player.ippatsuOwnDrawStarted = false;
       player.feverWinCount = 0;
       player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
       const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== payload.tileId);
@@ -2268,6 +2285,7 @@ const applyServerAction = (state, event) => {
       targetMeld.addedTile = addedTile;
       targetMeld.tiles = [...ensureArray(targetMeld.tiles), addedTile];
       appendHandEvent(state, { type: "kan", playerId: player.id, tiles: targetMeld.tiles, addedTile, kanType: "kakan", turnIndex: state.turnIndex ?? 0 });
+      clearServerIppatsu(state, "kan");
       addDoraAfterKan(state);
       drawFromWall(state, player, "rinshanWall");
       player.hand = sortHandTiles(player.hand);
@@ -2297,6 +2315,7 @@ const applyServerAction = (state, event) => {
     player.melds ??= [];
     player.melds.push({ type: isMinkan ? "minkan" : "ankan", tiles, calledTile: isMinkan ? tiles[0] : undefined, fromPlayerId: isMinkan ? fromPlayerId : undefined });
     appendHandEvent(state, { type: "kan", playerId: player.id, fromPlayerId: isMinkan ? fromPlayerId : undefined, tiles, turnIndex: state.turnIndex ?? 0 });
+    clearServerIppatsu(state, "kan");
     addDoraAfterKan(state);
     if (!isMinkan && player.drawnTile) {
       player.hand ??= [];
@@ -2337,6 +2356,7 @@ const applyServerAction = (state, event) => {
     state.pendingAction = null;
     state.phase = "waitingForHumanDiscard";
     appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
+    clearServerIppatsu(state, "pon");
     if (!queueServerDiscardTurnOptions(state, player, { type: "afterPon", fromPlayerId, sourceTile })) {
       startServerClockForPlayer(state, player);
     }
@@ -3029,25 +3049,33 @@ const scheduleRoomResultTimeout = (room) => {
   const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + RESULT_AUTO_OK_DELAY_MS - Date.now());
   room.resultTimer = setTimeout(() => {
     room.resultTimer = null;
-    queueReplayEffectsSnapshot(room);
-    if (!applyAutoResultOk(room.state)) return;
-    advanceServerCpuTurns(room.state);
-    room.version = Number(room.version || 0) + 1;
-    room.state.version = room.version;
-    room.state.onlineMeta = {
-      ...(room.state.onlineMeta || {}),
-      transport: "socket.io",
-      reason: "resultOkAuto",
-      publishedBy: null,
-      publishedAt: now(),
-    };
-    room.updatedAt = now();
-    persistRoom(room);
-    syncClubPointEffects(room);
-    broadcastState(room);
-    scheduleRoomServerEffect(room);
-    scheduleRoomClockTimeout(room);
-    scheduleRoomResultTimeout(room);
+    try {
+      queueReplayEffectsSnapshot(room);
+      if (!applyAutoResultOk(room.state)) return;
+      advanceServerCpuTurns(room.state);
+      room.version = Number(room.version || 0) + 1;
+      room.state.version = room.version;
+      room.state.onlineMeta = {
+        ...(room.state.onlineMeta || {}),
+        transport: "socket.io",
+        reason: "resultOkAuto",
+        publishedBy: null,
+        publishedAt: now(),
+      };
+      room.updatedAt = now();
+      persistRoom(room);
+      syncClubPointEffects(room);
+      broadcastState(room);
+      scheduleRoomServerEffect(room);
+      scheduleRoomClockTimeout(room);
+      scheduleRoomResultTimeout(room);
+    } catch (error) {
+      console.error("[ResultOkAuto] failed", { tableId: room?.tableId, gameId: room?.gameId, error });
+      try {
+        broadcastState(room);
+      } catch {}
+      scheduleRoomResultTimeout(room);
+    }
   }, delay);
 };
 const scheduleRoomServerEffect = (room) => {
@@ -3136,11 +3164,20 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
 
 const registerGameSocketHandlers = () => {
 io.on("connection", (socket) => {
+  console.log("[Socket] connected", {
+    socketId: socket.id,
+    address: socket.handshake?.address,
+    origin: socket.handshake?.headers?.origin || "",
+    userId: socket.handshake?.auth?.userId || "",
+    tableId: socket.handshake?.auth?.tableId || "",
+    gameId: socket.handshake?.auth?.gameId || "",
+    transport: socket.conn?.transport?.name || "",
+  });
   socket.on("game:join", async (payload = {}, ack) => {
     try {
       const { tableId, gameId, userId } = payload;
       const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
-      console.log("[AnmikaGameServer] join", { tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
+      console.log("[AnmikaGameServer] join", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
       room.sockets.set(socket.id, { userId, joinedAt: now() });
       socket.join(`table:${room.tableId}`);
       socket.data.tableId = room.tableId;
@@ -3159,6 +3196,7 @@ io.on("connection", (socket) => {
       }
       ack?.({ ok: true, ...publicRoomState(room, userId) });
     } catch (error) {
+      console.error("[AnmikaGameServer] join failed", { socketId: socket.id, payload, error: error?.message || String(error) });
       try {
         const { tableId, gameId, playerId } = payload || {};
         const room = tableId ? getOrCreateRoom({ tableId, gameId }) : null;
@@ -3173,7 +3211,7 @@ io.on("connection", (socket) => {
     try {
       const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true } = payload;
       const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
-      console.log("[AnmikaGameServer] initState", { tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state) });
+      console.log("[AnmikaGameServer] initState", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state), version: room.version });
       if (room.state) {
         const viewerId = userId || socket.data.userId || null;
         if (clearRoomLastHandForUser(room, viewerId)) {
@@ -3211,6 +3249,7 @@ io.on("connection", (socket) => {
       acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
       ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
+      console.error("[AnmikaGameServer] initState failed", { socketId: socket.id, payload: { tableId: payload?.tableId, gameId: payload?.gameId, userId: payload?.userId }, error: error?.message || String(error) });
       ack?.({ ok: false, error: error.message });
     }
   });
@@ -3223,6 +3262,16 @@ io.on("connection", (socket) => {
       playerIdForAck = playerId || playerIdForAck;
       room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
+      console.log("[Action] received", {
+        socketId: socket.id,
+        tableId,
+        gameId,
+        playerId,
+        actionType,
+        clientVersion: turnVersion,
+        serverVersion: room.version,
+        phase: room.state?.phase,
+      });
       const requestId = actionPayload?.discardRequestId || actionPayload?.requestId || payload.requestId || "";
       if (requestId && room.processedRequestIds?.has(requestId)) {
         ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
@@ -3277,8 +3326,20 @@ io.on("connection", (socket) => {
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
+      console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
     } catch (error) {
+      console.error("[Action] rejected", {
+        socketId: socket.id,
+        tableId: payload?.tableId,
+        gameId: payload?.gameId,
+        playerId: playerIdForAck,
+        actionType: payload?.actionType,
+        clientVersion: payload?.turnVersion,
+        serverVersion: room?.version,
+        phase: room?.state?.phase,
+        error: error?.message || String(error),
+      });
       ack?.({ ok: false, error: error.message, ...(room?.state ? publicRoomState(room, playerIdForAck) : {}) });
     }
   });
@@ -3308,8 +3369,15 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
     const tableId = socket.data.tableId;
+    console.warn("[Socket] disconnected", {
+      socketId: socket.id,
+      reason,
+      tableId,
+      userId: socket.data.userId || "",
+      transport: socket.conn?.transport?.name || "",
+    });
     if (!tableId) return;
     const room = gameRooms.get(tableId);
     room?.sockets.delete(socket.id);
@@ -3319,16 +3387,22 @@ io.on("connection", (socket) => {
 
 export const attachAnmikaGameServer = (httpServer) => {
   if (io) return io;
+  console.log("[AnmikaGameServer] starting", {
+    cors: allowedOrigins.includes("*") ? "*" : allowedOrigins,
+    pingInterval: 20000,
+    pingTimeout: 90000,
+    connectionStateRecoveryMs: 300000,
+  });
   io = new Server(httpServer, {
     cors: {
       origin: allowedOrigins.includes("*") ? "*" : allowedOrigins,
       methods: ["GET", "POST"],
     },
-    pingInterval: 25000,
-    pingTimeout: 60000,
-    connectTimeout: 45000,
+    pingInterval: 20000,
+    pingTimeout: 90000,
+    connectTimeout: 60000,
     connectionStateRecovery: {
-      maxDisconnectionDuration: 120000,
+      maxDisconnectionDuration: 300000,
       skipMiddlewares: true,
     },
     transports: ["websocket", "polling"],

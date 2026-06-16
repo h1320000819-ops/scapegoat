@@ -97,6 +97,7 @@ const APP_STORAGE_KEYS = {
   replays: "anmikaRocket.replays",
   clubMemberPoints: "anmikaRocket.clubMemberPoints",
   onlineSync: "anmikaRocket.onlineSync",
+  socketDebug: "anmikaRocket.socketDebug",
 };
 const now = () => Date.now();
 const createId = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -262,6 +263,33 @@ const copyTextToClipboard = async (text) => {
 };
 const loadOnlineSync = () => safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
 const saveOnlineSync = (sync) => sync ? safeWriteJson(APP_STORAGE_KEYS.onlineSync, sync) : safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+const loadSocketDebugStatus = () => safeReadJson(APP_STORAGE_KEYS.socketDebug, {});
+const saveSocketDebugStatus = (patch = {}) => {
+  const sync = loadOnlineSync() || {};
+  const socket = globalThis.anmikaGameSocket || null;
+  const previous = loadSocketDebugStatus() || {};
+  const next = {
+    ...previous,
+    socket: socket?.connected ? "CONNECTED" : "DISCONNECTED",
+    gameServer: patch.gameServer || previous.gameServer || (socket?.connected ? "OK" : "NG"),
+    socketId: socket?.id || previous.socketId || "",
+    socketUrl: patch.socketUrl || previous.socketUrl || sync.socketUrl || defaultGameServerUrl(),
+    tableId: patch.tableId ?? sync.tableId ?? previous.tableId ?? "",
+    gameId: patch.gameId ?? sync.gameId ?? previous.gameId ?? "",
+    userId: patch.userId ?? sync.userId ?? previous.userId ?? "",
+    clientVersion: patch.clientVersion ?? sync.version ?? previous.clientVersion ?? "",
+    serverVersion: patch.serverVersion ?? previous.serverVersion ?? "",
+    currentVersion: patch.currentVersion ?? sync.version ?? previous.currentVersion ?? "",
+    lastAction: patch.lastAction ?? sync.lastActionType ?? previous.lastAction ?? "",
+    lastError: patch.lastError ?? previous.lastError ?? "",
+    lastDisconnectReason: patch.lastDisconnectReason ?? previous.lastDisconnectReason ?? "",
+    lastReconnectReason: patch.lastReconnectReason ?? previous.lastReconnectReason ?? "",
+    updatedAt: Date.now(),
+  };
+  safeWriteJson(APP_STORAGE_KEYS.socketDebug, next);
+  console.log("[SocketDebug]", next);
+  return next;
+};
 const ONLINE_DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
 const DEFAULT_GAME_SERVER_PORT = 8787;
 const defaultGameServerUrl = () => {
@@ -277,12 +305,16 @@ const isSocketAuthoritativeGame = () => {
   return Boolean(sync?.enabled && sync.transport === "socketio" && sync.tableId && sync.gameId);
 };
 let socketClientLoadPromise = null;
+let socketClientLoadUrl = "";
 const loadSocketIoClient = async (serverUrl = defaultGameServerUrl()) => {
   if (globalThis.io) return globalThis.io;
+  const normalizedUrl = serverUrl.replace(/\/$/, "");
+  if (socketClientLoadUrl && socketClientLoadUrl !== normalizedUrl) socketClientLoadPromise = null;
   if (!socketClientLoadPromise) {
+    socketClientLoadUrl = normalizedUrl;
     socketClientLoadPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `${serverUrl.replace(/\/$/, "")}/socket.io/socket.io.js`;
+      script.src = `${normalizedUrl}/socket.io/socket.io.js`;
       script.onload = () => globalThis.io ? resolve(globalThis.io) : reject(new Error("Socket.IOクライアントを読み込めませんでした"));
       script.onerror = () => reject(new Error(`Socket.IOサーバーへ接続できません: ${serverUrl}`));
       document.head.appendChild(script);
@@ -290,27 +322,108 @@ const loadSocketIoClient = async (serverUrl = defaultGameServerUrl()) => {
   }
   return socketClientLoadPromise;
 };
-const SOCKET_ACK_TIMEOUT_MS = 30000;
-const SOCKET_CONNECT_TIMEOUT_MS = 30000;
-const socketEmitWithAck = (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS) => new Promise((resolve, reject) => {
-  if (!socket?.connected) {
-    reject(new Error("ゲームサーバーに接続されていません"));
+const SOCKET_ACK_TIMEOUT_MS = 45000;
+const SOCKET_CONNECT_TIMEOUT_MS = 45000;
+const waitForSocketConnected = (socket, timeoutMs = SOCKET_CONNECT_TIMEOUT_MS) => new Promise((resolve, reject) => {
+  if (!socket) {
+    saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastError: "Socketが初期化されていません" });
+    reject(new Error("ゲームサーバー接続が初期化されていません"));
     return;
   }
-  socket.timeout(timeoutMs).emit(eventName, payload, (error, response) => {
+  if (socket.connected) {
+    saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", lastError: "" });
+    resolve(socket);
+    return;
+  }
+  let settled = false;
+  let lastError = null;
+  let lastDisconnect = "";
+  let timer = null;
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+    socket.off("connect", onConnect);
+    socket.off("connect_error", onConnectError);
+    socket.off("disconnect", onDisconnect);
+  };
+  const finish = (fn, value) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    fn(value);
+  };
+  const onConnect = () => {
+    saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: socket.id, lastError: "" });
+    finish(resolve, socket);
+  };
+  const onConnectError = (error) => {
+    lastError = error;
+    console.warn("[SocketGame] connect retry", error?.message ?? error);
+    saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastError: error?.message || String(error), lastReconnectReason: "connect_error" });
+  };
+  const onDisconnect = (reason) => {
+    lastDisconnect = reason || "";
+    saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastDisconnectReason: lastDisconnect, lastReconnectReason: "disconnect" });
+  };
+  socket.on("connect", onConnect);
+  socket.on("connect_error", onConnectError);
+  socket.on("disconnect", onDisconnect);
+  timer = setTimeout(() => {
+    const suffix = lastError?.message || lastDisconnect ? ` (${lastError?.message || lastDisconnect})` : "";
+    saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastError: `接続タイムアウト${suffix}` });
+    finish(reject, new Error(`ゲームサーバー接続がタイムアウトしました${suffix}`));
+  }, timeoutMs);
+  socket.connect?.();
+});
+const ensureSocketConnected = async (socket, { timeoutMs = SOCKET_CONNECT_TIMEOUT_MS } = {}) => {
+  if (!socket) throw new Error("ゲームサーバー接続が初期化されていません");
+  if (socket.connected) return socket;
+  socket.connect?.();
+  return waitForSocketConnected(socket, timeoutMs);
+};
+const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS) => {
+  await ensureSocketConnected(socket, { timeoutMs: Math.min(timeoutMs, SOCKET_CONNECT_TIMEOUT_MS) });
+  saveSocketDebugStatus({
+    socket: "CONNECTED",
+    gameServer: "OK",
+    tableId: payload?.tableId,
+    gameId: payload?.gameId,
+    userId: payload?.userId || payload?.playerId,
+    clientVersion: payload?.turnVersion,
+    currentVersion: payload?.turnVersion,
+    lastAction: eventName,
+    lastError: "",
+  });
+  return new Promise((resolve, reject) => {
+    socket.timeout(timeoutMs).emit(eventName, payload, (error, response) => {
     if (error) {
+      saveSocketDebugStatus({ lastAction: eventName, lastError: error?.message || String(error), gameServer: "NG" });
       reject(error);
       return;
     }
     if (response?.ok === false) {
       const errorObject = new Error(response.error || "ゲームサーバー処理に失敗しました");
       errorObject.response = response;
+      saveSocketDebugStatus({
+        lastAction: eventName,
+        lastError: errorObject.message,
+        serverVersion: response?.version,
+        currentVersion: response?.version,
+        gameServer: "OK",
+      });
       reject(errorObject);
       return;
     }
+    saveSocketDebugStatus({
+      lastAction: eventName,
+      lastError: "",
+      serverVersion: response?.version,
+      currentVersion: response?.version,
+      gameServer: "OK",
+    });
     resolve(response);
   });
-});
+  });
+};
 const isOnlineDebugLocalTableId = (tableId) => String(tableId || "").startsWith("online-debug-");
 const sourceTableIdFromLocalDebugId = (tableId) => isOnlineDebugLocalTableId(tableId) ? String(tableId).replace(/^online-debug-/, "") : tableId;
 const forgetLocalOnlineDebugTable = (tableId) => {
@@ -340,7 +453,7 @@ const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "")
     return `${base}${joiner}leftTableId=${encodeURIComponent(leftTableId)}&leftAt=${Date.now()}`;
   }
 };
-const submitOnlineGameAction = async (actionType, payload = {}) => {
+const submitOnlineGameAction = async (actionType, payload = {}, options = {}) => {
   const sync = loadOnlineSync();
   if (sync?.transport === "socketio") {
     const socket = globalThis.anmikaGameSocket;
@@ -354,7 +467,7 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
         actionType,
         turnVersion: sync.version ?? 0,
         payload,
-      });
+      }, options.timeoutMs ?? (actionType === "resultOk" ? 12000 : SOCKET_ACK_TIMEOUT_MS));
     } catch (error) {
       if (error.response?.state) {
         saveOnlineSync({
@@ -365,6 +478,13 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
         });
         globalThis.__anmikaController?.applyOnlineStateSnapshot?.(error.response.state);
       }
+      saveSocketDebugStatus({
+        lastAction: actionType,
+        lastError: error?.message || String(error),
+        clientVersion: sync.version ?? 0,
+        serverVersion: error.response?.version ?? error.response?.state?.version ?? "",
+        currentVersion: error.response?.version ?? error.response?.state?.version ?? sync.version ?? 0,
+      });
       throw error;
     }
     saveOnlineSync({
@@ -376,6 +496,13 @@ const submitOnlineGameAction = async (actionType, payload = {}) => {
       lastSyncedAt: Date.now(),
     });
     if (actionType === "ron") console.log("[Ron] accepted", { tableId: sync.tableId, gameId: sync.gameId, version: response?.version });
+    saveSocketDebugStatus({
+      lastAction: actionType,
+      lastError: "",
+      clientVersion: sync.version ?? 0,
+      serverVersion: response?.version ?? response?.state?.version ?? "",
+      currentVersion: response?.version ?? response?.state?.version ?? sync.version ?? 0,
+    });
     if (response?.state && globalThis.__anmikaController?.applyOnlineStateSnapshot) {
       globalThis.__anmikaController.applyOnlineStateSnapshot(response.state);
     }
@@ -1575,7 +1702,7 @@ const evaluateWin = (state, player, tile) => {
   if (isKokushi(counts)) yaku.push({ name: "国士無双", han: 13, isYakuman: true });
   if (isSevenPairs(counts)) yaku.push({ name: "七対子", han: 2 });
   if (player.isRiichi) yaku.push({ name: "リーチ", han: 1 });
-  if (player.ippatsu && player.isRiichi && !player.ippatsuOwnDrawStarted) yaku.push({ name: "一発", han: 1 });
+  if (player.ippatsu && player.isRiichi) yaku.push({ name: "一発", han: 1 });
   if (player.drawnTile && tile?.id === player.drawnTile.id) yaku.push({ name: "門前清自摸和", han: 1 });
   if (tiles.every((t) => t.suit !== "honor" && t.rank !== 1 && t.rank !== 9)) yaku.push({ name: "タンヤオ", han: 1 });
   for (const key of ["honor-white", "honor-green", "honor-red", "honor-east"]) if ((counts.get(key) ?? 0) >= 3) yaku.push({ name: `役牌 ${explicitLabelKey(key)}`, han: 1 });
@@ -1820,7 +1947,7 @@ const evaluateWinExplicit = (state, player, tile) => {
   const menzenTsumoYakuEnabled = isClosed || turquoiseOpenRiichi;
   const baseYaku = [];
   if (riichiYakuEnabled && player.isRiichi) baseYaku.push({ name: "リーチ", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
-  if (riichiYakuEnabled && player.ippatsu && player.isRiichi && !player.ippatsuOwnDrawStarted) baseYaku.push({ name: "一発", han: 1 });
+  if (riichiYakuEnabled && player.ippatsu && player.isRiichi) baseYaku.push({ name: "一発", han: 1 });
   if (menzenTsumoYakuEnabled && isTsumo) baseYaku.push({ name: "門前清自摸和", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
   if (isFirstTsumoYakumanEligible(state, player, isTsumo)) baseYaku.push({ name: player.id === state.round.dealerPlayerId ? "天和" : "地和", han: 13, isYakuman: true });
   if (isRenhouEligible(state, player, isTsumo)) baseYaku.push({ name: "人和", han: 13, isYakuman: true });
@@ -2874,6 +3001,19 @@ class GameController {
     const sync = loadOnlineSync();
     if (!sync?.enabled || sync.transport !== "socketio" || !sync.tableId || !sync.gameId) return;
     const serverUrl = resolveGameServerUrl(sync.socketUrl);
+    console.log("[SocketGame] connecting", { serverUrl, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: sync.version });
+    saveSocketDebugStatus({
+      socket: "DISCONNECTED",
+      gameServer: "NG",
+      socketUrl: serverUrl,
+      tableId: sync.tableId,
+      gameId: sync.gameId,
+      userId: sync.userId,
+      clientVersion: sync.version ?? 0,
+      currentVersion: sync.version ?? 0,
+      lastReconnectReason: "connectSocketGameServer",
+      lastError: "",
+    });
     await loadSocketIoClient(serverUrl);
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
@@ -2910,11 +3050,20 @@ class GameController {
         });
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+          saveSocketDebugStatus({
+            socket: "CONNECTED",
+            gameServer: "OK",
+            serverVersion: response.version ?? response.state?.version ?? 0,
+            currentVersion: response.version ?? response.state?.version ?? 0,
+            lastAction: `game:join:${reason}`,
+            lastError: "",
+          });
           this.state.onlineLoadingMessage = "";
           this.applyOnlineStateSnapshot(response.state);
         }
       } catch (error) {
         console.warn("[SocketGame] 再接続後の卓復帰に失敗しました", error);
+        saveSocketDebugStatus({ lastAction: `game:join:${reason}`, lastError: error?.message || String(error) });
         this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
         this.onStateChanged(this.state);
       }
@@ -2923,6 +3072,17 @@ class GameController {
       const state = payload?.state;
       if (!state) return;
       saveOnlineSync({ ...loadOnlineSync(), version: payload.version ?? 0, lastServerState: state, lastSyncedAt: Date.now() });
+      saveSocketDebugStatus({
+        socket: socket.connected ? "CONNECTED" : "DISCONNECTED",
+        gameServer: "OK",
+        serverVersion: payload.version ?? state.version ?? 0,
+        currentVersion: payload.version ?? state.version ?? 0,
+        tableId: sync.tableId,
+        gameId: sync.gameId,
+        userId: sync.userId,
+        lastAction: state.onlineMeta?.reason || "game:state",
+        lastError: "",
+      });
       if (this.applyOnlineStateSnapshot(state)) this.lastAppliedOnlinePublishedAt = Number(state?.onlineMeta?.publishedAt ?? Date.now());
     });
     const sendInitialSocketState = async (reason = "needInitialState") => {
@@ -2969,21 +3129,24 @@ class GameController {
     };
     socket.on("game:needInitialState", () => sendInitialSocketState("needInitialState"));
     socket.on("connect", () => {
+      console.log("[SocketGame] connected", { socketId: socket.id, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: socket.id, socketUrl: serverUrl, lastReconnectReason: didInitialJoin ? "reconnect" : "initialConnect", lastError: "" });
       if (didInitialJoin) rejoinSocketRoom("connect");
     });
     socket.on("disconnect", (reason) => {
       if (reason === "io client disconnect") return;
+      console.warn("[SocketGame] disconnected", { reason, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastDisconnectReason: reason, lastReconnectReason: "socketDisconnect", lastError: reason });
       this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... (${reason})`;
       this.onStateChanged(this.state);
     });
     socket.on("connect_error", (error) => {
+      console.warn("[SocketGame] connect_error", { error: error?.message ?? error, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
+      saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastReconnectReason: "connect_error", lastError: error?.message || String(error) });
       this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
       this.onStateChanged(this.state);
     });
-    await new Promise((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("connect_error", reject);
-    });
+    await waitForSocketConnected(socket, SOCKET_CONNECT_TIMEOUT_MS + 15000);
     const joinResponse = await socketEmitWithAck(socket, "game:join", {
       tableId: sync.tableId,
       gameId: sync.gameId,
@@ -3005,7 +3168,7 @@ class GameController {
   async resyncSocketGameState(reason = "resync") {
     const sync = loadOnlineSync();
     const socket = globalThis.anmikaGameSocket;
-    if (sync?.transport !== "socketio" || !socket?.connected) return false;
+    if (sync?.transport !== "socketio" || !socket) return false;
     try {
       console.log("[Discard] resync requested", reason);
       const response = await socketEmitWithAck(socket, "game:requestState", {
@@ -3456,7 +3619,7 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
           this.emit();
@@ -3487,6 +3650,7 @@ class GameController {
         console.warn("[SocketGame] result ok failed", error);
         this.state.log.unshift(`オンライン次局開始に失敗: ${error.message}`);
         this.emit();
+        this.resyncSocketGameState("resultOkFailed").catch(() => {});
       });
       return;
     }
@@ -3711,6 +3875,11 @@ class GameController {
     player.discardedTiles.push({ tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex });
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
+    if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
+      player.ippatsu = false;
+      player.ippatsuOwnDrawStarted = false;
+      appendHandLogEvent(this.state.handLog, { type: "ippatsuCleared", playerId: player.id, reason: "ownDrawPassed", turnIndex: this.state.turnIndex });
+    }
     if (!isCpuAction && player.type !== "cpu") {
       submitOnlineGameAction("discard", { tileId, tile, discardType, localPlayerId: player.id }).catch((error) => {
         console.warn("[OnlineSync] discard event failed", error);
@@ -4948,11 +5117,12 @@ class GameView {
   }
   replayViewerScreen(state) {
     const replay = replayRepository.getReplay(state.selectedReplayId);
-    if (!replay) return `<section class="lobby-panel"><button type="button" data-nav="replayList">戻る</button><p>牌譜が見つかりません。</p></section>`;
+    const fallbackBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || "");
+    if (!replay) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
     const snapshots = getReplaySnapshots(replay);
     const index = Math.max(0, Math.min(state.replayIndex, snapshots.length - 1));
     const snapshot = getCurrentReplaySnapshot(replay, index);
-    if (!snapshot) return `<section class="lobby-panel"><button type="button" data-nav="replayList">戻る</button><p>牌譜が見つかりません。</p></section>`;
+    if (!snapshot) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
     const displayState = {
       ...snapshot,
       screen: "game",

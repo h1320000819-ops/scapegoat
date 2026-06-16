@@ -845,7 +845,8 @@ button:hover {
 .seat-card button,
 .club-search button,
 .replay-toolbar button,
-.replay-toolbar .button-link {
+.replay-toolbar .button-link,
+.replay-missing-panel .button-link {
   align-items: center;
   background: #ffd15c;
   border: 0;
