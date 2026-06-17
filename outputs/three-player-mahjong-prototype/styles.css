@@ -528,7 +528,7 @@ button:hover {
 .replay-reveal-right .hand-row > .tile-button,
 .replay-reveal-right .drawn-tile > .tile,
 .replay-reveal-right .drawn-tile > .tile-button {
-  transform: rotate(90deg);
+  transform: rotate(270deg);
   transform-origin: center;
 }
 

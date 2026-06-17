@@ -1255,11 +1255,25 @@ const removeReplayDrawnOrHandTile = (player, tile) => {
   }
   return removeReplayTileById(player.hand, tile.id) || removeReplayTileByKind(player.hand, tile);
 };
+const addReplayIntegrityWarning = (state, warning) => {
+  state.replayIntegrityWarnings ??= [];
+  state.replayIntegrityWarnings.push(warning);
+};
 const removeReplayWallTile = (state, tile, source = "liveWall") => {
   const wall = source === "rinshanWall" ? state.rinshanWall : state.liveWall;
-  if (!Array.isArray(wall)) return null;
-  if (wall[0]?.id === tile?.id) return wall.shift();
-  return removeReplayTileById(wall, tile?.id) || wall.shift() || tile;
+  if (!Array.isArray(wall)) return tile || null;
+  if (wall[0]?.id === tile?.id) {
+    wall.shift();
+    return tile;
+  }
+  const removed = removeReplayTileById(wall, tile?.id);
+  if (!removed && wall.length) {
+    const skipped = wall.shift();
+    addReplayIntegrityWarning(state, { type: "wallDrawMismatch", expectedTileId: tile?.id || "", skippedTileId: skipped?.id || "", source });
+  } else if (removed) {
+    addReplayIntegrityWarning(state, { type: "wallDrawOutOfOrder", expectedTileId: tile?.id || "", source });
+  }
+  return tile || removed || null;
 };
 const removeReplayLastDiscard = (state, playerId, tile) => {
   const player = findReplayPlayer(state, playerId);
@@ -1288,6 +1302,10 @@ const applySimpleReplayEvent = (state, event) => {
     return state;
   }
   if (event.type === "draw" && player) {
+    if (player.drawnTile) {
+      addReplayIntegrityWarning(state, { type: "drawWhileDrawnTileExists", playerId: player.id, oldTileId: player.drawnTile.id, newTileId: event.tile?.id || "" });
+      player.drawnTile = null;
+    }
     const tile = removeReplayWallTile(state, event.tile, event.from || "liveWall") || event.tile;
     player.drawnTile = tile;
     state.lastDrawnTile = tile;
@@ -1296,14 +1314,29 @@ const applySimpleReplayEvent = (state, event) => {
     return state;
   }
   if (event.type === "discard" && player) {
-    const tile = removeReplayDrawnOrHandTile(player, event.tile) || event.tile;
-    if (player.drawnTile) {
-      player.hand.push(player.drawnTile);
+    const discardType = event.discardType || "tedashi";
+    let tile = null;
+    if (discardType === "tsumogiri") {
+      if (player.drawnTile && !sameTileKind(player.drawnTile, event.tile)) {
+        addReplayIntegrityWarning(state, { type: "tsumogiriTileMismatch", playerId: player.id, drawnTileId: player.drawnTile.id, eventTileId: event.tile?.id || "" });
+      }
+      tile = event.tile || player.drawnTile;
       player.drawnTile = null;
-      player.hand = sortHandTiles(player.hand);
+    } else {
+      tile = removeReplayTileById(player.hand, event.tile?.id) || removeReplayTileByKind(player.hand, event.tile);
+      if (!tile) {
+        addReplayIntegrityWarning(state, { type: "discardTileMissingFromHand", playerId: player.id, eventTileId: event.tile?.id || "", handCount: player.hand?.length || 0, hasDrawnTile: Boolean(player.drawnTile) });
+        tile = event.tile || null;
+        if (Array.isArray(player.hand) && player.hand.length) player.hand.pop();
+      }
+      if (player.drawnTile) {
+        player.hand.push(player.drawnTile);
+        player.drawnTile = null;
+        player.hand = sortHandTiles(player.hand);
+      }
     }
     player.discardedTiles ??= [];
-    player.discardedTiles.push({ tile, discardType: event.discardType || "tedashi", isRiichiDiscard: Boolean(event.isRiichiDiscard), turnIndex: event.turnIndex ?? state.turnIndex ?? 0 });
+    if (tile) player.discardedTiles.push({ tile, discardType, isRiichiDiscard: Boolean(event.isRiichiDiscard), turnIndex: event.turnIndex ?? state.turnIndex ?? 0 });
     state.turnIndex = Math.max(Number(state.turnIndex || 0), Number(event.turnIndex || 0) + 1);
     state.phase = "playing";
     return state;
@@ -1349,7 +1382,11 @@ const applySimpleReplayEvent = (state, event) => {
     const tile = removeReplayDrawnOrHandTile(player, event.tile) || event.tile;
     player.nukiDoraTiles ??= [];
     if (tile) player.nukiDoraTiles.push(tile);
-    if (event.replacementTile) player.drawnTile = event.replacementTile;
+    if (event.replacementTile) {
+      removeReplayWallTile(state, event.replacementTile, "rinshanWall");
+      player.drawnTile = event.replacementTile;
+      state.lastDrawnTile = event.replacementTile;
+    }
     return state;
   }
   if ((event.type === "ron" || event.type === "tsumo") && player) {
