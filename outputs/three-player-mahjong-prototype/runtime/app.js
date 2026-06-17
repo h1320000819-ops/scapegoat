@@ -4098,9 +4098,12 @@ class GameController {
     this.assertHandCount(player, "normalizeHumanDrawStateForDiscard");
   }
   startGame({ preserveScores = false } = {}) {
-    const ruleConfig = normalizeAnmikaRocketRuleConfig(this.state.settings?.ruleConfig);
+    const ruleId = this.state.settings?.ruleId || this.state.settings?.gameType || "anmika-rocket";
+    const ruleConfig = normalizeRuleConfigForRule(ruleId, this.state.settings?.ruleConfig);
+    this.state.settings.ruleId = ruleId;
+    this.state.settings.gameType = this.state.settings.gameType || ruleId;
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, this.state.settings?.ruleId || "anmika-rocket"))), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownSeconds: null, resultAutoCloseHandled: false, resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownSeconds: null, resultAutoCloseHandled: false, resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
     this.stopAllClocks();
@@ -4108,7 +4111,7 @@ class GameController {
       this.state.round.handNumber = 1;
       this.state.round.dealerPlayerId = this.state.players[0]?.id ?? "";
     }
-    const startingScore = this.state.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0;
+    const startingScore = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
     for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0 });
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);

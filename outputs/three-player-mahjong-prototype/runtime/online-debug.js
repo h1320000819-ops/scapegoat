@@ -34,9 +34,12 @@
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
+  const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const ENABLE_AUTO_TABLE_START = true;
 
   const initialParams = new URLSearchParams(location.search);
+  const initialReturnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "";
+  const shouldOpenTableListOnBoot = Boolean(initialReturnClubId || initialParams.get("leftTableId"));
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
     refreshToken: localStorage.getItem("anmikaRefreshToken") || "",
@@ -54,7 +57,7 @@
     autoStartFailedTableIds: new Set(),
     autoOpenedPlayingTableIds: new Set(),
     gameServerProbe: { status: "未確認", lastError: "", checkedAt: "" },
-    activeClubId: initialParams.get("returnClubId") || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
+    activeClubId: initialReturnClubId,
     activeTableId: initialParams.get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
     recentlyLeftTableId: initialParams.get("leftTableId") || "",
     recentlyLeftAt: Number(initialParams.get("leftAt") || 0),
@@ -585,7 +588,6 @@
     }
     return `${location.origin}/online-debug/index.html${query}`;
   };
-  const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const debugTileAssetPath = (fileName) => (location.protocol === "file:" ? `../public/tiles/${fileName}` : `/tiles/${fileName}`);
   const canLoadImage = (src) =>
     new Promise((resolve) => {
@@ -3663,7 +3665,7 @@
     if (has("loginIdDisplay")) $("loginIdDisplay").textContent = state.user ? state.user.loginId || state.user.id : "未設定";
     if (state.user && has("userId")) $("userId").value = state.user.loginId || state.user.id;
     if (!state.user || !state.accessToken) document.body.dataset.screen = "auth";
-    else if (document.body.dataset.screen === "auth") document.body.dataset.screen = "clubs";
+    else if (document.body.dataset.screen === "auth") document.body.dataset.screen = shouldOpenTableListOnBoot ? "club-home" : "clubs";
     const selectedClub = state.clubs.find((club) => club.club_id === activeClubId) || null;
     if (has("clubHomeTitle")) $("clubHomeTitle").textContent = selectedClub ? selectedClub.name : "クラブ";
     if (has("createTableButton")) {
@@ -4032,7 +4034,7 @@
     if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
     updateRangeLabels();
     probeGameServer().catch(() => {});
-    const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || state.activeClubId;
+    const returnClubId = initialReturnClubId || state.activeClubId;
     if (state.user && state.accessToken && returnClubId) {
       setActiveClubId(returnClubId);
       localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);

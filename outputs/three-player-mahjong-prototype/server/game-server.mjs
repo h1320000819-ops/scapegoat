@@ -1747,6 +1747,8 @@ const normalizeRuleConfigForRule = (ruleId, config = {}) =>
 
 const isTsumoLossless3maState = (state) =>
   state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+const startingScoreForRule = (ruleId, ruleConfig = {}) =>
+  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig?.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
 const isNorthNukiTile = (state, tile) =>
   isTsumoLossless3maState(state) && Boolean(state?.settings?.ruleConfig?.northNukiDoraEnabled) && tile?.suit === "honor" && tile?.kind === "north";
 const isNukiDoraTileForState = (state, tile) => isFlowerTile(tile) || isNorthNukiTile(state, tile);
@@ -3806,12 +3808,14 @@ const startNextServerHand = (state) => {
 
 const createServerInitialState = ({ tableId, gameId, players = [], settings = {}, ruleConfig = {} }) => {
   const ruleId = settings.ruleId || settings.gameType || "anmika-rocket";
-  const normalizedRuleConfig = normalizeRuleConfigForRule(ruleId, ruleConfig || settings.ruleConfig);
+  const ruleConfigInput = Object.keys(ruleConfig || {}).length > 0 ? ruleConfig : settings.ruleConfig;
+  const normalizedRuleConfig = normalizeRuleConfigForRule(ruleId, ruleConfigInput);
+  const startingScore = startingScoreForRule(ruleId, normalizedRuleConfig);
   const normalizedPlayers = players.slice(0, 3).map((player, index) => ({
     id: player.id || `cpu${index}`,
     name: player.name || (player.type === "cpu" ? `CPU${index}` : `プレイヤー${index + 1}`),
     type: player.type === "cpu" ? "cpu" : "remote",
-    score: Number(player.score ?? (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0)),
+    score: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? startingScore : Number(player.score ?? startingScore),
     hand: [],
     drawnTile: null,
     discardedTiles: [],
@@ -3834,7 +3838,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       id: `cpu${index}`,
       name: `CPU${index}`,
       type: "cpu",
-      score: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 35000 : 0,
+      score: startingScore,
       hand: [],
       drawnTile: null,
       discardedTiles: [],
