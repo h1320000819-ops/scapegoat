@@ -2399,6 +2399,7 @@ const evaluateServerWin = (state, player, tile, winType) => {
   const counts = countTilesForShape(concealedTiles);
 
   const rejectByRiichiRequirement = (yaku) => {
+    if (isTsumoLossless3maState(state)) return null;
     const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
     if (!hasYakuman && state?.settings?.ruleConfig?.otokogiEnabled !== false && isClosed && !player.isRiichi) {
       return { canWin: false, reason: "門前ダマテン和了は禁止です" };
@@ -2476,7 +2477,8 @@ const evaluateServerWin = (state, player, tile, winType) => {
     return { yaku, han: yaku.reduce((sum, item) => sum + Number(item.han || 0), 0) };
   });
   const best = candidates.sort((a, b) => b.han - a.han)[0];
-  if (!best?.yaku.length) return { canWin: false, reason: "和了形ですが役がありません" };
+  if (!best?.yaku.length && !isTsumoLossless3maState(state)) return { canWin: false, reason: "和了形ですが役がありません" };
+  if (!best?.yaku.length && isTsumoLossless3maState(state)) best.yaku = [{ name: "全赤三麻和了", han: 0 }];
   const riichiError = rejectByRiichiRequirement(best.yaku);
   if (riichiError) return riichiError;
   return { canWin: true, yaku: best.yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };

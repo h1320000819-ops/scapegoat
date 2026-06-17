@@ -79,6 +79,8 @@ const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
 });
 const normalizeRuleConfigForRule = (ruleId = "anmika-rocket", config = {}) =>
   ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
+const isTsumoLossless3maState = (state) =>
+  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
 const createDefaultTableSettings = () => ({
   ruleId: "anmika-rocket",
   gameType: "anmika-rocket",
@@ -2128,6 +2130,7 @@ const isRenhouEligible = (state, player, isTsumo) => {
   return !hasCallOrKan && state.turnIndex <= state.players.length;
 };
 const canWinByRiichiRequirement = ({ state, yaku, player, isClosed }) => {
+  if (isTsumoLossless3maState(state)) return true;
   if (state?.settings?.ruleConfig?.otokogiEnabled === false) return true;
   if (yaku.some((item) => item.name === "国士無双" || item.name === "人和")) return true;
   if (!isClosed) return true;
@@ -2387,7 +2390,8 @@ const evaluateWinExplicit = (state, player, tile) => {
     return { yaku, han: yaku.reduce((sum, item) => sum + item.han, 0) };
   });
   const best = candidates.sort((a, b) => b.han - a.han)[0];
-  if (!best?.yaku.length) return { canWin: false, reason: "和了形ですが役がありません" };
+  if (!best?.yaku.length && !isTsumoLossless3maState(state)) return { canWin: false, reason: "和了形ですが役がありません" };
+  if (!best?.yaku.length && isTsumoLossless3maState(state)) best.yaku = [{ name: "全赤三麻和了", han: 0 }];
   if (!canWinByRiichiRequirement({ state, yaku: best.yaku, player, isClosed })) return { canWin: false, reason: "門前ダマテン和了は禁止です" };
   return { canWin: true, handType: "standard", yaku: best.yaku, han: best.han };
 };
@@ -4274,6 +4278,11 @@ class GameController {
     const activeTableId = this.state.activeTableId || sync?.localTableId || sync?.tableId || "";
     const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
     const returnUrl = onlineLoadingReturnUrl();
+    this.stopAllClocks();
+    this.state.pendingAction = null;
+    this.state.isWaitingForHumanAction = false;
+    this.state.onlineLoadingMessage = "退席して卓一覧へ戻っています...";
+    this.emit();
     try {
       await leaveOnlineTableForSync(sync);
     } catch (error) {
@@ -4284,6 +4293,7 @@ class GameController {
     }
     forgetLocalOnlineDebugTable(activeTableId);
     saveOnlineSync(null);
+    try { globalThis.anmikaGameSocket?.disconnect?.(); } catch {}
     window.location.href = returnUrl;
   }
   toggleSettings() {
@@ -5235,6 +5245,7 @@ class GameView {
     this.root.onpointerdown = null;
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
     this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
+    this.root.querySelectorAll("[data-force-table-leave]").forEach((b) => b.addEventListener("click", () => this.handlers.onForceTableLeave?.()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
@@ -5885,11 +5896,13 @@ class GameView {
   }
   settingsPanel(state) {
     const rake = state.settings?.rakePercent ?? 0;
+    const showDebugLeave = isTsumoLossless3maState(state) && (state.activeTableId || loadOnlineSync()?.tableId);
     return `<aside class="settings-panel">
       <h2>設定</h2>
       <label class="setting-row"><span>レーキ: ${rake}%</span><input type="range" min="0" max="20" step="0.5" value="${rake}" data-rake-percent /></label>
       <label class="setting-row"><span>初期持ち時間</span><input type="number" min="1" max="120" step="1" value="${Math.round((state.settings?.initialClockMs ?? INITIAL_TIME_MS) / 1000)}" data-clock-seconds /> 秒</label>
       <p>累積レーキ: ${state.rakePool ?? 0}点</p>
+      ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>デバッグ退席</button>` : ""}
     </aside>`;
   }
   finalResult(state) {
@@ -6166,6 +6179,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onResultOk: (resultId = "") => controller.handleResultOk({ resultId }),
   onFinalResultOk: () => controller.handleFinalResultOk(),
   onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
+  onForceTableLeave: () => controller.leaveOnlineGameToLobby(),
   onToggleSettings: () => controller.toggleSettings(),
   onUpdateSettings: (partial) => controller.updateSettings(partial),
   onAssistSettings: (playerId, partial) => controller.updateAssistSettings(playerId, partial),

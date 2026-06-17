@@ -798,6 +798,18 @@ button:hover {
   margin: 10px 0;
 }
 
+.debug-force-leave {
+  background: #b42318;
+  border-color: #ffb4ab;
+  color: #fff7f5;
+  margin-top: 10px;
+  width: 100%;
+}
+
+.debug-force-leave:hover {
+  background: #d92d20;
+}
+
 .rule-choice-group,
 .rule-config-panel {
   background: rgba(0, 0, 0, 0.18);
