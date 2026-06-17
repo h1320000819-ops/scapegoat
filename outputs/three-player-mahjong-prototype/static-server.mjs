@@ -17,6 +17,7 @@ const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
+  ".json": "application/json; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
@@ -25,6 +26,7 @@ const mimeTypes = {
 
 const cacheControlFor = (filePath, url, pathname) => {
   const ext = path.extname(filePath).toLowerCase();
+  if (pathname === "/service-worker.js" || pathname === "/manifest.json") return "no-store";
   if (ext === ".html") return "no-store";
   if (pathname.startsWith("/tiles/") || [".png", ".jpg", ".jpeg", ".webp", ".svg"].includes(ext)) {
     return "public, max-age=31536000, immutable";

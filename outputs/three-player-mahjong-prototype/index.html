@@ -3,11 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <link rel="stylesheet" href="styles.css?v=20260618-mobile-top-hand-a" />
+    <meta name="theme-color" content="#0f3028" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="アンミカ" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/public/icons/anmika-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/public/icons/anmika-icon.svg" />
+    <link rel="stylesheet" href="styles.css?v=20260618-pwa-mobile-a" />
     <title>アンミカロケット</title>
     <style>
       .online-debug-page {
-        min-height: 100vh;
+        min-height: 100dvh;
         background: #0f3028;
         color: #f4fff9;
         font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
@@ -182,7 +190,8 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260618-debug-force-leave-a";
+    const assetVersion = "20260618-allred-win-a";
+    loadScript(`${assetBase}runtime/pwa.js?v=${assetVersion}`).catch(() => {});
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>

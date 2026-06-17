@@ -1,0 +1,98 @@
+(function () {
+  const isStandalone = () =>
+    window.matchMedia?.("(display-mode: standalone)")?.matches ||
+    window.navigator.standalone === true;
+
+  const updateMode = () => {
+    document.documentElement.dataset.pwa = isStandalone() ? "standalone" : "browser";
+    document.body.dataset.pwa = isStandalone() ? "standalone" : "browser";
+  };
+
+  const registerServiceWorker = () => {
+    if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+    navigator.serviceWorker.register("/service-worker.js").catch((error) => {
+      console.warn("[PWA] service worker registration failed", error);
+    });
+  };
+
+  const isiOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isMobile = () => matchMedia("(max-width: 920px), (pointer: coarse)").matches;
+  let deferredPrompt = null;
+
+  const dismissKey = "anmikaPwaInstallDismissedAt";
+  const recentlyDismissed = () => Date.now() - Number(localStorage.getItem(dismissKey) || 0) < 3 * 24 * 60 * 60 * 1000;
+  const ensureHintStyles = () => {
+    if (document.getElementById("anmika-pwa-style")) return;
+    const style = document.createElement("style");
+    style.id = "anmika-pwa-style";
+    style.textContent = `
+      .pwa-install-hint{background:rgba(10,28,24,.96);border:1px solid rgba(255,209,92,.72);border-radius:8px;bottom:max(12px,env(safe-area-inset-bottom));box-shadow:0 16px 40px rgba(0,0,0,.38);color:#f7fff9;display:grid;gap:8px;left:50%;max-width:min(92vw,560px);padding:10px 12px;position:fixed;transform:translateX(-50%);z-index:10000}
+      .pwa-install-hint p{font-size:13px;font-weight:800;margin:0}
+      .pwa-install-hint div{align-items:center;display:flex;flex-wrap:wrap;gap:8px}
+      .pwa-install-hint button{background:#ffd15c;border:1px solid #9f6b00;border-radius:8px;color:#1f1704;font:inherit;font-weight:900;min-height:34px;padding:6px 10px}
+      .pwa-install-hint .secondary{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24);color:#f7fff9}
+    `;
+    document.head.append(style);
+  };
+
+  const showInstallHint = () => {
+    if (!isMobile() || isStandalone() || recentlyDismissed() || document.querySelector(".pwa-install-hint")) return;
+    ensureHintStyles();
+    const hint = document.createElement("section");
+    hint.className = "pwa-install-hint";
+
+    const message = document.createElement("p");
+    message.textContent = "\u3053\u306e\u30b2\u30fc\u30e0\u3092\u30db\u30fc\u30e0\u753b\u9762\u306b\u8ffd\u52a0\u3059\u308b\u3068\u3001\u30a2\u30d7\u30ea\u306e\u3088\u3046\u306b\u5168\u753b\u9762\u3067\u904a\u3079\u307e\u3059\u3002";
+
+    const actions = document.createElement("div");
+    if (deferredPrompt) {
+      const install = document.createElement("button");
+      install.type = "button";
+      install.dataset.pwaInstall = "";
+      install.textContent = "\u30db\u30fc\u30e0\u753b\u9762\u306b\u8ffd\u52a0";
+      actions.append(install);
+    }
+    if (isiOS()) {
+      const iosText = document.createElement("span");
+      iosText.textContent = "\u5171\u6709\u30dc\u30bf\u30f3\u304b\u3089\u300c\u30db\u30fc\u30e0\u753b\u9762\u306b\u8ffd\u52a0\u300d\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002";
+      actions.append(iosText);
+    }
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "secondary";
+    dismiss.dataset.pwaDismiss = "";
+    dismiss.textContent = "\u9589\u3058\u308b";
+    actions.append(dismiss);
+    hint.append(message, actions);
+
+    document.body.append(hint);
+    hint.querySelector("[data-pwa-dismiss]")?.addEventListener("click", () => {
+      localStorage.setItem(dismissKey, String(Date.now()));
+      hint.remove();
+    });
+    hint.querySelector("[data-pwa-install]")?.addEventListener("click", async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice.catch(() => null);
+      deferredPrompt = null;
+      hint.remove();
+    });
+  };
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredPrompt = event;
+    showInstallHint();
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredPrompt = null;
+    document.querySelector(".pwa-install-hint")?.remove();
+    updateMode();
+  });
+  window.matchMedia?.("(display-mode: standalone)")?.addEventListener?.("change", updateMode);
+  document.addEventListener("DOMContentLoaded", () => {
+    updateMode();
+    registerServiceWorker();
+    setTimeout(showInstallHint, 900);
+  });
+})();

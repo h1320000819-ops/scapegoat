@@ -39,7 +39,7 @@ button:hover {
 }
 
 .app-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   width: 100vw;
 }
 
@@ -83,7 +83,7 @@ button:hover {
 }
 
 .game-root {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .mahjong-table {
@@ -91,7 +91,7 @@ button:hover {
     radial-gradient(circle at center, rgba(59, 125, 166, 0.34), transparent 34%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent 28%),
     #123f62;
-  height: 100vh;
+  height: 100dvh;
   min-height: 620px;
   overflow: hidden;
   position: relative;
@@ -871,12 +871,12 @@ button:hover {
 .lobby-shell {
   background: #102c35;
   color: #f4fbf8;
-  min-height: calc(100vh - 72px);
+  min-height: calc(100dvh - 72px);
   padding: 24px;
 }
 
 .lobby-shell:has(.replay-screen) {
-  min-height: 100vh;
+  min-height: 100dvh;
   padding: 0;
 }
 
@@ -912,7 +912,7 @@ button:hover {
 .replay-screen {
   margin: 0;
   max-width: none;
-  min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
 }
 
@@ -1415,6 +1415,52 @@ button:hover {
   pointer-events: auto;
 }
 
+.pwa-install-hint {
+  background: rgba(10, 28, 24, 0.96);
+  border: 1px solid rgba(255, 209, 92, 0.72);
+  border-radius: 8px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.38);
+  color: #f7fff9;
+  display: grid;
+  gap: 8px;
+  left: 50%;
+  max-width: min(92vw, 560px);
+  padding: 10px 12px;
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 1000;
+}
+
+.pwa-install-hint p {
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.pwa-install-hint div {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pwa-install-hint button {
+  background: #ffd15c;
+  border: 1px solid #9f6b00;
+  border-radius: 8px;
+  color: #1f1704;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.pwa-install-hint .secondary {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #f7fff9;
+}
+
 .action-prompt h2 {
   font-size: 17px;
   margin: 0 0 10px;
@@ -1830,12 +1876,20 @@ button:hover {
     padding: 0;
   }
 
+  html[data-pwa="standalone"],
+  html[data-pwa="standalone"] body,
+  body[data-pwa="standalone"] .app-shell:has(.mahjong-table) {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+  }
+
   .mahjong-table {
-    --center-info-height: 74px;
-    --center-info-width: 132px;
+    --center-info-height: 72px;
+    --center-info-width: 126px;
     --discard-gap: 2px;
-    --discard-tile-height: 23px;
-    --discard-tile-width: 16px;
+    --discard-tile-height: 22px;
+    --discard-tile-width: 15px;
     --river-center-gap: 2px;
     --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 4px);
     --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 4px);
@@ -1851,7 +1905,7 @@ button:hover {
   }
 
   .mahjong-table::after {
-    inset: 18px 8px 38px;
+    inset: 14px 8px 34px;
   }
 
   .top-bar {
@@ -1863,9 +1917,9 @@ button:hover {
   }
 
   .seat-bottom {
-    bottom: 2px;
+    bottom: max(2px, env(safe-area-inset-bottom));
     max-width: 760px;
-    width: min(94vw, 760px);
+    width: min(96vw, 780px);
   }
 
   .seat-top {
@@ -1901,23 +1955,23 @@ button:hover {
   .tile-button,
   .tile-image,
   .tile-fallback {
-    height: 38px;
-    min-width: 27px;
-    width: 27px;
+    height: 36px;
+    min-width: 25px;
+    width: 25px;
   }
 
   .seat-bottom .tile,
   .seat-bottom .tile-button,
   .seat-bottom .tile-image,
   .seat-bottom .tile-fallback {
-    height: 48px;
-    min-width: 34px;
-    width: 34px;
+    height: clamp(48px, 13dvh, 62px);
+    min-width: clamp(34px, 9dvh, 44px);
+    width: clamp(34px, 9dvh, 44px);
   }
 
   .seat-bottom .hand-row {
-    min-height: 54px;
-    padding: 2px;
+    min-height: clamp(54px, 15dvh, 68px);
+    padding: 3px;
   }
 
   .hand-clock-badge {
@@ -1957,17 +2011,17 @@ button:hover {
 
   .center-info {
     border-radius: 6px;
-    font-size: 5px;
+    font-size: 6px;
     max-height: var(--center-info-height);
     min-height: var(--center-info-height);
     overflow: hidden;
     padding: 1px 2px;
-    top: 43%;
+    top: 42%;
     width: var(--center-info-width);
   }
 
   .round-label {
-    font-size: 7px;
+    font-size: 8px;
     margin-bottom: 1px;
   }
 
@@ -1978,7 +2032,7 @@ button:hover {
 
   .center-scores li,
   .wall-info {
-    font-size: 5px;
+    font-size: 6px;
   }
 
   .center-scores li {
@@ -1994,7 +2048,7 @@ button:hover {
   }
 
   .center-wall {
-    font-size: 6px;
+    font-size: 7px;
     gap: 1px;
     min-width: 28px;
   }
@@ -2011,7 +2065,7 @@ button:hover {
   }
 
   .center-dora > span {
-    font-size: 6px;
+    font-size: 7px;
   }
 
   .center-dora .tile,
@@ -2057,20 +2111,20 @@ button:hover {
 
   .discard-bottom {
     left: 50%;
-    top: calc(43% + (var(--center-info-height) / 2) + var(--river-center-gap));
+    top: calc(42% + (var(--center-info-height) / 2) + var(--river-center-gap));
     transform: translateX(-50%) rotate(0deg);
   }
 
   .discard-top {
     left: 50%;
-    top: calc(43% - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
+    top: calc(42% - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
     transform: translateX(-50%) rotate(180deg);
   }
 
   .discard-right {
     left: calc(50% + (var(--center-info-width) / 2) + var(--river-center-gap));
     right: auto;
-    top: 43%;
+    top: 42%;
     transform: translateY(-50%) rotate(-90deg);
   }
 
@@ -2147,20 +2201,39 @@ button:hover {
   }
 
   .bottom-actions {
-    bottom: 58px;
-    max-width: 92vw;
-    transform: translateX(-50%) scale(0.82);
+    bottom: calc(max(62px, 17dvh) + env(safe-area-inset-bottom));
+    max-width: 96vw;
+    transform: translateX(-50%);
     transform-origin: bottom center;
+    width: min(96vw, 760px);
   }
 
   .action-prompt {
-    padding: 6px;
+    padding: 7px;
+  }
+
+  .action-prompt .actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    justify-content: center;
   }
 
   .action-prompt .actions button {
-    font-size: 13px;
-    min-height: 34px;
-    padding: 6px 10px;
+    border-radius: 8px;
+    flex: 1 1 0;
+    font-size: 14px;
+    font-weight: 900;
+    min-height: 44px;
+    min-width: 64px;
+    padding: 8px 10px;
+    touch-action: manipulation;
+  }
+
+  .action-prompt .actions .tsumogiri-action {
+    background: #2e90fa;
+    border-color: #84caff;
+    color: #fff;
   }
 
   .assist-controls {

@@ -468,6 +468,7 @@
     if (message.includes("shared_sit_at_table") && message.includes("schema cache")) return "共有着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
     if (message.includes("sit_at_table") && message.includes("schema cache")) return "着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
     if (message.includes("JWT expired") || message.includes("PGRST303")) return "ログイン期限が切れました。自動更新に失敗した場合は、いったんログアウトして再ログインしてください。";
+    if (message.includes("ByteString") || message.includes("greater than 255")) return "ログイン情報または通信ヘッダーが壊れています。いったんログアウトして再ログインしてください。";
     if (message.includes("duplicate key") && message.includes("owner_user_id")) return "このアカウントではすでにクラブを作成済みです。加入済みクラブ一覧を更新してください。";
     if (message.includes("login id already used") || message.includes("users_login_id_unique")) return "このログインIDはすでに使われています。別のIDを入力してください。";
     if (message.includes("amount exceeds club point limit")) return "一度に操作できるポイントは10,000,000ポイント以下です。";
@@ -611,12 +612,36 @@
   const requireConfig = () => {
     if (!config.url || !config.anonKey) throw new Error("Supabase設定が不足しています。runtime/supabase-public-config.js を確認してください。");
   };
+  const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
+  const assertHeaderValue = (name, value) => {
+    const text = String(value ?? "");
+    if (!isByteStringHeaderValue(text)) {
+      console.warn("[Headers] non ByteString header blocked", { name, length: text.length });
+      throw new Error("ログイン情報が壊れています。いったんログアウトして再ログインしてください。");
+    }
+    return text;
+  };
+  const buildSafeHeaders = (extraHeaders = {}, { auth = true } = {}) => {
+    const headers = {
+      apikey: config.anonKey,
+      "Content-Type": "application/json",
+    };
+    for (const [key, value] of Object.entries(extraHeaders || {})) {
+      if (value === undefined || value === null) continue;
+      headers[key] = value;
+    }
+    if (auth && state.accessToken) headers.Authorization = "Bearer " + state.accessToken;
+    return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, assertHeaderValue(key, value)]));
+  };
+  const buildSafeAuthHeaders = () => {
+    if (!state.accessToken) return {};
+    return { Authorization: assertHeaderValue("Authorization", "Bearer " + state.accessToken) };
+  };
 
   const request = async (path, options = {}, retry = true) => {
     requireConfig();
     const url = config.url.replace(/\/$/, "") + path;
-    const headers = { apikey: config.anonKey, "Content-Type": "application/json", ...(options.headers || {}) };
-    if (options.auth !== false && state.accessToken) headers.Authorization = "Bearer " + state.accessToken;
+    const headers = buildSafeHeaders(options.headers, { auth: options.auth !== false });
     const response = await fetch(url, { ...options, headers });
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
@@ -635,8 +660,16 @@
   const rest = (path, options = {}) => request("/rest/v1" + path, options);
   const auth = (path, options = {}) => request("/auth/v1" + path, { ...options, auth: false });
   const settleRecentlyLeftTable = async () => {
-    const tableId = state.recentlyLeftTableId;
-    if (!tableId || !state.user?.id || !state.accessToken) return;
+    const tableId = normalizeRemoteTableId(state.recentlyLeftTableId);
+    if (!tableId || !state.user?.id || !state.accessToken) {
+      if (state.recentlyLeftTableId && !tableId) {
+        log("ラス半終了後の退席処理をスキップしました。卓IDがDB用UUIDではありません。", state.recentlyLeftTableId);
+        state.recentlyLeftTableId = "";
+        state.recentlyLeftAt = 0;
+      }
+      return;
+    }
+    state.recentlyLeftTableId = tableId;
     console.log("[LastHand] settle recently left table", { tableId, userId: state.user.id });
     clearLocalUserSeatsForTable(tableId, state.user.id);
     state.autoOpenedPlayingTableIds.delete(tableId);
@@ -658,23 +691,23 @@
       if (!raw.includes("leave_table_after_last_hand") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
         log("ラス半終了後の退席RPCに失敗しました。直接退席へ切り替えます。", raw);
       }
-      await rest(
-        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id),
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            user_id: null,
-            player_type: "empty",
-            display_name: null,
-            is_last_hand_declared: false,
-          }),
-        }
-      ).catch((error) => log("ラス半終了後の直接退席に失敗しました。", rawErrorText(error)));
+    });
+    await rest(
+      "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id),
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        }),
+      }
+    ).catch((error) => log("ラス半終了後の直接退席に失敗しました。", rawErrorText(error)));
     await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
       method: "PATCH",
       body: JSON.stringify({ status: "waiting" }),
     }).catch((error) => log("ラス半終了後の卓状態更新に失敗しました。", rawErrorText(error)));
-    });
     await rest("/games?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.playing", {
       method: "PATCH",
       body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
@@ -1953,6 +1986,37 @@
     }
     clearLocalUserLastHandFlagForTable(tableId, state.user.id);
   };
+  const findTableClubId = async (tableId) => {
+    const known = state.tables.find((table) => table.table_id === tableId);
+    if (known?.club_id) return known.club_id;
+    const rows = await rest("/tables?select=club_id&table_id=eq." + encodeURIComponent(tableId) + "&limit=1");
+    return rows?.[0]?.club_id || "";
+  };
+  const clearRemoteUserSeatsInClubExcept = async (tableId, keepSeatIndex = null) => {
+    const user = requireUser();
+    const clubId = await findTableClubId(tableId);
+    if (!clubId) return;
+    const tables = await rest("/tables?select=table_id&club_id=eq." + encodeURIComponent(clubId)).catch(() =>
+      state.tables.filter((table) => table.club_id === clubId)
+    );
+    for (const table of tables || []) {
+      const otherTableId = table.table_id;
+      if (!otherTableId) continue;
+      let filter = "/table_seats?table_id=eq." + encodeURIComponent(otherTableId) + "&user_id=eq." + encodeURIComponent(user.id);
+      if (String(otherTableId) === String(tableId) && keepSeatIndex !== null && keepSeatIndex !== undefined) {
+        filter += "&seat_index=neq." + encodeURIComponent(String(keepSeatIndex));
+      }
+      await rest(filter, {
+        method: "PATCH",
+        body: JSON.stringify({
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        }),
+      }).catch((error) => log("重複席の解除に失敗しました。", rawErrorText(error)));
+    }
+  };
   const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
     tableId = requireTableId(tableId, "着席");
     setActiveTableId(tableId);
@@ -1962,6 +2026,7 @@
       } catch (sharedError) {
         const raw = rawErrorText(sharedError);
         if (!raw.includes("shared_sit_at_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
+        await clearRemoteUserSeatsInClubExcept(tableId, null).catch((error) => log("着席前の重複席解除に失敗しました。", rawErrorText(error)));
         try {
           await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId, p_seat_index: seatIndex }) });
         } catch (seatRpcError) {
@@ -1972,7 +2037,14 @@
       await clearOwnLastHandFlag(tableId);
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
-      await loadSeats();
+      const rows = await loadSeats();
+      const ownSeat = rows.find((seat) => seat.user_id === state.user?.id);
+      if (ownSeat) {
+        await clearRemoteUserSeatsInClubExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
+        clearLocalUserSeatsExcept(tableId, ownSeat.seat_index);
+        await loadTables();
+        await loadSeats();
+      }
       return;
     } catch (error) {
       log("DB着席に失敗したため、ローカルデバッグ着席に切り替えました。", rawErrorText(error));
@@ -2536,7 +2608,7 @@
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}`;
     const response = await fetch(apiUrl, {
-      headers: state.accessToken ? { Authorization: `Bearer ${state.accessToken}` } : {},
+      headers: buildSafeAuthHeaders(),
       cache: "no-store",
     }).catch(() => null);
     if (response?.ok) {
@@ -2819,7 +2891,7 @@
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
     body.innerHTML = `
-      <p class="muted">${isAdmin() ? "管理者用: クラブ保管ポイントの送信・回収ができます。" : "自分のポイント確認と他ユーザーへの送信ができます。"}</p>
+      <p class="muted">${isAdmin() ? "管理者用: クラブ保管ポイントの送信・回収ができます。" : "自分のポイントを確認できます。"}</p>
       <div class="card">
         <div class="point-reserve">
           <span class="muted">クラブ側の保有ポイント</span>
@@ -2838,22 +2910,23 @@
       const paidRake = Number(paidRakeByUser[userId] || 0);
       const row = document.createElement("div");
       row.className = "point-user-row";
-      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><span>支払レーキ ${paidRake} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
-      row.querySelector('[data-action="send"]').addEventListener("click", async () => {
-        try {
-          const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
-          if (isAdmin() && pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
-          const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
-          if (!isAdmin() && Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
-          await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
-            method: "POST",
-            body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
-          });
-          await renderClubPointsPage(body);
-        } catch (error) {
-          showError("ポイント送信に失敗しました", error);
-        }
-      });
+      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><span>支払レーキ ${paidRake} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+      const sendButton = row.querySelector('[data-action="send"]');
+      if (sendButton) {
+        sendButton.addEventListener("click", async () => {
+          try {
+            const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
+            if (pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+            await rest("/rpc/admin_grant_club_points", {
+              method: "POST",
+              body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
+            });
+            await renderClubPointsPage(body);
+          } catch (error) {
+            showError("ポイント送信に失敗しました", error);
+          }
+        });
+      }
       const collectButton = row.querySelector('[data-action="collect"]');
       if (collectButton) {
         collectButton.addEventListener("click", async () => {
@@ -3057,7 +3130,7 @@
     let rows;
     try {
       const serverResponse = await fetch(`${window.location.origin}/api/replay/${encodeURIComponent(replayId)}`, {
-        headers: state.accessToken ? { Authorization: `Bearer ${state.accessToken}` } : {},
+        headers: buildSafeAuthHeaders(),
         cache: "no-store",
       }).catch(() => null);
       if (serverResponse?.ok) {
@@ -3536,6 +3609,10 @@
     const members = await loadClubMembersForView(clubId);
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
+    const showAdminPointControls = isAdmin();
+    ["pointTargetUserId", "pointAmount", "sendPointButton", "collectPointButton"].forEach((id) => {
+      if (has(id)) $(id).style.display = showAdminPointControls ? "" : "none";
+    });
     if (has("pointSummary")) {
       const lines = visibleMembers.map((member) => {
         const userId = member.users?.user_id || "";
@@ -3557,22 +3634,23 @@
         const name = member.users?.display_name || userId || "Player";
         const row = document.createElement("div");
         row.className = "point-user-row";
-        row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
-        row.querySelector('[data-action="send"]').addEventListener("click", async () => {
-          try {
-            const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
-            if (isAdmin() && pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
-            const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
-            if (!isAdmin() && Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
-            await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
-              method: "POST",
-              body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
-            });
-            await loadClubPoints();
-          } catch (error) {
-            showError("ポイント送信に失敗しました", error);
-          }
-        });
+        row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+        const sendButton = row.querySelector('[data-action="send"]');
+        if (sendButton) {
+          sendButton.addEventListener("click", async () => {
+            try {
+              const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
+              if (pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+              await rest("/rpc/admin_grant_club_points", {
+                method: "POST",
+                body: JSON.stringify({ p_club_id: clubId, p_to_user_id: userId, p_amount: amount }),
+              });
+              await loadClubPoints();
+            } catch (error) {
+              showError("ポイント送信に失敗しました", error);
+            }
+          });
+        }
         const collectButton = row.querySelector('[data-action="collect"]');
         if (collectButton) {
           collectButton.addEventListener("click", async () => {
@@ -3599,6 +3677,7 @@
     if ($("clubPointPanel").classList.contains("open")) await loadClubPoints();
   };
   const sendPoint = async () => {
+    if (!isAdmin()) throw new Error("ポイント送信権限がありません。");
     const clubId = selectedClubId();
     const targetUserId = $("pointTargetUserId").value.trim();
     const amount = readPointAmount($("pointAmount").value, "送信ポイント");
@@ -3607,16 +3686,11 @@
     const members = await loadClubMembersForView(clubId);
     const targetMember = members.find((item) => item.users?.user_id === targetUserId || item.user_id === targetUserId);
     if (!targetMember) throw new Error("対象ユーザーはこのクラブのメンバーではありません。");
-    if (isAdmin()) {
-      const pointSummary = clubPointSummaryFromMembers(members);
-      if (pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
-    } else {
-      const selfMember = members.find((item) => item.users?.user_id === requireUser().id || item.user_id === requireUser().id);
-      if (Number(selfMember?.point_balance || 0) < amount) throw new Error("自分のポイントが不足しています。送信で残高をマイナスにはできません。");
-    }
-    await rest(isAdmin() ? "/rpc/admin_grant_club_points" : "/rpc/transfer_my_club_points", {
+    const pointSummary = clubPointSummaryFromMembers(members);
+    if (pointSummary.clubReserve < amount) throw new Error("クラブ保管ポイントが不足しています。");
+    await rest("/rpc/admin_grant_club_points", {
       method: "POST",
-      body: JSON.stringify(isAdmin() ? { p_club_id: clubId, p_to_user_id: targetUserId, p_amount: amount } : { p_club_id: clubId, p_to_user_id: targetUserId, p_amount: amount }),
+      body: JSON.stringify({ p_club_id: clubId, p_to_user_id: targetUserId, p_amount: amount }),
     });
     await loadClubPoints();
   };

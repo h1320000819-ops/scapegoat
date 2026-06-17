@@ -1687,7 +1687,7 @@ const syncClubPointEffects = async (room) => {
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
-const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "pon", "kan", "riichi", "flower", "nukiDora"]);
+const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 const getCurrentResultId = (state) => state?.handLog?.result?.resultId || "";
 const resetResultCountdownState = (state) => {
@@ -2441,7 +2441,12 @@ const evaluateServerWin = (state, player, tile, winType) => {
   }
 
   const shapes = serverFindStandardShapes(counts, 4 - meldCount);
-  if (shapes.length === 0) return { canWin: false, reason: "和了形ではありません" };
+  if (shapes.length === 0) {
+    if (isTsumoLossless3maState(state) && isWinningShapeServer(concealedTiles, melds)) {
+      return { canWin: true, yaku: [{ name: "全赤三麻和了", han: 0 }], winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1), fallbackShape: true };
+    }
+    return { canWin: false, reason: "和了形ではありません" };
+  }
   const candidates = shapes.map((shape) => {
     const completeShape = { pairKey: shape.pairKey, melds: [...shape.melds, ...fixedMelds] };
     const sequences = completeShape.melds.filter((meld) => meld.type === "sequence");
@@ -2500,6 +2505,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     const isDealer = player.id === state.round?.dealerPlayerId;
     const honba = Number(state.round?.honba ?? state.honba ?? 0);
     const payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
+    const chipSettlement = null;
     let basePoints = 0;
     let limitType = "通常";
     let childPay = 0;

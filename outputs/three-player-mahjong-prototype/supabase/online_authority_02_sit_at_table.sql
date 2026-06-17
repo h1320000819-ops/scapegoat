@@ -41,40 +41,41 @@ begin
     raise exception 'not club member';
   end if;
 
-  if exists (
-    select 1
-    from public.table_seats
-    where table_id = p_table_id
-      and user_id = v_user_id
-  ) then
-    return query
-    select *
-    from public.table_seats
-    where table_id = p_table_id
-    order by seat_index asc;
-    return;
-  end if;
-
   if p_seat_index is not null then
     select seat_index into v_target_seat_index
     from public.table_seats
     where table_id = p_table_id
       and seat_index = p_seat_index
-      and (user_id is null or player_type = 'cpu')
+      and (user_id is null or user_id = v_user_id or player_type = 'cpu')
     limit 1;
   else
     select seat_index into v_target_seat_index
     from public.table_seats
     where table_id = p_table_id
-      and (user_id is null or player_type = 'cpu')
-      and player_type in ('empty', 'cpu')
-    order by case when player_type = 'empty' then 0 else 1 end, seat_index asc
+      and (user_id is null or user_id = v_user_id or player_type = 'cpu')
+      and player_type in ('empty', 'cpu', 'human')
+    order by case when user_id = v_user_id then 0 when player_type = 'empty' then 1 else 2 end, seat_index asc
     limit 1;
   end if;
 
   if v_target_seat_index is null then
     raise exception 'no empty seat';
   end if;
+
+  update public.table_seats s
+  set user_id = null,
+      player_type = 'empty',
+      display_name = null,
+      is_last_hand_declared = false,
+      updated_at = now()
+  where s.user_id = v_user_id
+    and exists (
+      select 1
+      from public.tables t
+      where t.table_id = s.table_id
+        and t.club_id = v_table_club_id
+    )
+    and not (s.table_id = p_table_id and s.seat_index = v_target_seat_index);
 
   update public.table_seats
   set user_id = v_user_id,

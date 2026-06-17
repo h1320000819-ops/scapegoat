@@ -463,6 +463,7 @@ const onlineDebugLobbyUrl = (clubId = "") => {
 const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
   const base = value.includes("/online-debug") ? value : onlineDebugLobbyUrl(clubId);
+  leftTableId = sourceTableIdFromLocalDebugId(leftTableId);
   if (!leftTableId) return base;
   try {
     const url = new URL(base, globalThis.location?.href || "http://localhost/");
@@ -1625,6 +1626,47 @@ const getBaseScoreFromHan = (han, isDealer) => {
   if (han >= 14) return isDealer ? { basePoints: 48, limitType: "役満" } : { basePoints: 32, limitType: "役満" };
   return (isDealer ? dealer : child)[han];
 };
+const getTsumoLossless3maRonScoreFromHan = (han, isDealer) => {
+  const h = Math.max(1, Number(han) || 1);
+  if (isDealer) {
+    if (h <= 1) return { basePoints: 2000, limitType: "通常" };
+    if (h === 2) return { basePoints: 3000, limitType: "通常" };
+    if (h === 3) return { basePoints: 6000, limitType: "通常" };
+    if (h <= 5) return { basePoints: 12000, limitType: "満貫" };
+    if (h <= 7) return { basePoints: 18000, limitType: "跳満" };
+    if (h <= 10) return { basePoints: 24000, limitType: "倍満" };
+    if (h <= 13) return { basePoints: 36000, limitType: "三倍満" };
+    return { basePoints: 48000, limitType: "数え役満" };
+  }
+  if (h <= 1) return { basePoints: 1000, limitType: "通常" };
+  if (h === 2) return { basePoints: 2000, limitType: "通常" };
+  if (h === 3) return { basePoints: 4000, limitType: "通常" };
+  if (h <= 5) return { basePoints: 8000, limitType: "満貫" };
+  if (h <= 7) return { basePoints: 12000, limitType: "跳満" };
+  if (h <= 10) return { basePoints: 16000, limitType: "倍満" };
+  if (h <= 13) return { basePoints: 24000, limitType: "三倍満" };
+  return { basePoints: 32000, limitType: "数え役満" };
+};
+const getTsumoLossless3maTsumoScoreFromHan = (han, isDealer) => {
+  const h = Math.max(1, Number(han) || 1);
+  if (isDealer) {
+    if (h <= 1) return { childPay: 1000, dealerPay: 1000, limitType: "通常" };
+    if (h === 2) return { childPay: 2000, dealerPay: 2000, limitType: "通常" };
+    if (h === 3) return { childPay: 3000, dealerPay: 3000, limitType: "通常" };
+    if (h <= 5) return { childPay: 6000, dealerPay: 6000, limitType: "満貫" };
+    if (h <= 7) return { childPay: 9000, dealerPay: 9000, limitType: "跳満" };
+    if (h <= 10) return { childPay: 12000, dealerPay: 12000, limitType: "倍満" };
+    if (h <= 13) return { childPay: 18000, dealerPay: 18000, limitType: "三倍満" };
+    return { childPay: 24000, dealerPay: 24000, limitType: "数え役満" };
+  }
+  if (h <= 2) return { childPay: 1000, dealerPay: 1000, limitType: "通常" };
+  if (h === 3) return { childPay: 1000, dealerPay: 3000, limitType: "通常" };
+  if (h <= 5) return { childPay: 3000, dealerPay: 5000, limitType: "満貫" };
+  if (h <= 7) return { childPay: 4000, dealerPay: 8000, limitType: "跳満" };
+  if (h <= 10) return { childPay: 6000, dealerPay: 10000, limitType: "倍満" };
+  if (h <= 13) return { childPay: 8000, dealerPay: 16000, limitType: "三倍満" };
+  return { childPay: 12000, dealerPay: 20000, limitType: "数え役満" };
+};
 const sortHandTiles = (hand) => {
   const suitOrder = { manzu: 0, pinzu: 1, souzu: 2, honor: 3, flower: 4 };
   const honorOrder = { east: 0, south: 1, west: 2, north: 3, white: 4, green: 5, red: 6 };
@@ -2354,7 +2396,12 @@ const evaluateWinExplicit = (state, player, tile) => {
     return yaku.length ? { canWin: true, handType: "sevenPairs", yaku, han: yaku.reduce((sum, item) => sum + item.han, 0) } : { canWin: false, reason: "和了形ですが役がありません" };
   }
   const shapes = explicitFindStandardShapes(concealedCounts, 4 - meldCount);
-  if (shapes.length === 0) return { canWin: false, reason: "和了形ではありません" };
+  if (shapes.length === 0) {
+    if (isTsumoLossless3maState(state) && canFormWinningShape(concealedTiles, player.melds ?? [])) {
+      return { canWin: true, handType: "standard", yaku: [{ name: "全赤三麻和了", han: 0 }], han: 0, fallbackShape: true };
+    }
+    return { canWin: false, reason: "和了形ではありません" };
+  }
   const candidates = shapes.map((shape) => {
     const completeShape = { pairKey: shape.pairKey, melds: [...shape.melds, ...fixedMelds] };
     const sequences = completeShape.melds.filter((meld) => meld.type === "sequence");
@@ -2402,7 +2449,7 @@ class RuleEngine {
   canWin(state, player, tile) { return evaluateWinExplicit(state, player, tile); }
   calculateScore(state, _winner, input) {
     const normalDora = input.doraCount ?? countIndicatorDora(state.doraIndicators, input.winningTiles);
-    const colored = input.winningTiles.filter((tile) => ["red", "blue", "gold"].includes(tile.color)).length;
+    const colored = input.winningTiles.filter((tile) => ["red", "blue", "gold", "turquoise"].includes(tile.color)).length;
     const bonusSourceTiles = [...input.winningTiles, ...(input.nukiDoraTiles ?? [])];
     const blueTileCount = bonusSourceTiles.filter((tile) => tile.color === "blue" && !tile.isPochi).length;
     const goldTileCount = bonusSourceTiles.filter((tile) => tile.color === "gold").length;
@@ -2411,6 +2458,67 @@ class RuleEngine {
     const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((sum, yaku) => sum + yaku.han, 0);
     const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki;
     const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
+    if (isTsumoLossless3maState(state)) {
+      const isDealer = input.winnerId === input.dealerPlayerId;
+      const honba = Number(state.round?.honba ?? state.honba ?? 0);
+      const payments = Object.fromEntries(input.playerIds.map((id) => [id, 0]));
+      let basePoints = 0;
+      let limitType = "通常";
+      let childPay = 0;
+      let dealerPay = 0;
+      if (input.winType === "tsumo") {
+        const tsumoScore = getTsumoLossless3maTsumoScoreFromHan(totalHan, isDealer);
+        limitType = tsumoScore.limitType;
+        childPay = tsumoScore.childPay + honba * 1000;
+        dealerPay = tsumoScore.dealerPay + honba * 1000;
+        for (const id of input.playerIds) {
+          if (id === input.winnerId) continue;
+          const pay = id === input.dealerPlayerId ? dealerPay : childPay;
+          payments[id] = -pay;
+          payments[input.winnerId] += pay;
+        }
+        basePoints = isDealer ? childPay : Math.max(childPay, dealerPay);
+      } else {
+        const ronScore = getTsumoLossless3maRonScoreFromHan(totalHan, isDealer);
+        limitType = ronScore.limitType;
+        basePoints = ronScore.basePoints + honba * 1000;
+        payments[input.winnerId] = basePoints;
+        if (input.discarderId) payments[input.discarderId] = -basePoints;
+      }
+      const doraDetails = [
+        normalDora > 0 ? { name: "ドラ", han: normalDora } : null,
+        colored > 0 ? { name: "色付き牌ドラ", han: colored } : null,
+        nuki > 0 ? { name: "抜きドラ", han: nuki } : null,
+      ].filter(Boolean);
+      return {
+        yakuHan,
+        doraHan,
+        totalHan,
+        han: totalHan,
+        basePoints,
+        bonusPoints: honba * 1000,
+        beforeBaibaPoints: basePoints,
+        totalPoints: basePoints,
+        finalPoints: basePoints,
+        limitType,
+        isDealer,
+        isTsumo: input.winType === "tsumo",
+        paymentPerPlayer: input.winType === "tsumo" ? basePoints : undefined,
+        winnerGain: payments[input.winnerId],
+        payments,
+        paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
+        selectedWait: input.selectedWait ?? input.winningTiles.at(-1),
+        pochiActivated: false,
+        pointMultiplier: 1,
+        baibaMultiplier: 1,
+        yaku: input.yaku,
+        yakuList: input.yaku,
+        doraDetails,
+        dora: { normal: normalDora, colored, nuki, ura: input.uraDoraCount ?? 0 },
+        bonuses: { honba: honba * 1000, chipPending: false },
+        tsumoPayments: input.winType === "tsumo" ? { childPay, dealerPay } : null,
+      };
+    }
     const { basePoints, limitType } = getBaseScoreFromHan(totalHan, input.winnerId === input.dealerPlayerId);
     const countedYakumanBonus = totalHan >= 14 && !hasRealYakuman ? 20 : 0;
     const realYakumanBonus = hasRealYakuman ? 40 : 0;
@@ -3429,7 +3537,7 @@ class GameController {
           forgetLocalOnlineDebugTable(activeTableId);
           saveOnlineSync(null);
           if (sync.returnUrl) {
-            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
+            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
           } else {
             this.state.screen = "clubLobby";
             this.emit();
@@ -4182,7 +4290,7 @@ class GameController {
           forgetLocalOnlineDebugTable(activeTableId);
           saveOnlineSync(null);
           if (sync?.returnUrl) {
-            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
+            window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
           } else {
             this.state.screen = "clubLobby";
             this.emit();
@@ -4240,7 +4348,7 @@ class GameController {
         forgetLocalOnlineDebugTable(activeTableId);
         saveOnlineSync(null);
         if (sync?.returnUrl) {
-          window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
+          window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
         } else {
           this.state.screen = "clubLobby";
           this.emit();
@@ -4268,7 +4376,7 @@ class GameController {
       if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
       forgetLocalOnlineDebugTable(activeTableId);
       saveOnlineSync(null);
-      window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", activeTableId || sync.tableId);
+      window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
       return;
     }
     this.emit();
@@ -5085,15 +5193,21 @@ class GameController {
 }
 
 const renderActionPrompt = (pending, state = null) => {
-  if (!pending?.options?.length) return "";
   const viewerId = state ? getLocalHumanPlayerId(state) : null;
-  if (viewerId && pending.playerId && pending.playerId !== viewerId) return "";
+  const showTsumogiri = state && viewerId && canUseTsumogiriShortcut(state, viewerId);
+  if (!pending?.options?.length) {
+    return showTsumogiri ? `<section class="action-prompt mobile-action-prompt"><div class="actions"><button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button></div></section>` : "";
+  }
+  if (viewerId && pending.playerId && pending.playerId !== viewerId) {
+    return showTsumogiri ? `<section class="action-prompt mobile-action-prompt"><div class="actions"><button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button></div></section>` : "";
+  }
   if (pending.options.some((option) => option.type === "ron")) {
     console.log("[Ron] available", { playerId: pending.playerId, options: pending.options });
   }
   const labels = { ron: "ロン", tsumo: "ツモ", riichi: "リーチ", pon: "ポン", kan: "カン" };
   const options = pending.options.map((option) => `<button type="button" data-confirm-action="${option.type}">${labels[option.type] ?? option.type}</button>`).join("");
-  return `<section class="action-prompt"><div class="actions">${options}<button type="button" data-skip-action>スキップ</button></div></section>`;
+  const tsumogiri = showTsumogiri ? `<button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button>` : "";
+  return `<section class="action-prompt mobile-action-prompt"><div class="actions">${options}${tsumogiri}<button type="button" data-skip-action>スキップ</button></div></section>`;
 };
 const renderHandLog = (state) => {
   const name = (id) => state.players.find((p) => p.id === id)?.name ?? id;
@@ -5233,6 +5347,7 @@ class GameView {
     bindFastButton("[data-nuki-tile-id]", (b) => this.handlers.onNuki(b.dataset.nukiTileId));
     bindFastButton("[data-confirm-action]", (b) => this.handlers.onConfirmAction(b.dataset.confirmAction));
     bindFastButton("[data-skip-action]", () => this.handlers.onSkipAction());
+    bindFastButton("[data-tsumogiri-action]", () => this.handlers.onTsumogiri?.());
     bindFastButton("[data-force-discard-resync]", () => this.handlers.onForceDiscardResync?.());
     const handleResultOkPointer = (event) => {
       event.preventDefault();
@@ -6173,6 +6288,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onDraw: () => controller.advanceUntilHumanAction(),
   onDiscard: (id) => controller.discardTile(id),
   onForceDiscardResync: () => controller.resyncSocketGameState("manualDiscardResync"),
+  onTsumogiri: () => controller.handleTsumogiriShortcut(),
   onNuki: (id) => controller.performNukiDora(getCurrentPlayer(controller.getState()).id, id),
   onConfirmAction: (type) => controller.confirmPendingAction(type),
   onSkipAction: () => controller.skipPendingAction(),

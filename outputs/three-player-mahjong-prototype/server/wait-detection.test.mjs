@@ -68,5 +68,6 @@ expectWaits("11m23456p123456s", ["1p", "4p", "7p"]);
 expectWaits("111m22334455p88s", ["1m", "2p", "5p", "8s"]);
 expectWaits("2223456p123456s", ["1p", "3p", "4p", "6p", "7p"]);
 expectWaits("4445678899p123s", ["7p", "8p", "9p"]);
+expectWaits("1233456778999p", ["2p", "5p", "7p", "8p"]);
 
 console.log("wait-detection tests passed");
