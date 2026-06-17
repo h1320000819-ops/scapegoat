@@ -4032,7 +4032,7 @@
     if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
     updateRangeLabels();
     probeGameServer().catch(() => {});
-    const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
+    const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || state.activeClubId;
     if (state.user && state.accessToken && returnClubId) {
       setActiveClubId(returnClubId);
       localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);
@@ -4043,7 +4043,7 @@
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       await settleRecentlyLeftTable().catch((error) => showError("ラス半終了後の退席処理に失敗しました", error));
       startClubPolling();
-      if (returnClubId && state.clubs.some((club) => club.club_id === returnClubId)) {
+      if (returnClubId) {
         setActiveClubId(returnClubId);
         localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);
         document.body.dataset.screen = "club-home";
