@@ -855,7 +855,7 @@ const supabaseRest = async (pathName, { method = "GET", body, prefer } = {}) => 
 const getRoomTableContext = async (room) => {
   if (!room?.tableId || !isUuid(room.tableId)) return null;
   if (room.tableContext?.table_id === room.tableId) return room.tableContext;
-  const rows = await supabaseRest(`/tables?select=table_id,club_id&table_id=eq.${encodeURIComponent(room.tableId)}&limit=1`);
+  const rows = await supabaseRest(`/tables?select=table_id,club_id,rake_percent,point_rate&table_id=eq.${encodeURIComponent(room.tableId)}&limit=1`);
   const table = Array.isArray(rows) ? rows[0] : null;
   if (!table?.club_id) return null;
   room.tableContext = table;
@@ -876,6 +876,32 @@ const normalizePointDeltas = (payments = {}) => {
 const paymentEntries = (payments) => Array.isArray(payments)
   ? payments.map((payment) => [payment.playerId, payment.delta])
   : Object.entries(payments || {});
+const calculateServerRake = (winnerGain, rakePercent) => {
+  const gain = Math.max(0, Number(winnerGain || 0));
+  const percent = Math.max(0, Number(rakePercent || 0));
+  if (!gain || !percent) return 0;
+  return Math.round(gain * (percent / 100) * 1000) / 1000;
+};
+const applyServerWinRake = (state, winnerId, scoreResult) => {
+  if (!scoreResult || isTsumoLossless3maState(state)) return scoreResult;
+  const rakePercent = Math.max(0, Number(state?.settings?.rakePercent || 0));
+  const payments = { ...(scoreResult.payments || {}) };
+  const originalWinnerGain = Number(payments[winnerId] || 0);
+  const rakePoints = calculateServerRake(originalWinnerGain, rakePercent);
+  if (rakePoints > 0) {
+    payments[winnerId] = Math.round((originalWinnerGain - rakePoints) * 1000) / 1000;
+    state.rakePool = Math.round((Number(state.rakePool || 0) + rakePoints) * 1000) / 1000;
+  }
+  scoreResult.payments = payments;
+  scoreResult.originalWinnerGain = originalWinnerGain;
+  scoreResult.rakePoints = rakePoints;
+  scoreResult.rakeAmount = rakePoints;
+  scoreResult.rakePercent = rakePercent;
+  scoreResult.rakePayerId = winnerId;
+  scoreResult.winnerGain = payments[winnerId] || 0;
+  scoreResult.paymentDeltas = Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta }));
+  return scoreResult;
+};
 const pointDeltasFromResultPayments = (payments, pointRate = 1) => {
   const rate = Number(pointRate || 1);
   const deltas = {};
@@ -950,7 +976,9 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   const winnerId = result?.winnerId;
   const winnerRawGain = Number(rawClubPointDeltas[winnerId] || 0);
   const rakePercent = Math.max(0, Number(state?.settings?.rakePercent || 0));
-  const shouldApplyRake = winnerId && isUuid(winnerId) && winnerRawGain > 0 && rakePercent > 0;
+  const scoreRakePoints = Number(result?.scoreResult?.rakePoints ?? result?.scoreResult?.rakeAmount ?? 0);
+  const scoreRakeApplied = scoreRakePoints > 0;
+  const shouldApplyRake = !scoreRakeApplied && winnerId && isUuid(winnerId) && winnerRawGain > 0 && rakePercent > 0;
   let rakeRaw = 0;
   let rakePlayerDeduction = 0;
   if (shouldApplyRake) {
@@ -973,11 +1001,13 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
       clubReserveDelta,
       cpuCompensationApplied: Object.keys(omittedAutoPlayerDeltas).length > 0,
       rake: {
-        applied: shouldApplyRake,
+        applied: scoreRakeApplied || shouldApplyRake,
+        source: scoreRakeApplied ? "scoreResult" : shouldApplyRake ? "clubPointFallback" : "none",
         winnerId,
         rakePercent,
         winnerRawGain: Math.round(winnerRawGain * 1000) / 1000,
-        rakeRaw: Math.round(rakeRaw * 1000) / 1000,
+        rakeRaw: scoreRakeApplied ? Math.round(scoreRakePoints * rate * 1000) / 1000 : Math.round(rakeRaw * 1000) / 1000,
+        rakeGamePoints: scoreRakeApplied ? Math.round(scoreRakePoints * 1000) / 1000 : null,
         playerDeduction: rakePlayerDeduction,
         roundingPolicy: "0.1pt未満はプレイヤー側に渡さずクラブ側へ寄せる",
       },
@@ -1036,6 +1066,38 @@ const syncOneClubPointEffect = async (room, key, reason, payments, metadata = {}
   if (!result?.ok) return false;
   markClubPointSyncApplied(room.state, key);
   persistRoom(room);
+  return true;
+};
+const syncAnmikaRakeLogEffect = async (room, result, pointRate = 1) => {
+  const scoreResult = result?.scoreResult;
+  const rakePoints = Number(scoreResult?.rakePoints ?? scoreResult?.rakeAmount ?? 0);
+  const winnerId = result?.winnerId || scoreResult?.rakePayerId;
+  if (!room?.state || !rakePoints || !winnerId || !isUuid(winnerId)) return false;
+  const key = makeResultSyncKey(room.state, room, result, "rakeLog");
+  if (hasClubPointSyncApplied(room.state, key)) return false;
+  const table = await getRoomTableContext(room);
+  if (!table?.club_id) return false;
+  const winner = asArray(room.state.players).find((player) => player.id === winnerId);
+  const rakeAmount = Math.round(rakePoints * Number(pointRate || 1) * 10) / 10;
+  await supabaseRest("/club_rake_logs", {
+    method: "POST",
+    prefer: "return=minimal",
+    body: {
+      club_id: table.club_id,
+      user_id: winnerId,
+      user_name: winner?.name || null,
+      table_id: table.table_id,
+      game_id: isUuid(room.gameId) ? room.gameId : null,
+      win_type: result?.winType || null,
+      original_gain: Math.round(Number(scoreResult?.originalWinnerGain ?? 0) * 1000) / 1000,
+      rake_percent: Number(scoreResult?.rakePercent ?? room.state.settings?.rakePercent ?? table.rake_percent ?? 0),
+      rake_amount: rakeAmount,
+      amount: rakeAmount,
+    },
+  });
+  markClubPointSyncApplied(room.state, key);
+  persistRoom(room);
+  console.log("[RakeSync] applied", { tableId: room.tableId, gameId: room.gameId, winnerId, rakeAmount });
   return true;
 };
 const makeHiddenWallForReplay = (length) => Array.from({ length: Math.max(0, Number(length || 0)) }, () => 0);
@@ -1577,6 +1639,7 @@ const syncClubPointEffects = async (room) => {
         pointRate: rate,
         ...compensationMetadata,
       });
+      await syncAnmikaRakeLogEffect(room, result, rate);
       return;
     }
     if (!isTsumoLossless3maState(state)) return;
@@ -1622,11 +1685,11 @@ const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "pon", "kan", "riichi", 
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 
 const DEFAULT_RULE_CONFIG = {
-  rocket19Enabled: false,
-  baibaEnabled: false,
+  rocket19Enabled: true,
+  baibaEnabled: true,
   otokogiEnabled: true,
   feverRiichiEnabled: true,
-  turquoise5pCount: 0,
+  turquoise5pCount: 2,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
 const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
@@ -1646,7 +1709,7 @@ const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
 const normalizeRuleConfig = (config = {}) => ({
   ...DEFAULT_RULE_CONFIG,
   ...(config || {}),
-  turquoise5pCount: [0, 1, 2].includes(Number(config?.turquoise5pCount)) ? Number(config.turquoise5pCount) : 0,
+  turquoise5pCount: [0, 1, 2].includes(Number(config?.turquoise5pCount)) ? Number(config.turquoise5pCount) : DEFAULT_RULE_CONFIG.turquoise5pCount,
 });
 const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   ...DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG,
@@ -1814,10 +1877,29 @@ const isFlowerTile = (tile) => tile?.suit === "flower";
 const currentPlayer = (state) => state?.players?.[state.currentPlayerIndex ?? 0] ?? null;
 const findPlayer = (state, playerId) => state?.players?.find((player) => player.id === playerId) ?? null;
 const ensureArray = (value) => Array.isArray(value) ? value : [];
+const replayPlayerIdentity = (state, playerId) => {
+  if (!playerId) return {};
+  const seatIndex = ensureArray(state?.players).findIndex((player) => player.id === playerId);
+  const player = seatIndex >= 0 ? state.players[seatIndex] : null;
+  return {
+    playerId,
+    playerSeatIndex: seatIndex >= 0 ? seatIndex : null,
+    playerName: player?.name || "",
+    playerType: player?.type || "",
+  };
+};
 const appendHandEvent = (state, event) => {
   state.handLog ??= {};
   state.handLog.events ??= [];
-  state.handLog.events.push(event);
+  const enriched = {
+    ...event,
+    ...(event?.playerId ? replayPlayerIdentity(state, event.playerId) : {}),
+    ...(event?.fromPlayerId ? {
+      fromPlayerSeatIndex: ensureArray(state?.players).findIndex((player) => player.id === event.fromPlayerId),
+      fromPlayerName: findPlayer(state, event.fromPlayerId)?.name || "",
+    } : {}),
+  };
+  state.handLog.events.push(enriched);
 };
 const drawFromWall = (state, player, source = "liveWall") => {
   const wall = source === "rinshanWall" ? state.rinshanWall : state.liveWall;
@@ -3217,7 +3299,11 @@ const applyServerAction = (state, event) => {
         throw new Error("フリテンのためロンできません");
       }
     }
-    const scoreResult = pochiResolution?.scoreResult || calculateServerScoreResult(state, player, action, effectiveWinningTile, loserId, winCheck.yaku);
+    const scoreResult = applyServerWinRake(
+      state,
+      player.id,
+      pochiResolution?.scoreResult || calculateServerScoreResult(state, player, action, effectiveWinningTile, loserId, winCheck.yaku),
+    );
     for (const p of ensureArray(state.players)) {
       p.score = Number(p.score || 0) + Number(scoreResult.payments?.[p.id] || 0);
     }
@@ -3541,7 +3627,7 @@ const calculateServerExhaustiveDraw = (state) => {
   if (nagashiWinner) {
     const lastDiscard = ensureArray(nagashiWinner.discardedTiles).at(-1)?.tile || ensureArray(nagashiWinner.discardedTiles).at(-1) || null;
     const yaku = [{ name: "流し役満", han: 13, isYakuman: true }];
-    const scoreResult = calculateServerScoreResult(state, nagashiWinner, "tsumo", lastDiscard, null, yaku);
+    const scoreResult = applyServerWinRake(state, nagashiWinner.id, calculateServerScoreResult(state, nagashiWinner, "tsumo", lastDiscard, null, yaku));
     for (const player of ensureArray(state.players)) {
       player.score = Number(player.score || 0) + Number(scoreResult.payments?.[player.id] || 0);
     }
@@ -3665,6 +3751,8 @@ const startNextServerHand = (state) => {
     roundLabel: isTsumoLossless ? (TSUMO_LOSSLESS_ROUNDS[nextRoundIndex] || "南3局") : "東場",
     dealerId: nextDealerId,
     events: [],
+    initialSeatOrder: ensureArray(state.round.initialSeatOrder),
+    initialPlayers: ensureArray(state.players).map((player, seatIndex) => ({ id: player.id, name: player.name, type: player.type, seatIndex })),
     initialHands: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, [...player.hand]])),
     initialDoraIndicators: [...ensureArray(state.doraIndicators)],
     initialScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
@@ -3783,6 +3871,8 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       roundLabel: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "東1局" : "東場",
       dealerId,
       events: [],
+      initialSeatOrder,
+      initialPlayers: normalizedPlayers.map((player, seatIndex) => ({ id: player.id, name: player.name, type: player.type, seatIndex })),
       initialHands: Object.fromEntries(normalizedPlayers.map((player) => [player.id, [...player.hand]])),
       initialDoraIndicators: [...walls.doraIndicators],
       initialScores: Object.fromEntries(normalizedPlayers.map((player) => [player.id, player.score])),

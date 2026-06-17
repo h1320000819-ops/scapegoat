@@ -91,6 +91,12 @@ const canUserReadReplay = async (replay, userId) => {
   return Array.isArray(members) && members.length > 0;
 };
 
+const getClubMember = async (clubId, userId) => {
+  if (!clubId || !userId) return null;
+  const rows = await supabaseServerRest(`/club_members?select=club_id,user_id,role&club_id=eq.${encodeURIComponent(clubId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`).catch(() => []);
+  return Array.isArray(rows) ? rows[0] : null;
+};
+
 const handleReplayApi = async (request, response, replayId) => {
   try {
     const user = await getSupabaseUserFromRequest(request);
@@ -115,6 +121,28 @@ const handleReplayApi = async (request, response, replayId) => {
   }
 };
 
+const handleClubRakeApi = async (request, response, clubId) => {
+  try {
+    const user = await getSupabaseUserFromRequest(request);
+    if (!user?.id) {
+      sendJson(response, 401, { ok: false, error: "ログイン情報を確認できませんでした。" });
+      return;
+    }
+    const member = await getClubMember(clubId, user.id);
+    if (!member) {
+      sendJson(response, 403, { ok: false, error: "このクラブのレーキ履歴を見る権限がありません。" });
+      return;
+    }
+    const isAdmin = member.role === "admin";
+    const userFilter = isAdmin ? "" : `&user_id=eq.${encodeURIComponent(user.id)}`;
+    const rows = await supabaseServerRest(`/club_rake_logs?select=*&club_id=eq.${encodeURIComponent(clubId)}${userFilter}&order=created_at.desc&limit=1000`);
+    sendJson(response, 200, { ok: true, isAdmin, rows: Array.isArray(rows) ? rows : [] });
+  } catch (error) {
+    console.error("[ClubRakeApi] failed", { clubId, error: error?.message || String(error) });
+    sendJson(response, 500, { ok: false, error: error?.message || "レーキ履歴の取得に失敗しました。" });
+  }
+};
+
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
@@ -127,6 +155,11 @@ const server = http.createServer(async (request, response) => {
     const replayApiMatch = pathname.match(/^\/api\/replay\/([^/]+)$/);
     if (replayApiMatch) {
       await handleReplayApi(request, response, decodeURIComponent(replayApiMatch[1]));
+      return;
+    }
+    const clubRakeApiMatch = pathname.match(/^\/api\/club-rake\/([^/]+)$/);
+    if (clubRakeApiMatch) {
+      await handleClubRakeApi(request, response, decodeURIComponent(clubRakeApiMatch[1]));
       return;
     }
     if (pathname === "/.env" || pathname.startsWith("/.env.")) throw new Error("Not found");

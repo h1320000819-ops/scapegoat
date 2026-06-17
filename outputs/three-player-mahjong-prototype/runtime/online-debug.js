@@ -2519,6 +2519,30 @@
       throw error;
     }
   };
+  const rakeAmountOf = (row) => Number(row?.rake_amount ?? row?.amount ?? 0);
+  const fetchClubRakeRows = async (clubId) => {
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}`;
+    const response = await fetch(apiUrl, {
+      headers: state.accessToken ? { Authorization: `Bearer ${state.accessToken}` } : {},
+      cache: "no-store",
+    }).catch(() => null);
+    if (response?.ok) {
+      const data = await response.json();
+      return data?.rows || [];
+    }
+    if (response && response.status !== 404) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || "レーキ履歴の取得に失敗しました。");
+    }
+    return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+  };
+  const rakeTotalsByUser = (rows = []) => rows.reduce((totals, row) => {
+    const userId = row.user_id || row.userId;
+    if (!userId) return totals;
+    totals[userId] = Math.round((Number(totals[userId] || 0) + rakeAmountOf(row)) * 10) / 10;
+    return totals;
+  }, {});
   const loadClubMembersForView = async (clubId) => {
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     try {
@@ -2547,7 +2571,7 @@
     const adminCount = members.filter((member) => member.role === "admin").length;
     let totalRake = "管理者のみ";
     if (isAdmin()) {
-      const rows = await restOptionalClubRakeLogs("/club_rake_logs?select=amount,rake_amount&club_id=eq." + encodeURIComponent(clubId));
+      const rows = await fetchClubRakeRows(clubId);
       totalRake = rows ? String(rows.reduce((sum, row) => sum + Number(row.rake_amount || row.amount || 0), 0)) : "未作成";
     }
     $("clubDetails").innerHTML = [
@@ -2572,13 +2596,13 @@
       $("rakeHistory").textContent = "";
       return;
     }
-    const rows = await restOptionalClubRakeLogs("/club_rake_logs?select=*,users(display_name,user_id),tables(name,table_id)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+    const rows = await fetchClubRakeRows(clubId);
     if (!rows) {
       $("rakeSummary").textContent = "レーキ履歴: 未作成";
       $("rakeHistory").textContent = clubRakeLogsMissingMessage;
       return;
     }
-    const total = rows.reduce((sum, row) => sum + Number(row.rake_amount || row.amount || 0), 0);
+    const total = rows.reduce((sum, row) => sum + rakeAmountOf(row), 0);
     $("rakeSummary").textContent = "レーキ総額: " + total;
     $("rakeHistory").textContent = JSON.stringify(rows, null, 2);
   };
@@ -2663,11 +2687,11 @@
   const selectedCreateRuleId = () => (has("ruleId") ? $("ruleId").value : "anmika-rocket");
   const isTsumoLossless3maSelected = () => selectedCreateRuleId() === TSUMO_LOSSLESS_3MA_RULE_ID;
   const readAnmikaRuleConfig = () => ({
-    rocket19Enabled: has("rocket19Enabled") ? $("rocket19Enabled").checked : false,
-    baibaEnabled: has("baibaEnabled") ? $("baibaEnabled").checked : false,
+    rocket19Enabled: has("rocket19Enabled") ? $("rocket19Enabled").checked : true,
+    baibaEnabled: has("baibaEnabled") ? $("baibaEnabled").checked : true,
     otokogiEnabled: has("otokogiEnabled") ? $("otokogiEnabled").checked : true,
-    feverRiichiEnabled: has("feverRiichiEnabled") ? $("feverRiichiEnabled").checked : false,
-    turquoise5pCount: has("turquoise5pCount") ? Number($("turquoise5pCount").value || 0) : 0,
+    feverRiichiEnabled: has("feverRiichiEnabled") ? $("feverRiichiEnabled").checked : true,
+    turquoise5pCount: has("turquoise5pCount") ? Number($("turquoise5pCount").value || 2) : 2,
   });
   const readTsumoLossless3maRuleConfig = () => ({
     fiveTileComposition: has("threeMaFiveComposition") ? $("threeMaFiveComposition").value : "red3blue1",
@@ -2704,7 +2728,7 @@
       const onOff = (value) => value ? "ON" : "OFF";
       return [
         `レート: 1点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
-        `レーキ: ${table.is_debug ? "無効" : (table.rake_percent ?? 0) + "%"}`,
+        `レーキ: ${table.rake_percent ?? 0}%`,
         `1・9牌ロケット ${onOff(Boolean(configValue.rocket19Enabled))}`,
         `倍場 ${onOff(Boolean(configValue.baibaEnabled))}`,
         `フィーバーリーチ ${onOff(Boolean(configValue.feverRiichiEnabled))}`,
@@ -2775,6 +2799,11 @@
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const members = await loadClubMembersForView(clubId);
+    const rakeRows = await fetchClubRakeRows(clubId).catch((error) => {
+      log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
+      return [];
+    });
+    const paidRakeByUser = rakeTotalsByUser(rakeRows);
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
     body.innerHTML = `
@@ -2794,9 +2823,10 @@
     visibleMembers.forEach((member) => {
       const userId = member.users?.user_id || "";
       const name = member.users?.display_name || userId || "Player";
+      const paidRake = Number(paidRakeByUser[userId] || 0);
       const row = document.createElement("div");
       row.className = "point-user-row";
-      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><span>支払レーキ ${paidRake} pt</span><button type="button" data-action="send">送る</button>${isAdmin() ? '<button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
       row.querySelector('[data-action="send"]').addEventListener("click", async () => {
         try {
           const amount = readPointAmount(prompt(`${name}へ送るポイント数`, "100"), "送信ポイント");
@@ -2911,13 +2941,32 @@
           return isMine && (isGamePointReason(row.reason) || Boolean(row.game_id || row.gameId));
         })
         .sort((a, b) => new Date(a.created_at || a.createdAt || 0).getTime() - new Date(b.created_at || b.createdAt || 0).getTime());
+      const rakeRows = (await fetchClubRakeRows(clubId).catch((error) => {
+        log("自分のレーキ履歴取得をスキップしました。", rawErrorText(error));
+        return [];
+      })).filter((row) => (row.user_id || row.userId) === user.id);
+      const paidRakeTotal = Math.round(rakeRows.reduce((sum, row) => sum + rakeAmountOf(row), 0) * 10) / 10;
+      const rakeHistoryHtml = rakeRows.length
+        ? `<section class="card">
+            <h4>支払レーキ</h4>
+            <div class="point-summary"><strong>合計: ${paidRakeTotal} pt</strong><span>対象件数: ${rakeRows.length}件</span></div>
+            ${rakeRows.slice(0, 50).map((row) => `
+              <div class="table-seat-line">
+                <span>${escapeHtml(new Date(row.created_at || row.createdAt || Date.now()).toLocaleString())}</span>
+                <strong>${rakeAmountOf(row)} pt</strong>
+                <span>${escapeHtml(row.win_type === "tsumo" ? "ツモ和了" : row.win_type === "ron" ? "ロン和了" : "和了")}</span>
+                <span class="muted">元収入 ${Number(row.original_gain || 0)} / ${Number(row.rake_percent || 0)}%</span>
+              </div>`).join("")}
+          </section>`
+        : `<section class="card"><h4>支払レーキ</h4><p class="muted">支払レーキはまだありません。</p></section>`;
       if (!gameRows.length) {
         body.innerHTML = `
           <section class="card">
             <h4>ゲーム収支グラフ</h4>
             <p class="muted">ゲーム由来のポイント収支はまだありません。</p>
             <p class="muted">管理者の送る・回収、ユーザー間送信はこの画面では集計しません。</p>
-          </section>`;
+          </section>
+          ${rakeHistoryHtml}`;
         return;
       }
       let cumulative = 0;
@@ -2941,9 +2990,11 @@
           <div class="point-summary">
             <strong>累計収支: ${cumulative >= 0 ? "+" : ""}${cumulative} pt</strong>
             <span>対象件数: ${series.length}件</span>
+            <span>支払レーキ合計: ${paidRakeTotal} pt</span>
           </div>
           ${renderPointHistoryChart(series)}
         </section>
+        ${rakeHistoryHtml}
         <section class="card">
           <h4>対象履歴</h4>
           ${series

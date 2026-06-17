@@ -15,10 +15,10 @@ create table if not exists public.club_rake_logs (
   -- replay table migration has been applied.
   replay_id uuid,
   win_type text check (win_type in ('ron', 'tsumo')),
-  original_gain integer,
+  original_gain numeric(14, 1),
   rake_percent numeric(4, 1),
-  rake_amount integer,
-  amount integer not null default 0,
+  rake_amount numeric(14, 1),
+  amount numeric(14, 1) not null default 0,
   created_at timestamptz not null default now()
 );
 
@@ -28,21 +28,33 @@ alter table public.club_rake_logs add column if not exists table_id uuid referen
 alter table public.club_rake_logs add column if not exists game_id uuid;
 alter table public.club_rake_logs add column if not exists replay_id uuid;
 alter table public.club_rake_logs add column if not exists win_type text check (win_type in ('ron', 'tsumo'));
-alter table public.club_rake_logs add column if not exists original_gain integer;
+alter table public.club_rake_logs add column if not exists original_gain numeric(14, 1);
 alter table public.club_rake_logs add column if not exists rake_percent numeric(4, 1);
-alter table public.club_rake_logs add column if not exists rake_amount integer;
-alter table public.club_rake_logs add column if not exists amount integer not null default 0;
+alter table public.club_rake_logs add column if not exists rake_amount numeric(14, 1);
+alter table public.club_rake_logs add column if not exists amount numeric(14, 1) not null default 0;
 alter table public.club_rake_logs add column if not exists created_at timestamptz not null default now();
+
+alter table public.club_rake_logs
+  alter column original_gain type numeric(14, 1)
+  using original_gain::numeric,
+  alter column rake_amount type numeric(14, 1)
+  using rake_amount::numeric,
+  alter column amount type numeric(14, 1)
+  using amount::numeric;
 
 alter table public.club_rake_logs enable row level security;
 
+drop policy if exists "rake club members read own or admin" on public.club_rake_logs;
 drop policy if exists "rake club admins read" on public.club_rake_logs;
 drop policy if exists "rake club members insert" on public.club_rake_logs;
 
-create policy "rake club admins read"
+create policy "rake club members read own or admin"
 on public.club_rake_logs for select
 to authenticated
-using (public.is_club_admin(club_id, auth.uid()));
+using (
+  public.is_club_admin(club_id, auth.uid())
+  or user_id = auth.uid()
+);
 
 create policy "rake club members insert"
 on public.club_rake_logs for insert

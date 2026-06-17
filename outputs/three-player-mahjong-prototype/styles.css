@@ -2,8 +2,8 @@
   color: #f6f8f7;
   background: #071018;
   font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
-  --discard-tile-width: 28px;
-  --discard-tile-height: 39px;
+  --discard-tile-width: 30px;
+  --discard-tile-height: 42px;
   --discard-gap: 5px;
   --center-info-width: 220px;
   --center-info-height: 148px;
@@ -491,7 +491,7 @@ button:hover {
 }
 
 .seat-top .hand-row {
-  transform: translateY(-38px);
+  transform: translateY(-18px);
 }
 
 .seat-right .hand-row {
@@ -729,7 +729,7 @@ button:hover {
 
 .discard.tsumogiri,
 .tile.tsumogiri {
-  opacity: 0.55;
+  opacity: 0.72;
 }
 
 .riichi-discard .tile {
@@ -1814,8 +1814,8 @@ button:hover {
     --center-info-height: 74px;
     --center-info-width: 132px;
     --discard-gap: 2px;
-    --discard-tile-height: 20px;
-    --discard-tile-width: 14px;
+    --discard-tile-height: 23px;
+    --discard-tile-width: 16px;
     --river-center-gap: 2px;
     --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 4px);
     --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 4px);
@@ -1850,7 +1850,7 @@ button:hover {
 
   .seat-top {
     max-width: 620px;
-    top: -34px;
+    top: -12px;
     width: min(78vw, 620px);
   }
 
@@ -2055,7 +2055,7 @@ button:hover {
   }
 
   .seat-top .hand-row {
-    transform: translateY(-58px);
+    transform: translateY(-28px);
   }
 
   .seat-right .hand-row {

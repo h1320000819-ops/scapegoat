@@ -37,11 +37,11 @@ const UI_ASSETS = {
 const CURRENT_USER_ID = "p1";
 const DEBUG_AUTH_ENABLED = true;
 const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
-  rocket19Enabled: false,
-  baibaEnabled: false,
+  rocket19Enabled: true,
+  baibaEnabled: true,
   otokogiEnabled: true,
   feverRiichiEnabled: true,
-  turquoise5pCount: 0,
+  turquoise5pCount: 2,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
 const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
@@ -1220,6 +1220,21 @@ const getSimpleReplayPayload = (replay) => {
 };
 const cloneReplayState = (state) => JSON.parse(JSON.stringify(state || {}));
 const findReplayPlayer = (state, playerId) => state?.players?.find((player) => player.id === playerId);
+const replayPlayerForEvent = (state, event, key = "playerId") => {
+  const directId = event?.[key];
+  const direct = findReplayPlayer(state, directId);
+  const seatKey = key === "fromPlayerId" ? "fromPlayerSeatIndex" : "playerSeatIndex";
+  const seatIndex = Number(event?.[seatKey]);
+  const bySeat = Number.isInteger(seatIndex) && seatIndex >= 0 ? state?.players?.[seatIndex] : null;
+  if (direct && (!bySeat || bySeat.id === direct.id)) return direct;
+  if (!direct && bySeat) return bySeat;
+  if (direct && bySeat && bySeat.id !== direct.id) {
+    state.replayIntegrityWarnings ??= [];
+    state.replayIntegrityWarnings.push({ type: "playerIdentityMismatch", eventType: event.type, playerId: direct.id, seatPlayerId: bySeat.id, seatIndex });
+    return direct;
+  }
+  return direct || null;
+};
 const removeReplayTileById = (tiles, tileId) => {
   const index = Array.isArray(tiles) ? tiles.findIndex((tile) => tile?.id === tileId) : -1;
   if (index < 0) return null;
@@ -1255,6 +1270,10 @@ const removeReplayLastDiscard = (state, playerId, tile) => {
   }
   return tile;
 };
+const removeReplayLastDiscardForEvent = (state, event, tile) => {
+  const fromPlayer = replayPlayerForEvent(state, event, "fromPlayerId");
+  return removeReplayLastDiscard(state, fromPlayer?.id || event?.fromPlayerId, tile);
+};
 const setReplayActivePlayer = (state, playerId) => {
   state.currentPlayerIndex = Math.max(0, state.players?.findIndex((player) => player.id === playerId) ?? 0);
   for (const player of state.players || []) player.status = player.id === playerId ? "active" : "waiting";
@@ -1263,7 +1282,7 @@ const applySimpleReplayEvent = (state, event) => {
   if (!state || !event?.type) return state;
   state.handLog ??= createEmptyHandLog();
   state.handLog.events ??= [];
-  const player = findReplayPlayer(state, event.playerId);
+  const player = replayPlayerForEvent(state, event);
   if (event.type === "doraReveal") {
     state.doraIndicators = event.doraIndicators || [...(state.doraIndicators || []), event.tile].filter(Boolean);
     return state;
@@ -1297,7 +1316,7 @@ const applySimpleReplayEvent = (state, event) => {
     return state;
   }
   if (event.type === "pon" && player) {
-    const calledTile = removeReplayLastDiscard(state, event.fromPlayerId, event.tile);
+    const calledTile = removeReplayLastDiscardForEvent(state, event, event.tile);
     const consumed = [removeReplayTileByKind(player.hand, event.tile), removeReplayTileByKind(player.hand, event.tile)].filter(Boolean);
     player.melds ??= [];
     player.melds.push({ type: "pon", tiles: [...consumed, calledTile], calledTile, fromPlayerId: event.fromPlayerId });
@@ -1317,7 +1336,7 @@ const applySimpleReplayEvent = (state, event) => {
         target.tiles = tiles.length ? tiles : [...(target.tiles || []), target.addedTile].filter(Boolean);
       }
     } else {
-      if (event.fromPlayerId) removeReplayLastDiscard(state, event.fromPlayerId, tiles[0]);
+      if (event.fromPlayerId) removeReplayLastDiscardForEvent(state, event, tiles[0]);
       for (const tile of tiles) removeReplayDrawnOrHandTile(player, tile);
       player.melds ??= [];
       player.melds.push({ type: kanType, tiles, calledTile: event.fromPlayerId ? tiles[0] : undefined, fromPlayerId: event.fromPlayerId });
@@ -1334,12 +1353,13 @@ const applySimpleReplayEvent = (state, event) => {
     return state;
   }
   if ((event.type === "ron" || event.type === "tsumo") && player) {
+    const fromPlayer = event.type === "ron" ? replayPlayerForEvent(state, event, "fromPlayerId") : null;
     state.phase = "handEnded";
     for (const seat of state.players || []) seat.status = seat.id === player.id ? "declared-win" : "waiting";
     state.handLog.result = {
       type: "win",
       winnerId: player.id,
-      loserId: event.fromPlayerId || null,
+      loserId: fromPlayer?.id || event.fromPlayerId || null,
       winType: event.type,
       winningTile: event.tile,
       scoringWinningTile: event.scoringTile,
@@ -1760,7 +1780,30 @@ const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
 
 const createPlayer = (id, name, type = "human", score = 0) => ({ id, name, type, score, hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0, assistSettings: { autoWin: false, noCall: false } });
 const getCurrentPlayer = (state) => state.players[state.currentPlayerIndex];
-const appendHandLogEvent = (log, event) => log.events.push(event);
+const replayPlayerIdentityFromLog = (log, playerId) => {
+  if (!playerId) return {};
+  const order = log?.initialSeatOrder || [];
+  const seatIndex = order.indexOf(playerId);
+  const initialPlayers = log?.initialPlayers || [];
+  const player = initialPlayers.find((item) => item.id === playerId) || null;
+  return {
+    playerId,
+    playerSeatIndex: seatIndex >= 0 ? seatIndex : null,
+    playerName: player?.name || "",
+    playerType: player?.type || "",
+  };
+};
+const appendHandLogEvent = (log, event) => {
+  const enriched = {
+    ...event,
+    ...(event?.playerId ? replayPlayerIdentityFromLog(log, event.playerId) : {}),
+    ...(event?.fromPlayerId ? {
+      fromPlayerSeatIndex: (log?.initialSeatOrder || []).indexOf(event.fromPlayerId),
+      fromPlayerName: (log?.initialPlayers || []).find((item) => item.id === event.fromPlayerId)?.name || "",
+    } : {}),
+  };
+  log.events.push(enriched);
+};
 const createEmptyHandLog = () => ({ handId: "not-started", roundLabel: "東場", dealerId: "", events: [], initialHands: {}, initialDoraIndicators: [], initialScores: {} });
 const bumpGameStateVersion = (state) => { state.version = (state.version ?? 0) + 1; return state.version; };
 const createInitialGameState = (players) => {
@@ -2486,17 +2529,6 @@ const calculateExhaustiveDrawPayments = (state) => {
 };
 const applyWinPayments = (gameState, winnerId, winType, scoreResult, loserId) => {
   const activeTable = gameState.activeTableId ? loadTables().find((table) => table.id === gameState.activeTableId) : null;
-  if (isCpuDebugTable(activeTable)) {
-    const payments = Object.fromEntries(gameState.players.map((player) => [player.id, 0]));
-    scoreResult.payments = payments;
-    scoreResult.rakePoints = 0;
-    scoreResult.rakePercent = 0;
-    scoreResult.winnerGain = 0;
-    scoreResult.paymentDeltas = Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta }));
-    scoreResult.debugNoPointSettlement = true;
-    gameState.log.unshift("CPUデバッグ卓のため点数・レーキ精算なし");
-    return gameState;
-  }
   const totalPoints = scoreResult.finalPoints ?? scoreResult.totalPoints;
   const payments = Object.fromEntries(gameState.players.map((player) => [player.id, 0]));
   if (winType === "tsumo") {
@@ -2525,7 +2557,10 @@ const applyWinPayments = (gameState, winnerId, winType, scoreResult, loserId) =>
   }
   scoreResult.payments = payments;
   scoreResult.rakePoints = rakePoints;
+  scoreResult.rakeAmount = rakePoints;
   scoreResult.rakePercent = gameState.settings?.rakePercent ?? 0;
+  scoreResult.rakePayerId = winnerId;
+  scoreResult.originalWinnerGain = (payments[winnerId] ?? 0) + rakePoints;
   scoreResult.winnerGain = payments[winnerId] ?? 0;
   scoreResult.paymentDeltas = Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta }));
   for (const player of gameState.players) player.score += payments[player.id] ?? 0;
@@ -3991,7 +4026,17 @@ class GameController {
     for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0 });
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
-    this.state.handLog = { handId: `east-${this.state.round.handNumber}-${Date.now()}`, roundLabel: `東場`, dealerId: this.state.round.dealerPlayerId, events: [], initialHands: Object.fromEntries(this.state.players.map((p) => [p.id, [...p.hand]])), initialDoraIndicators: [...this.state.doraIndicators], initialScores: Object.fromEntries(this.state.players.map((p) => [p.id, p.score])) };
+    this.state.handLog = {
+      handId: `east-${this.state.round.handNumber}-${Date.now()}`,
+      roundLabel: `東場`,
+      dealerId: this.state.round.dealerPlayerId,
+      events: [],
+      initialSeatOrder: this.state.players.map((p) => p.id),
+      initialPlayers: this.state.players.map((p, seatIndex) => ({ id: p.id, name: p.name, type: p.type, seatIndex })),
+      initialHands: Object.fromEntries(this.state.players.map((p) => [p.id, [...p.hand]])),
+      initialDoraIndicators: [...this.state.doraIndicators],
+      initialScores: Object.fromEntries(this.state.players.map((p) => [p.id, p.score])),
+    };
     for (const tile of this.state.doraIndicators) appendHandLogEvent(this.state.handLog, { type: "doraReveal", tile, doraIndicators: [...this.state.doraIndicators], turnIndex: this.state.turnIndex, reason: "initial" });
     this.state.currentPlayerIndex = Math.max(0, this.state.players.findIndex((p) => p.id === this.state.round.dealerPlayerId));
     getCurrentPlayer(this.state).status = "active";
@@ -5158,7 +5203,45 @@ class GameView {
       this.handlers.onOpenReplay(card.dataset.replayCard);
     }));
     this.root.querySelectorAll("[data-copy-replay-url]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyReplayUrl(b.dataset.copyReplayUrl)));
-    this.root.querySelectorAll("[data-replay-step]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayStep(Number(b.dataset.replayStep))));
+    this.root.querySelectorAll("[data-replay-step]").forEach((b) => {
+      let holdDelay = null;
+      let holdInterval = null;
+      let pointerHandledAt = 0;
+      const delta = Number(b.dataset.replayStep || 0);
+      const stopHold = () => {
+        if (holdDelay) clearTimeout(holdDelay);
+        if (holdInterval) clearInterval(holdInterval);
+        holdDelay = null;
+        holdInterval = null;
+      };
+      const step = () => {
+        if (b.disabled) {
+          stopHold();
+          return;
+        }
+        this.handlers.onReplayStep(delta);
+      };
+      b.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        pointerHandledAt = Date.now();
+        step();
+        stopHold();
+        window.addEventListener("pointerup", stopHold, { once: true });
+        window.addEventListener("pointercancel", stopHold, { once: true });
+        holdDelay = setTimeout(() => {
+          holdInterval = setInterval(step, 170);
+        }, 360);
+      });
+      ["pointerup", "pointercancel", "pointerleave", "blur"].forEach((type) => b.addEventListener(type, stopHold));
+      b.addEventListener("click", (event) => {
+        if (Date.now() - pointerHandledAt < 260) {
+          event.preventDefault();
+          return;
+        }
+        step();
+      });
+    });
     this.root.querySelectorAll("[data-replay-index]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayIndex(Number(b.dataset.replayIndex))));
     this.root.querySelectorAll("[data-replay-viewer]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayViewer(select.value)));
     this.root.querySelectorAll("[data-replay-reveal-hands]").forEach((input) => input.addEventListener("change", () => this.handlers.onReplayRevealHands(input.checked)));
@@ -5378,7 +5461,7 @@ class GameView {
         const emptySeat = getJoinableSeat(table);
         const waiting = table.waitingList?.includes(currentUserId);
         const rule = GAME_RULE_DEFINITIONS.find((item) => item.id === table.ruleId)?.name ?? table.ruleId;
-        return `<article class="lobby-card"><h3>${table.name}</h3><p>${rule} / 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ ${isCpuDebugTable(table) ? 0 : table.rakePercent ?? 0}% / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
+        return `<article class="lobby-card"><h3>${table.name}</h3><p>${rule} / 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ ${table.rakePercent ?? 0}% / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
           <p>着席: ${table.seats.filter((seat) => seat.playerId).length} / 3</p>
           <div class="screen-actions"><button type="button" data-open-table="${table.id}">開く</button><button type="button" data-rule-help>ルール</button>
           ${seated ? `<button type="button" data-leave-seat="${table.id}">卓を抜ける</button>` : canSitAtTable(table) && emptySeat ? `<button type="button" data-table-id="${table.id}" data-join-seat="${emptySeat.seatIndex}">座る</button>` : ""}
@@ -5910,10 +5993,15 @@ class GameView {
       <h3>半荘精算</h3>
       <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${item.pointDelta}pt</li>`).join("")}</ul>
     </section>` : "";
+    const rakePoints = Number(score.rakePoints ?? score.rakeAmount ?? 0);
+    const rakeLine = rakePoints > 0
+      ? `<p class="score-rake-line">レーキ: ${playerName(score.rakePayerId || result?.winnerId)} が ${rakePoints}点支払い（${Number(score.rakePercent || 0)}% / 元の和了収入 ${Number(score.originalWinnerGain ?? 0)}点）</p>`
+      : "";
     return `<section class="score-result result-modal compact-score-result"><h2>和了結果</h2>
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント・レーキ精算なし</p>` : ""}
+      ${rakeLine}
       <div class="score-tile-section score-main-tiles">
         <div class="score-hand-and-melds">
           <div class="score-hand-block"><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
