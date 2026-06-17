@@ -526,6 +526,7 @@ const applyDisconnectedGraceActions = (room, playerIds = []) => {
       room.state.clockStartedAt = null;
       room.state.handLog ??= {};
       room.state.handLog.result = calculateServerExhaustiveDraw(room.state);
+      startResultCountdownState(room.state);
       appendHandEvent(room.state, { type: "exhaustiveDraw", turnIndex: room.state.turnIndex ?? 0, reason: "disconnectedGraceWallEmpty" });
       changed = true;
       continue;
@@ -1683,6 +1684,21 @@ const syncClubPointEffects = async (room) => {
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
 const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
+const getCurrentResultId = (state) => state?.handLog?.result?.resultId || "";
+const resetResultCountdownState = (state) => {
+  if (!state) return;
+  state.resultCountdownStartedAt = null;
+  state.resultCountdownSeconds = null;
+  state.resultAutoCloseHandled = false;
+  state.resultOkPlayerIds = [];
+};
+const startResultCountdownState = (state) => {
+  if (!state) return;
+  state.resultCountdownStartedAt = Date.now();
+  state.resultCountdownSeconds = Math.ceil(RESULT_AUTO_OK_DELAY_MS / 1000);
+  state.resultAutoCloseHandled = false;
+  state.resultOkPlayerIds = [];
+};
 
 const DEFAULT_RULE_CONFIG = {
   rocket19Enabled: true,
@@ -2934,6 +2950,7 @@ const enterCurrentTurnOnServer = (state) => {
     state.clockStartedAt = null;
     state.handLog ??= {};
     state.handLog.result = calculateServerExhaustiveDraw(state);
+    startResultCountdownState(state);
     appendHandEvent(state, { type: "exhaustiveDraw", turnIndex: state.turnIndex ?? 0, reason: "liveWallEmpty" });
     return;
   }
@@ -3039,6 +3056,17 @@ const applyServerAction = (state, event) => {
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
     if (state.phase === "gameEnded") return state;
+    if (payload.resultId && state.handLog?.result?.resultId && payload.resultId !== state.handLog.result.resultId) {
+      console.warn("[ResultOk] stale result ignored", {
+        tableId: state.tableId,
+        gameId: state.gameId,
+        playerId: player.id,
+        payloadResultId: payload.resultId,
+        currentResultId: state.handLog.result.resultId,
+        phase: state.phase,
+      });
+      return state;
+    }
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
     const autoOkPlayerIds = requiredOkPlayerIds;
     if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
@@ -3339,6 +3367,7 @@ const applyServerAction = (state, event) => {
       isFeverContinuation,
       feverWinCount: player.feverWinCount ?? 0,
     };
+    resetResultCountdownState(state);
     if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
     scoreResult.displayWinningTile ??= displayWinningTile;
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: displayWinningTile, scoringTile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
@@ -3709,9 +3738,9 @@ const startNextServerHand = (state) => {
     playerClocks: createServerPlayerClocks(state.players, state.settings?.initialClockMs || 20000),
     activeClockPlayerId: null,
     clockStartedAt: null,
-    resultOkPlayerIds: [],
     lastClockRenderTick: null,
   });
+  resetResultCountdownState(state);
   state.round ??= {};
   state.round.initialSeatOrder = ensureArray(state.round.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state.players).map((player) => player.id);
   state.round.roundWind = isTsumoLossless && nextRoundIndex >= 3 ? "south" : "east";
@@ -4015,8 +4044,16 @@ const clearRoomLastHandForUser = (room, userId) => {
   return true;
 };
 const isWaitingForResultOk = (state) => Boolean(state?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(state.phase));
+const isEndedRoomState = (state) => Boolean(
+  state?.phase === "gameEnded" ||
+  state?.finalResult ||
+  state?.handLog?.result?.finalResult ||
+  state?.handLog?.result?.type === "gameEnded"
+);
 const applyAutoResultOk = (state) => {
   if (!isWaitingForResultOk(state)) return false;
+  const startedAt = Number(state.resultCountdownStartedAt || 0);
+  if (!startedAt || Date.now() - startedAt < RESULT_AUTO_OK_DELAY_MS) return false;
   const requiredOkPlayerIds = ensureArray(state.players).filter((player) => player.type !== "cpu").map((player) => player.id);
   const cpuPlayerIds = ensureArray(state.players).filter((player) => player.type === "cpu").map((player) => player.id);
   state.resultOkPlayerIds = [...new Set([...(state.resultOkPlayerIds ?? []), ...requiredOkPlayerIds, ...cpuPlayerIds])];
@@ -4052,12 +4089,21 @@ const scheduleRoomResultTimeout = (room) => {
   }
   if (!isWaitingForResultOk(room.state)) return;
   room.state.resultCountdownStartedAt ??= Date.now();
-  const delay = Math.max(0, Number(room.state.resultCountdownStartedAt) + RESULT_AUTO_OK_DELAY_MS - Date.now());
+  const timerResultId = getCurrentResultId(room.state);
+  const timerStartedAt = Number(room.state.resultCountdownStartedAt || Date.now());
+  const delay = Math.max(0, timerStartedAt + RESULT_AUTO_OK_DELAY_MS - Date.now());
   room.resultTimer = setTimeout(() => {
     room.resultTimer = null;
     try {
+      if (!isWaitingForResultOk(room.state) || getCurrentResultId(room.state) !== timerResultId || Number(room.state.resultCountdownStartedAt || 0) !== timerStartedAt) {
+        scheduleRoomResultTimeout(room);
+        return;
+      }
       queueReplayEffectsSnapshot(room);
-      if (!applyAutoResultOk(room.state)) return;
+      if (!applyAutoResultOk(room.state)) {
+        scheduleRoomResultTimeout(room);
+        return;
+      }
       advanceServerCpuTurns(room.state);
       room.version = Number(room.version || 0) + 1;
       room.state.version = room.version;
@@ -4095,6 +4141,7 @@ const applyPendingRoomServerEffect = (room) => {
     room.state.winAnnouncement = null;
     room.state.serverAnnouncement = null;
     room.state.phase = "handEnded";
+    if (room.state.handLog?.result) startResultCountdownState(room.state);
   } else {
     room.state.pendingServerEffect = null;
   }
@@ -4241,7 +4288,11 @@ io.on("connection", (socket) => {
   socket.on("game:join", async (payload = {}, ack) => {
     try {
       const { tableId, gameId, userId, resetRoom = false } = payload;
-      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
+      let room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
+      if (!resetRoom && isEndedRoomState(room.state)) {
+        console.log("[AnmikaGameServer] reset ended room on join", { tableId: room.tableId, previousGameId: room.gameId, userId });
+        room = getOrCreateRoom({ tableId, gameId, resetRoom: true });
+      }
       console.log("[AnmikaGameServer] join", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });
       for (const [socketId, meta] of room.sockets.entries()) {
         if (meta?.userId === userId && socketId !== socket.id) room.sockets.delete(socketId);

@@ -1,6 +1,7 @@
 ﻿const MAX_AUTO_TURNS = 200;
 const INITIAL_TIME_MS = 20000;
 const RESULT_COUNTDOWN_SECONDS = 15;
+const ONLINE_LOADING_DISPLAY_DELAY_MS = 5000;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -10,12 +11,9 @@ const installResultOkClickBridge = () => {
     event.preventDefault();
     event.stopPropagation();
     const controller = globalThis.__anmikaController || (typeof window !== "undefined" ? window.__anmikaController : null);
-    controller?.handleResultOk?.();
+    controller?.handleResultOk?.({ resultId: resultOk.dataset?.resultId || "" });
   };
   document.addEventListener("click", handler, true);
-  document.addEventListener("mousedown", handler, true);
-  document.addEventListener("pointerdown", handler, true);
-  document.addEventListener("touchstart", handler, true);
 };
 installResultOkClickBridge();
 const STOP_PHASES = new Set(["waitingForAction", "waitingForHumanDiscard", "waitingForRiichiDiscard", "showingWinAnnouncement", "showingFlowerAnnouncement", "handEnded", "exhaustiveDraw", "gameEnded"]);
@@ -466,12 +464,14 @@ const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "")
   if (!leftTableId) return base;
   try {
     const url = new URL(base, globalThis.location?.href || "http://localhost/");
+    if (clubId && !url.searchParams.get("returnClubId")) url.searchParams.set("returnClubId", clubId);
     url.searchParams.set("leftTableId", leftTableId);
     url.searchParams.set("leftAt", String(Date.now()));
     return url.href;
   } catch {
     const joiner = base.includes("?") ? "&" : "?";
-    return `${base}${joiner}leftTableId=${encodeURIComponent(leftTableId)}&leftAt=${Date.now()}`;
+    const clubPart = clubId && !base.includes("returnClubId=") ? `returnClubId=${encodeURIComponent(clubId)}&` : "";
+    return `${base}${joiner}${clubPart}leftTableId=${encodeURIComponent(leftTableId)}&leftAt=${Date.now()}`;
   }
 };
 const submitOnlineGameAction = async (actionType, payload = {}, options = {}) => {
@@ -1292,6 +1292,16 @@ const setReplayActivePlayer = (state, playerId) => {
   state.currentPlayerIndex = Math.max(0, state.players?.findIndex((player) => player.id === playerId) ?? 0);
   for (const player of state.players || []) player.status = player.id === playerId ? "active" : "waiting";
 };
+const previousReplayEvent = (state) => {
+  const events = state?.handLog?.events || [];
+  return events.length >= 2 ? events[events.length - 2] : null;
+};
+const replayDrawSourceForEvent = (state, event) => {
+  if (event.from) return event.from;
+  const previous = previousReplayEvent(state);
+  if (previous?.type === "kan" || previous?.type === "nukiDora") return "rinshanWall";
+  return "liveWall";
+};
 const applySimpleReplayEvent = (state, event) => {
   if (!state || !event?.type) return state;
   state.handLog ??= createEmptyHandLog();
@@ -1306,7 +1316,8 @@ const applySimpleReplayEvent = (state, event) => {
       addReplayIntegrityWarning(state, { type: "drawWhileDrawnTileExists", playerId: player.id, oldTileId: player.drawnTile.id, newTileId: event.tile?.id || "" });
       player.drawnTile = null;
     }
-    const tile = removeReplayWallTile(state, event.tile, event.from || "liveWall") || event.tile;
+    const source = replayDrawSourceForEvent(state, event);
+    const tile = removeReplayWallTile(state, event.tile, source) || event.tile;
     player.drawnTile = tile;
     state.lastDrawnTile = tile;
     state.phase = "waitingForHumanDiscard";
@@ -1364,8 +1375,10 @@ const applySimpleReplayEvent = (state, event) => {
     if (kanType === "kakan") {
       const target = player.melds?.find((meld) => meld.type === "pon" && sameTileKind(meld.tiles?.[0], event.addedTile || tiles[0]));
       if (target) {
+        const addedTile = event.addedTile || tiles.at(-1);
+        if (addedTile) removeReplayDrawnOrHandTile(player, addedTile);
         target.type = "kakan";
-        target.addedTile = event.addedTile || tiles.at(-1);
+        target.addedTile = addedTile;
         target.tiles = tiles.length ? tiles : [...(target.tiles || []), target.addedTile].filter(Boolean);
       }
     } else {
@@ -1454,7 +1467,7 @@ const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
   if (event.type === "draw") return true;
   if (event.type === "skipAction") return true;
-  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichiAutoDiscardWait", "feverForcedDiscardWait"].includes(event.type)) return true;
+  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichi", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "nukiDora"].includes(event.type)) return true;
   return false;
 };
 const getReplayVisibleSnapshotIndexes = (replay) => {
@@ -1774,14 +1787,19 @@ const hasLocalPlayerConfirmedResult = (state) => {
   const localId = getLocalHumanPlayerId(state);
   return Boolean(localId && getResultOkPlayerIds(state).includes(localId));
 };
+const getCurrentResultId = (state) => state.handLog?.result?.resultId || "";
+const isResultCountdownExpired = (state) => Boolean(
+  state.handLog?.result &&
+  state.resultCountdownStartedAt &&
+  Date.now() - Number(state.resultCountdownStartedAt) >= RESULT_COUNTDOWN_SECONDS * 1000
+);
 const renderResultOkButton = (state) => {
   const countdown = state.resultCountdownSeconds ?? RESULT_COUNTDOWN_SECONDS;
   const okIds = getResultOkPlayerIds(state);
   const requiredIds = getResultRequiredOkPlayerIds(state);
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
-  const inlineOk = "event.preventDefault(); event.stopPropagation(); window.__anmikaController && window.__anmikaController.handleResultOk && window.__anmikaController.handleResultOk();";
-  return `<button type="button" class="primary-action" data-result-ok onclick="${inlineOk}" onmousedown="${inlineOk}" onpointerdown="${inlineOk}" ontouchstart="${inlineOk}">${isConfirmed ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}">${isConfirmed ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
 };
 const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   const viewerIndex = Math.max(0, gameState.players.findIndex((player) => player.id === viewerPlayerId));
@@ -1864,6 +1882,8 @@ const createInitialGameState = (players) => {
     winAnnouncement: null,
     flowerAnnouncement: null,
     onlineLoadingMessage: "",
+    onlineLoadingMessageStartedAt: 0,
+    onlineLoadingVisible: false,
     resultCountdownStartedAt: null,
     resultCountdownSeconds: null,
     resultAutoCloseHandled: false,
@@ -2671,6 +2691,7 @@ class GameController {
     this.cpuStrategy = cpuStrategy;
     this.onlineSyncTimer = null;
     this.onlinePublishTimer = null;
+    this.onlineLoadingRevealTimer = null;
     this.isApplyingOnlineState = false;
     this.lastAppliedOnlinePublishedAt = 0;
     this.onlineInitialPublisher = false;
@@ -2686,6 +2707,26 @@ class GameController {
       this.handleResultOk({ autoAllResultOk: true });
     });
   }
+  setOnlineLoadingMessage(message) {
+    const text = String(message || "");
+    if (this.onlineLoadingRevealTimer) {
+      clearTimeout(this.onlineLoadingRevealTimer);
+      this.onlineLoadingRevealTimer = null;
+    }
+    this.state.onlineLoadingMessage = text;
+    this.state.onlineLoadingMessageStartedAt = text ? Date.now() : 0;
+    this.state.onlineLoadingVisible = false;
+    if (!text) return;
+    const startedAt = this.state.onlineLoadingMessageStartedAt;
+    this.onlineLoadingRevealTimer = setTimeout(() => {
+      if (!this.state.onlineLoadingMessage || this.state.onlineLoadingMessageStartedAt !== startedAt) return;
+      this.state.onlineLoadingVisible = true;
+      this.onStateChanged(this.state);
+    }, ONLINE_LOADING_DISPLAY_DELAY_MS);
+  }
+  clearOnlineLoadingMessage() {
+    this.setOnlineLoadingMessage("");
+  }
   setupGlobalResultOkHandler() {
     if (globalThis.__anmikaResultOkHandlerInstalled) return;
     globalThis.__anmikaResultOkHandlerInstalled = true;
@@ -2694,7 +2735,7 @@ class GameController {
       if (!resultOk) return;
       event.preventDefault();
       event.stopPropagation();
-      globalThis.__anmikaController?.handleResultOk?.();
+      globalThis.__anmikaController?.handleResultOk?.({ resultId: resultOk.dataset?.resultId || "" });
     }, true);
   }
   getState() { return this.state; }
@@ -3180,7 +3221,7 @@ class GameController {
       }
       if (isOnlineDebugLocalTableId(tableId) && (!sync?.enabled || sync.transport !== "socketio" || !sync.tableId || !sync.gameId)) {
         this.state.phase = "onlineLoading";
-        this.state.onlineLoadingMessage = "Socket.IO対局情報が見つかりません。卓一覧からもう一度この卓の対局を開始してください。";
+        this.setOnlineLoadingMessage("Socket.IO対局情報が見つかりません。卓一覧からもう一度この卓の対局を開始してください。");
         this.state.isWaitingForHumanAction = false;
         this.onStateChanged(this.state);
         return;
@@ -3192,15 +3233,15 @@ class GameController {
           saveOnlineSync(sync);
         }
         this.state.phase = "onlineLoading";
-        this.state.onlineLoadingMessage = "ゲームサーバーへ接続中...";
+        this.setOnlineLoadingMessage("ゲームサーバーへ接続中...");
         this.state.isWaitingForHumanAction = false;
         this.onStateChanged(this.state);
         this.connectSocketGameServer().catch((error) => {
           console.warn("[SocketGame] 接続に失敗しました", error);
           const message = error?.message ?? String(error);
-          this.state.onlineLoadingMessage = isSocketDisconnectedAckError(error)
+          this.setOnlineLoadingMessage(isSocketDisconnectedAckError(error)
             ? `ゲームサーバーへ再接続中... ${message}`
-            : `ゲームサーバーへ接続できません: ${message}`;
+            : `ゲームサーバーへ接続できません: ${message}`);
           this.onStateChanged(this.state);
           if (isSocketDisconnectedAckError(error)) {
             this.socketInitialConnectRetryCount = (this.socketInitialConnectRetryCount || 0) + 1;
@@ -3211,14 +3252,14 @@ class GameController {
       }
       if (isOnlineDebugLocalTableId(tableId)) {
         this.state.phase = "onlineLoading";
-        this.state.onlineLoadingMessage = "Socket.IO対局の卓IDが一致しません。卓一覧からもう一度この卓の対局を開始してください。";
+        this.setOnlineLoadingMessage("Socket.IO対局の卓IDが一致しません。卓一覧からもう一度この卓の対局を開始してください。");
         this.state.isWaitingForHumanAction = false;
         this.onStateChanged(this.state);
         return;
       }
       if (sync?.enabled && sync.gameId && syncMatchesTable) {
         this.state.phase = "onlineLoading";
-        this.state.onlineLoadingMessage = "オンライン局面を同期中...";
+        this.setOnlineLoadingMessage("オンライン局面を同期中...");
         this.state.isWaitingForHumanAction = false;
         this.onStateChanged(this.state);
         this.startOnlineStateSync();
@@ -3233,7 +3274,7 @@ class GameController {
               return;
             }
             if (!this.onlineInitialPublisher) {
-              this.state.onlineLoadingMessage = "親プレイヤーの初期局面を待っています...";
+              this.setOnlineLoadingMessage("親プレイヤーの初期局面を待っています...");
               this.onStateChanged(this.state);
               return;
             }
@@ -3243,7 +3284,7 @@ class GameController {
           .catch((error) => {
             console.warn("[OnlineSync] 初期局面の取得に失敗しました", error);
             if (!this.onlineInitialPublisher) {
-              this.state.onlineLoadingMessage = `オンライン局面の取得に失敗しました: ${error?.message ?? error}`;
+              this.setOnlineLoadingMessage(`オンライン局面の取得に失敗しました: ${error?.message ?? error}`);
               this.onStateChanged(this.state);
               return;
             }
@@ -3254,7 +3295,7 @@ class GameController {
       }
       if (isOnlineDebugLocalTableId(tableId)) {
         this.state.phase = "onlineLoading";
-        this.state.onlineLoadingMessage = "オンラインデバッグ卓ではローカル新規配牌を行いません。Socket.IOゲームサーバーを起動してください。";
+        this.setOnlineLoadingMessage("オンラインデバッグ卓ではローカル新規配牌を行いません。Socket.IOゲームサーバーを起動してください。");
         this.state.isWaitingForHumanAction = false;
         this.onStateChanged(this.state);
         return;
@@ -3276,6 +3317,7 @@ class GameController {
     }));
     const previousResultKey = this.state.handLog?.result
       ? JSON.stringify({
+        resultId: this.state.handLog.result.resultId,
         type: this.state.handLog.result.type,
         winnerId: this.state.handLog.result.winnerId,
         reason: this.state.handLog.result.reason,
@@ -3284,6 +3326,7 @@ class GameController {
       : "";
     const nextResultKey = next.handLog?.result
       ? JSON.stringify({
+        resultId: next.handLog.result.resultId,
         type: next.handLog.result.type,
         winnerId: next.handLog.result.winnerId,
         reason: next.handLog.result.reason,
@@ -3310,8 +3353,8 @@ class GameController {
     }
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
-      next.resultCountdownStartedAt = Date.now();
-      next.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+      next.resultCountdownStartedAt = Number(next.resultCountdownStartedAt || 0) || Date.now();
+      next.resultCountdownSeconds = Number(next.resultCountdownSeconds || 0) || RESULT_COUNTDOWN_SECONDS;
       next.resultAutoCloseHandled = false;
       next.resultOkSubmitted = false;
     }
@@ -3324,7 +3367,13 @@ class GameController {
     }
     next.currentUser = this.state.currentUser;
     next.screen = "game";
+    if (this.onlineLoadingRevealTimer) {
+      clearTimeout(this.onlineLoadingRevealTimer);
+      this.onlineLoadingRevealTimer = null;
+    }
     next.onlineLoadingMessage = "";
+    next.onlineLoadingMessageStartedAt = 0;
+    next.onlineLoadingVisible = false;
     next.activeTableId = this.state.activeTableId || next.activeTableId;
     next.activeClubId = this.state.activeClubId || next.activeClubId;
     next.selectedClubId = this.state.selectedClubId || next.selectedClubId;
@@ -3495,11 +3544,11 @@ class GameController {
           });
           this.applyOnlineStateSnapshot(response.state);
           if (reason === "connect" || reason === "reconnect") {
-            this.state.onlineLoadingMessage = "対局へ復帰しました";
+            this.setOnlineLoadingMessage("対局へ復帰しました");
             this.onStateChanged(this.state);
             setTimeout(() => {
               if (this.state.onlineLoadingMessage === "対局へ復帰しました") {
-                this.state.onlineLoadingMessage = "";
+                this.clearOnlineLoadingMessage();
                 this.onStateChanged(this.state);
               }
             }, 1800);
@@ -3508,7 +3557,7 @@ class GameController {
       } catch (error) {
         console.warn("[SocketGame] 再接続後の卓復帰に失敗しました", error);
         saveSocketDebugStatus({ lastAction: `game:join:${reason}`, lastError: error?.message || String(error) });
-        this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
+        this.setOnlineLoadingMessage(`ゲームサーバーへ再接続中... ${error?.message ?? error}`);
         this.onStateChanged(this.state);
       }
     };
@@ -3532,7 +3581,7 @@ class GameController {
     const sendInitialSocketState = async (reason = "needInitialState") => {
       if (this.socketInitialStateInFlight) return;
       this.socketInitialStateInFlight = true;
-      this.state.onlineLoadingMessage = "ゲームサーバーの初期局面を作成中...";
+      this.setOnlineLoadingMessage("ゲームサーバーの初期局面を作成中...");
       this.onStateChanged(this.state);
       try {
         const latestSync = loadOnlineSync();
@@ -3569,7 +3618,7 @@ class GameController {
         }
       } catch (error) {
         console.warn("[SocketGame] 初期局面の作成に失敗しました", error);
-        this.state.onlineLoadingMessage = `ゲームサーバーの初期局面作成に失敗しました: ${error?.message ?? error}`;
+        this.setOnlineLoadingMessage(`ゲームサーバーの初期局面作成に失敗しました: ${error?.message ?? error}`);
         this.onStateChanged(this.state);
       } finally {
         this.socketInitialStateInFlight = false;
@@ -3584,7 +3633,7 @@ class GameController {
         lastReconnectReason: "server_shutdown",
         lastError: "ゲームサーバーが再起動中です",
       });
-      this.state.onlineLoadingMessage = "ゲームサーバーが再起動中です。自動で復帰します...";
+      this.setOnlineLoadingMessage("ゲームサーバーが再起動中です。自動で復帰します...");
       this.onStateChanged(this.state);
     });
     socket.on("connect", () => {
@@ -3596,13 +3645,13 @@ class GameController {
       if (reason === "io client disconnect") return;
       console.warn("[SocketGame] disconnected", { reason, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
       saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastDisconnectReason: reason, lastReconnectReason: "socketDisconnect", lastError: reason });
-      this.state.onlineLoadingMessage = `接続が切れました。再接続中... (${reason})`;
+      this.setOnlineLoadingMessage(`接続が切れました。再接続中... (${reason})`);
       this.onStateChanged(this.state);
     });
     socket.on("connect_error", (error) => {
       console.warn("[SocketGame] connect_error", { error: error?.message ?? error, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
       saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastReconnectReason: "connect_error", lastError: error?.message || String(error) });
-      this.state.onlineLoadingMessage = `ゲームサーバーへ再接続中... ${error?.message ?? error}`;
+      this.setOnlineLoadingMessage(`ゲームサーバーへ再接続中... ${error?.message ?? error}`);
       this.onStateChanged(this.state);
     });
     await waitForSocketConnected(socket, SOCKET_CONNECT_TIMEOUT_MS + 15000);
@@ -4051,7 +4100,7 @@ class GameController {
   startGame({ preserveScores = false } = {}) {
     const ruleConfig = normalizeAnmikaRocketRuleConfig(this.state.settings?.ruleConfig);
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, this.state.settings?.ruleId || "anmika-rocket"))), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, this.state.settings?.ruleId || "anmika-rocket"))), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownSeconds: null, resultAutoCloseHandled: false, resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
     this.stopAllClocks();
@@ -4094,6 +4143,15 @@ class GameController {
   async handleResultOk(options = {}) {
     console.log("[ResultOk] clicked", this.state.handLog.result?.type, this.state.phase);
     const result = this.state.handLog.result;
+    if (!result) return;
+    if (options.resultId && result.resultId && options.resultId !== result.resultId) {
+      console.warn("[ResultOk] stale click ignored", { requestedResultId: options.resultId, currentResultId: result.resultId, phase: this.state.phase });
+      return;
+    }
+    if (options.autoAllResultOk && !isResultCountdownExpired(this.state)) {
+      console.warn("[ResultOk] early auto ignored", { resultId: result.resultId, countdownStartedAt: this.state.resultCountdownStartedAt, phase: this.state.phase });
+      return;
+    }
     if (isSocketAuthoritativeGame()) {
       const localPlayerId = getLocalHumanPlayerId(this.state);
       if (!localPlayerId) return;
@@ -4102,7 +4160,7 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, autoAllResultOk: true }, { timeoutMs: 12000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk) }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
           this.emit();
@@ -4478,7 +4536,7 @@ class GameController {
     const displayWinningTile = input.displayWinningTile ?? score.displayWinningTile ?? scoringWinningTile;
     appendHandLogEvent(this.state.handLog, { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
     appendHandLogEvent(this.state.handLog, input.winType === "tsumo" ? { type: "tsumo", playerId: winner.id, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex } : { type: "ron", playerId: winner.id, fromPlayerId: input.discarderId, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
-    this.state.handLog.result = { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
+    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
     score.winningTiles ??= winningTiles;
     score.winningTile ??= scoringWinningTile;
     score.displayWinningTile ??= displayWinningTile;
@@ -4490,6 +4548,9 @@ class GameController {
     this.state.resultCountdownStartedAt = null;
     this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
     this.state.resultAutoCloseHandled = false;
+    this.state.resultOkPlayerIds = [];
+    this.state.resultOkSubmitted = false;
+    this.state.resultOkSubmittedAt = null;
     this.state.pendingAction = null;
     this.state.phase = "showingWinAnnouncement";
     const announcement = input.winType === "tsumo" ? "ツモ" : "ロン";
@@ -4503,6 +4564,9 @@ class GameController {
       if (this.state.phase !== "showingWinAnnouncement") return;
       this.state.winAnnouncement = null;
       this.state.phase = "handEnded";
+      this.state.resultCountdownStartedAt = Date.now();
+      this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+      this.state.resultAutoCloseHandled = false;
       this.emit();
     }, 1800);
     return score;
@@ -4938,7 +5002,13 @@ class GameController {
       this.state.cpuThinkingPlayerId = null;
       this.state.cpuThinkingMessage = "";
       appendHandLogEvent(this.state.handLog, { type: "win", winnerId: nagashiWinner.id, winType: "tsumo", winningTile: nagashiWinner.discardedTiles.at(-1)?.tile, scoreResult: score, turnIndex: this.state.turnIndex });
-      this.state.handLog.result = { type: "win", winnerId: nagashiWinner.id, winType: "tsumo", scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })) };
+      this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "win", winnerId: nagashiWinner.id, winType: "tsumo", scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })) };
+      this.state.resultCountdownStartedAt = null;
+      this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+      this.state.resultAutoCloseHandled = false;
+      this.state.resultOkPlayerIds = [];
+      this.state.resultOkSubmitted = false;
+      this.state.resultOkSubmittedAt = null;
       appendReplaySnapshot(this.state);
       this.saveReplayForCurrentHand();
       this.emit();
@@ -4946,6 +5016,9 @@ class GameController {
         if (this.state.phase !== "showingWinAnnouncement") return;
         this.state.winAnnouncement = null;
         this.state.phase = "handEnded";
+        this.state.resultCountdownStartedAt = Date.now();
+        this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+        this.state.resultAutoCloseHandled = false;
         this.emit();
       }, 1800);
       return;
@@ -4962,7 +5035,13 @@ class GameController {
     this.state.cpuThinkingPlayerId = null;
     this.state.cpuThinkingMessage = "";
     appendHandLogEvent(this.state.handLog, { type: "exhaustiveDraw", turnIndex: this.state.turnIndex, reason: "liveWallEmpty" });
-    this.state.handLog.result = { type: "exhaustiveDraw", reason: "liveWallEmpty", tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments: effectivePayments, finalScores: effectiveFinalScores, debugNoPointSettlement };
+    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "exhaustiveDraw", reason: "liveWallEmpty", tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments: effectivePayments, finalScores: effectiveFinalScores, debugNoPointSettlement };
+    this.state.resultCountdownStartedAt = Date.now();
+    this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+    this.state.resultAutoCloseHandled = false;
+    this.state.resultOkPlayerIds = [];
+    this.state.resultOkSubmitted = false;
+    this.state.resultOkSubmittedAt = null;
     appendReplaySnapshot(this.state);
     this.saveReplayForCurrentHand();
     this.state.lastScoreResult = null;
@@ -5101,7 +5180,8 @@ class GameView {
     const resultOkClick = (event) => {
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      this.handlers.onResultOk?.();
+      const resultOk = event?.target?.closest?.("[data-result-ok]");
+      this.handlers.onResultOk?.(resultOk?.dataset?.resultId || "");
     };
     globalThis.__anmikaResultOkClick = resultOkClick;
     if (typeof window !== "undefined") window.__anmikaResultOkClick = resultOkClick;
@@ -5144,22 +5224,12 @@ class GameView {
     const handleResultOkPointer = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.handlers.onResultOk();
+      this.handlers.onResultOk(event.currentTarget?.dataset?.resultId || "");
     };
     this.root.querySelectorAll("[data-result-ok]").forEach((b) => {
       b.addEventListener("click", handleResultOkPointer);
-      b.addEventListener("mousedown", handleResultOkPointer);
-      b.addEventListener("pointerdown", handleResultOkPointer);
-      b.addEventListener("touchstart", handleResultOkPointer);
     });
-    this.root.onpointerdown = (event) => {
-      const resultOk = event.target?.closest?.("[data-result-ok]");
-      if (resultOk) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.handlers.onResultOk();
-      }
-    };
+    this.root.onpointerdown = null;
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
     this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
@@ -5240,11 +5310,10 @@ class GameView {
       this.handlers.onOpenReplay(card.dataset.replayCard);
     }));
     this.root.querySelectorAll("[data-copy-replay-url]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyReplayUrl(b.dataset.copyReplayUrl)));
-    this.root.querySelectorAll("[data-replay-step]").forEach((b) => {
+    const bindReplayHoldStep = (element, getDelta, { ignoreInteractive = false } = {}) => {
       let holdDelay = null;
       let holdInterval = null;
       let pointerHandledAt = 0;
-      const delta = Number(b.dataset.replayStep || 0);
       const stopHold = () => {
         if (holdDelay) clearTimeout(holdDelay);
         if (holdInterval) clearInterval(holdInterval);
@@ -5252,14 +5321,15 @@ class GameView {
         holdInterval = null;
       };
       const step = () => {
-        if (b.disabled) {
+        if (element.disabled) {
           stopHold();
           return;
         }
-        this.handlers.onReplayStep(delta);
+        this.handlers.onReplayStep(Number(getDelta() || 0));
       };
-      b.addEventListener("pointerdown", (event) => {
+      element.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
+        if (ignoreInteractive && event.target.closest("button, a, select, input, label, textarea, [data-replay-control]")) return;
         event.preventDefault();
         pointerHandledAt = Date.now();
         step();
@@ -5270,23 +5340,22 @@ class GameView {
           holdInterval = setInterval(step, 170);
         }, 360);
       });
-      ["pointerup", "pointercancel", "pointerleave", "blur"].forEach((type) => b.addEventListener(type, stopHold));
-      b.addEventListener("click", (event) => {
+      ["pointerup", "pointercancel", "pointerleave", "blur"].forEach((type) => element.addEventListener(type, stopHold));
+      element.addEventListener("click", (event) => {
+        if (ignoreInteractive && event.target.closest("button, a, select, input, label, textarea, [data-replay-control]")) return;
         if (Date.now() - pointerHandledAt < 260) {
           event.preventDefault();
           return;
         }
         step();
       });
-    });
+    };
+    this.root.querySelectorAll("[data-replay-step]").forEach((b) => bindReplayHoldStep(b, () => Number(b.dataset.replayStep || 0)));
     this.root.querySelectorAll("[data-replay-index]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayIndex(Number(b.dataset.replayIndex))));
     this.root.querySelectorAll("[data-replay-viewer]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayViewer(select.value)));
     this.root.querySelectorAll("[data-replay-reveal-hands]").forEach((input) => input.addEventListener("change", () => this.handlers.onReplayRevealHands(input.checked)));
     this.root.querySelectorAll("[data-replay-screen]").forEach((screen) => {
-      screen.addEventListener("click", (event) => {
-        if (event.target.closest("button, a, select, input, label, textarea, [data-replay-control]")) return;
-        this.handlers.onReplayNext();
-      });
+      bindReplayHoldStep(screen, () => 1, { ignoreInteractive: true });
       screen.addEventListener("wheel", (event) => {
         event.preventDefault();
         if (event.deltaY > 1) this.handlers.onReplayNext();
@@ -5762,6 +5831,13 @@ class GameView {
       }
     }
     const seats = viewState.seats;
+    const showOnlineLoadingMessage = Boolean(
+      state.onlineLoadingMessage &&
+      (
+        state.onlineLoadingVisible ||
+        (state.onlineLoadingMessageStartedAt && Date.now() - state.onlineLoadingMessageStartedAt >= ONLINE_LOADING_DISPLAY_DELAY_MS)
+      )
+    );
     return `<section class="mahjong-table" style="${UI_ASSETS.tableBackground ? `background-image:url('${UI_ASSETS.tableBackground}')` : ""}">
       <div class="table-frame"></div>
       ${this.centerInfoClean(state, dealer)}
@@ -5779,7 +5855,7 @@ class GameView {
       ${state.phase === "idle" ? this.startOverlay() : ""}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
-      ${state.onlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>退席してロビーへ</button><a class="button-link" href="${escapeHtml(onlineLoadingReturnUrl())}">ロビーへ戻る</a><button type="button" onclick="location.reload()">再接続</button></div></div>` : ""}
+      ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
       ${state.phase === "showingWinAnnouncement" ? this.winAnnouncement(state) : ""}
       ${state.serverAnnouncement && state.phase !== "showingWinAnnouncement" ? this.serverAnnouncement(state) : ""}
@@ -6084,7 +6160,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onNuki: (id) => controller.performNukiDora(getCurrentPlayer(controller.getState()).id, id),
   onConfirmAction: (type) => controller.confirmPendingAction(type),
   onSkipAction: () => controller.skipPendingAction(),
-  onResultOk: () => controller.handleResultOk(),
+  onResultOk: (resultId = "") => controller.handleResultOk({ resultId }),
   onFinalResultOk: () => controller.handleFinalResultOk(),
   onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
   onToggleSettings: () => controller.toggleSettings(),

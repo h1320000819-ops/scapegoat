@@ -36,6 +36,7 @@
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
   const ENABLE_AUTO_TABLE_START = true;
 
+  const initialParams = new URLSearchParams(location.search);
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
     refreshToken: localStorage.getItem("anmikaRefreshToken") || "",
@@ -53,10 +54,10 @@
     autoStartFailedTableIds: new Set(),
     autoOpenedPlayingTableIds: new Set(),
     gameServerProbe: { status: "未確認", lastError: "", checkedAt: "" },
-    activeClubId: sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
-    activeTableId: new URLSearchParams(location.search).get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
-    recentlyLeftTableId: new URLSearchParams(location.search).get("leftTableId") || "",
-    recentlyLeftAt: Number(new URLSearchParams(location.search).get("leftAt") || 0),
+    activeClubId: initialParams.get("returnClubId") || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "",
+    activeTableId: initialParams.get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
+    recentlyLeftTableId: initialParams.get("leftTableId") || "",
+    recentlyLeftAt: Number(initialParams.get("leftAt") || 0),
     searchedClub: null,
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
@@ -575,12 +576,14 @@
     throw new Error(`ゲームサーバーが応答しません。しばらく待ってからもう一度開始してください。最後の状態: ${lastError || "未応答"}`);
   };
   const buildOnlineDebugReturnUrl = () => {
+    const clubId = selectedClubId();
+    const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
     if (location.protocol === "file:") {
       const path = String(location.pathname || "").replace(/\\/g, "/");
-      if (path.includes("/online-debug/")) return new URL("./index.html", window.location.href).href;
-      return new URL("online-debug/index.html", window.location.href).href;
+      if (path.includes("/online-debug/")) return new URL(`./index.html${query}`, window.location.href).href;
+      return new URL(`online-debug/index.html${query}`, window.location.href).href;
     }
-    return `${location.origin}/online-debug`;
+    return `${location.origin}/online-debug${query}`;
   };
   const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const debugTileAssetPath = (fileName) => (location.protocol === "file:" ? `../public/tiles/${fileName}` : `/tiles/${fileName}`);
@@ -636,6 +639,8 @@
     clearLocalUserSeatsForTable(tableId, state.user.id);
     state.autoOpenedPlayingTableIds.delete(tableId);
     state.autoStartingTableIds.delete(tableId);
+    state.onlineGameOpened = false;
+    state.activeGameState = null;
     if (state.activeTableId === tableId) {
       state.activeTableId = "";
       sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
@@ -685,6 +690,7 @@
         log("ラス半終了後のウェイティング処理に失敗しました。", raw);
       }
     });
+    document.body.dataset.screen = "club-home";
   };
   const CLUB_POINT_FIXED_TOTAL = 10000000;
   const clubPointSummaryFromMembers = (members = []) => {
@@ -2489,6 +2495,8 @@
   const enterPlayingGame = async (tableId) => {
     tableId = requireTableId(normalizeRemoteTableId(tableId), "対局参加");
     setActiveTableId(tableId);
+    clearLocalUserLastHandFlagForTable(tableId);
+    await clearOwnLastHandFlag(tableId).catch((error) => log("対局参加前のラス半解除をスキップしました。", rawErrorText(error)));
     const rows = await loadSeats().catch((error) => {
       log("席情報の再取得に失敗しました。表示中の席情報で対局へ入ります。", rawErrorText(error));
       return getKnownSeats(tableId);
@@ -2496,7 +2504,9 @@
     log("ゲームサーバーの起動状態を確認しています。");
     await waitForGameServerReady();
     clearLaunchingTable();
-    startLocalDebugMahjong(tableId, rows, { game_id: `socket-game-${tableId}`, version: 0, resetRoom: false });
+    const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
+    const endedState = Boolean(lastState?.phase === "gameEnded" || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
+    startLocalDebugMahjong(tableId, rows, { game_id: `socket-game-${tableId}`, version: 0, resetRoom: endedState });
   };
   const copyTableUrl = async () => {
     const text = $("tableUrl").textContent;
@@ -3749,7 +3759,7 @@
           <div class="table-seats"></div>
           <div class="table-waiting-list"></div>
           <div class="table-card-actions">
-            <button type="button" data-action="startGame" class="primary">${table.status === "playing" ? "対局へ入る" : "対局開始"}</button>
+            ${table.status === "playing" ? '<button type="button" data-action="enterGame" class="primary">対局へ入る</button>' : ""}
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
             <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
             <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
@@ -3820,11 +3830,10 @@
           clearError();
           toggleWaiting(table.table_id).catch((error) => showError("ウェイティング切替に失敗しました", error));
         });
-        card.querySelector('[data-action="startGame"]').addEventListener("click", () => {
-          uiLog("start game clicked", { tableId: table.table_id });
+        card.querySelector('[data-action="enterGame"]')?.addEventListener("click", () => {
+          uiLog("enter game clicked", { tableId: table.table_id });
           clearError();
-          const action = table.status === "playing" ? enterPlayingGame : startDebugGame;
-          action(table.table_id).catch((error) => showError(table.status === "playing" ? "対局参加に失敗しました" : "対局開始に失敗しました", error));
+          enterPlayingGame(table.table_id).catch((error) => showError("対局参加に失敗しました", error));
         });
         card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });
@@ -4028,9 +4037,10 @@
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       await settleRecentlyLeftTable().catch((error) => showError("ラス半終了後の退席処理に失敗しました", error));
       startClubPolling();
-      const returnClubId = localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
+      const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
       if (returnClubId && state.clubs.some((club) => club.club_id === returnClubId)) {
         setActiveClubId(returnClubId);
+        localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);
         document.body.dataset.screen = "club-home";
         await loadTables().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       }
