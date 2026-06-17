@@ -1866,6 +1866,19 @@ const accumulateTsumoLosslessClubPointPayments = (state, payments = {}) => {
     state.hanchanClubPointPayments[playerId] = Math.round((Number(state.hanchanClubPointPayments[playerId] || 0) + value) * 10) / 10;
   }
 };
+const awardTsumoLosslessRiichiSticks = (state, winnerId) => {
+  if (!isTsumoLossless3maState(state) || !winnerId) return 0;
+  const count = Number(state.riichiStickCount || 0);
+  const points = count * 1000;
+  if (points <= 0) return 0;
+  const winner = findPlayer(state, winnerId);
+  if (!winner) return 0;
+  winner.score = Number(winner.score || 0) + points;
+  state.riichiStickCount = 0;
+  return points;
+};
+const topPlayerIdForTsumoLossless = (state) =>
+  [...ensureArray(state.players)].sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0]?.id || "";
 const applyTsumoLosslessRoundAdvance = (state, result) => {
   if (!isTsumoLossless3maState(state)) return;
   state.round ??= {};
@@ -1878,6 +1891,8 @@ const applyTsumoLosslessRoundAdvance = (state, result) => {
   state.round.hanchanRoundIndex = getTsumoLosslessRoundIndex(state) + 1;
 };
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
+  const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
+  const riichiStickPoints = awardTsumoLosslessRiichiSticks(state, riichiStickWinnerId);
   state.pendingAction = null;
   state.phase = "gameEnded";
   state.isWaitingForHumanAction = false;
@@ -1888,11 +1903,15 @@ const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
     reason,
     finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, Number(player.score || 0)])),
     settlement: calculateTsumoLosslessFinalSettlement(state),
+    riichiStickAward: riichiStickPoints > 0 ? { winnerId: riichiStickWinnerId, points: riichiStickPoints } : null,
     nextHanchanSeatOrder: getNextHanchanSeatOrder(state),
   };
   state.handLog ??= {};
   state.handLog.result ??= { type: "gameEnded", reason };
   state.handLog.result.finalResult = state.finalResult;
+  if (riichiStickPoints > 0) {
+    state.handLog.result.riichiStickAward = { winnerId: riichiStickWinnerId, points: riichiStickPoints };
+  }
   return state;
 };
 
@@ -3158,17 +3177,24 @@ const applyServerAction = (state, event) => {
     }
     player.riichiDiscardTileIds = riichiDiscardTileIds;
     if (payload.tileId) {
+      let riichiStickPoints = 0;
       player.isRiichi = true;
       player.ippatsu = true;
       player.riichiTurnIndex = state.turnIndex ?? 0;
       player.ippatsuOwnDrawStarted = false;
       player.feverWinCount = 0;
       player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
+      if (isTsumoLossless3maState(state) && !player.riichiStickPaid) {
+        player.score = Number(player.score || 0) - 1000;
+        player.riichiStickPaid = true;
+        state.riichiStickCount = Number(state.riichiStickCount || 0) + 1;
+        riichiStickPoints = 1000;
+      }
       const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== payload.tileId);
       const feverCheckPlayer = { ...player, hand: afterRiichiDiscardTiles, drawnTile: null };
       player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(feverCheckPlayer));
       discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
-      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: state.turnIndex ?? 0 });
+      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, riichiStickPoints, turnIndex: state.turnIndex ?? 0 });
       player.riichiDiscardTileIds = [];
     } else {
       state.pendingAction = null;
@@ -3346,6 +3372,17 @@ const applyServerAction = (state, event) => {
       player.id,
       pochiResolution?.scoreResult || calculateServerScoreResult(state, player, action, effectiveWinningTile, loserId, winCheck.yaku),
     );
+    const riichiStickCount = isTsumoLossless3maState(state) ? Number(state.riichiStickCount || 0) : 0;
+    const riichiStickPoints = riichiStickCount * 1000;
+    if (riichiStickPoints > 0) {
+      scoreResult.payments ??= Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
+      scoreResult.payments[player.id] = Number(scoreResult.payments[player.id] || 0) + riichiStickPoints;
+      scoreResult.paymentDeltas = Object.entries(scoreResult.payments).map(([playerId, delta]) => ({ playerId, delta }));
+      scoreResult.winnerGain = Number(scoreResult.payments[player.id] || 0);
+      scoreResult.riichiStickCount = riichiStickCount;
+      scoreResult.riichiStickPoints = riichiStickPoints;
+      state.riichiStickCount = 0;
+    }
     for (const p of ensureArray(state.players)) {
       p.score = Number(p.score || 0) + Number(scoreResult.payments?.[p.id] || 0);
     }
@@ -3378,6 +3415,8 @@ const applyServerAction = (state, event) => {
       payments: scoreResult.paymentDeltas,
       chipSettlement,
       tobiPrize,
+      riichiStickCount,
+      riichiStickPoints,
       isFeverContinuation,
       feverWinCount: player.feverWinCount ?? 0,
     };
@@ -3775,6 +3814,7 @@ const startNextServerHand = (state) => {
       ippatsuOwnDrawStarted: false,
       sameTurnFuriten: false,
       riichiDiscardTileIds: [],
+      riichiStickPaid: false,
       feverRiichiActive: false,
       feverWinCount: 0,
     });
@@ -3835,6 +3875,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     ippatsuOwnDrawStarted: false,
     sameTurnFuriten: false,
     riichiDiscardTileIds: [],
+    riichiStickPaid: false,
     feverRiichiActive: false,
     feverWinCount: 0,
     assistSettings: { autoWin: false, noCall: false },
@@ -3858,6 +3899,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       ippatsuOwnDrawStarted: false,
       sameTurnFuriten: false,
       riichiDiscardTileIds: [],
+      riichiStickPaid: false,
       feverRiichiActive: false,
       feverWinCount: 0,
       assistSettings: { autoWin: false, noCall: false },
@@ -3907,6 +3949,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     })),
     screen: "game",
     rakePool: 0,
+    riichiStickCount: 0,
     playerClocks: createServerPlayerClocks(normalizedPlayers, 20000),
     activeClockPlayerId: null,
     clockStartedAt: null,

@@ -36,6 +36,8 @@
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
   const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const ENABLE_AUTO_TABLE_START = true;
+  const LOBBY_AUTO_REFRESH_MS = 3000;
+  const GAME_AUTO_REFRESH_MS = 2500;
 
   const initialParams = new URLSearchParams(location.search);
   const initialReturnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "";
@@ -65,6 +67,8 @@
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
     clubPollTimer: 0,
+    lobbyRefreshInFlight: false,
+    lobbyRefreshPending: false,
   };
 
   const $ = (id) => {
@@ -465,8 +469,8 @@
     if (message.includes("ensure_online_game_for_table") && message.includes("schema cache")) return "オンライン対局開始用のDB関数が見つかりません。patch_online_game_sync_safe.sql を実行してください。";
     if (message.includes("submit_game_action") && message.includes("schema cache")) return "オンライン対局イベント用のDB関数が見つかりません。patch_online_game_sync_safe.sql を実行してください。";
     if (message.includes("club not found")) return "そのクラブは見つかりません。クラブID（C-XXXXXX）を確認してください。";
-    if (message.includes("shared_sit_at_table") && message.includes("schema cache")) return "共有着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
-    if (message.includes("sit_at_table") && message.includes("schema cache")) return "着席用のDB関数が見つかりません。patch_one_account_one_seat_autostart.sql を実行してください。";
+    if (message.includes("shared_sit_at_table") && message.includes("schema cache")) return "共有着席用のDB関数が見つかりません。patch_one_user_one_global_seat.sql を実行してください。";
+    if (message.includes("sit_at_table") && message.includes("schema cache")) return "着席用のDB関数が見つかりません。patch_one_user_one_global_seat.sql を実行してください。";
     if (message.includes("JWT expired") || message.includes("PGRST303")) return "ログイン期限が切れました。自動更新に失敗した場合は、いったんログアウトして再ログインしてください。";
     if (message.includes("ByteString") || message.includes("greater than 255")) return "ログイン情報または通信ヘッダーが壊れています。いったんログアウトして再ログインしてください。";
     if (message.includes("duplicate key") && message.includes("owner_user_id")) return "このアカウントではすでにクラブを作成済みです。加入済みクラブ一覧を更新してください。";
@@ -1887,8 +1891,8 @@
     }
     const table = Array.isArray(created) ? created[0] : created;
     if (!table?.table_id) throw new Error("卓作成に成功しましたが、tableId を取得できませんでした。卓一覧を更新してください。");
-    await loadTables();
     setActiveTableId(table.table_id);
+    await loadTables();
     if (has("tableCreatePanel")) $("tableCreatePanel").classList.remove("open");
     render();
     startPolling();
@@ -1986,27 +1990,24 @@
     }
     clearLocalUserLastHandFlagForTable(tableId, state.user.id);
   };
-  const findTableClubId = async (tableId) => {
-    const known = state.tables.find((table) => table.table_id === tableId);
-    if (known?.club_id) return known.club_id;
-    const rows = await rest("/tables?select=club_id&table_id=eq." + encodeURIComponent(tableId) + "&limit=1");
-    return rows?.[0]?.club_id || "";
-  };
-  const clearRemoteUserSeatsInClubExcept = async (tableId, keepSeatIndex = null) => {
+  const clearRemoteUserSeatsExcept = async (tableId, keepSeatIndex = null) => {
     const user = requireUser();
-    const clubId = await findTableClubId(tableId);
-    if (!clubId) return;
-    const tables = await rest("/tables?select=table_id&club_id=eq." + encodeURIComponent(clubId)).catch(() =>
-      state.tables.filter((table) => table.club_id === clubId)
-    );
-    for (const table of tables || []) {
-      const otherTableId = table.table_id;
-      if (!otherTableId) continue;
-      let filter = "/table_seats?table_id=eq." + encodeURIComponent(otherTableId) + "&user_id=eq." + encodeURIComponent(user.id);
-      if (String(otherTableId) === String(tableId) && keepSeatIndex !== null && keepSeatIndex !== undefined) {
-        filter += "&seat_index=neq." + encodeURIComponent(String(keepSeatIndex));
+    const ownSeats = await rest("/table_seats?select=table_id,seat_index&user_id=eq." + encodeURIComponent(user.id)).catch(() => []);
+    for (const seat of ownSeats || []) {
+      const otherTableId = seat.table_id;
+      const otherSeatIndex = seat.seat_index;
+      if (!otherTableId && otherTableId !== 0) continue;
+      if (
+        String(otherTableId) === String(tableId) &&
+        keepSeatIndex !== null &&
+        keepSeatIndex !== undefined &&
+        Number(otherSeatIndex) === Number(keepSeatIndex)
+      ) {
+        continue;
       }
-      await rest(filter, {
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(otherTableId) + "&seat_index=eq." + encodeURIComponent(String(otherSeatIndex)) + "&user_id=eq." + encodeURIComponent(user.id),
+        {
         method: "PATCH",
         body: JSON.stringify({
           user_id: null,
@@ -2014,19 +2015,21 @@
           display_name: null,
           is_last_hand_declared: false,
         }),
-      }).catch((error) => log("重複席の解除に失敗しました。", rawErrorText(error)));
+        }
+      ).catch((error) => log("重複席の解除に失敗しました。", rawErrorText(error)));
     }
   };
   const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
     tableId = requireTableId(tableId, "着席");
     setActiveTableId(tableId);
     try {
+      await clearRemoteUserSeatsExcept(tableId, null).catch((error) => log("着席前の既存席解除に失敗しました。", rawErrorText(error)));
       try {
         await rest("/rpc/shared_sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId, p_seat_index: Number.isInteger(seatIndex) ? Number(seatIndex) : null }) });
       } catch (sharedError) {
         const raw = rawErrorText(sharedError);
         if (!raw.includes("shared_sit_at_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw sharedError;
-        await clearRemoteUserSeatsInClubExcept(tableId, null).catch((error) => log("着席前の重複席解除に失敗しました。", rawErrorText(error)));
+        await clearRemoteUserSeatsExcept(tableId, null).catch((error) => log("着席前の重複席解除に失敗しました。", rawErrorText(error)));
         try {
           await rest("/rpc/sit_at_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId, p_seat_index: seatIndex }) });
         } catch (seatRpcError) {
@@ -2038,9 +2041,10 @@
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
       const rows = await loadSeats();
+      await tryAutoStartTableFromSeats(tableId, rows).catch((error) => log("着席後の自動開始確認に失敗しました。", rawErrorText(error)));
       const ownSeat = rows.find((seat) => seat.user_id === state.user?.id);
       if (ownSeat) {
-        await clearRemoteUserSeatsInClubExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
+        await clearRemoteUserSeatsExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
         clearLocalUserSeatsExcept(tableId, ownSeat.seat_index);
         await loadTables();
         await loadSeats();
@@ -2055,6 +2059,7 @@
       if (!target) throw new Error("着席に失敗しました。原因: 指定された席が見つかりません。");
       if (target.user_id && target.user_id !== state.user?.id && target.player_type !== "cpu") throw new Error("着席に失敗しました。原因: この席はすでに埋まっています。");
       clearLocalUserSeatsExcept(tableId, target.seat_index);
+      await clearRemoteUserSeatsExcept(tableId, null).catch(() => {});
       target.user_id = requireUser().id;
       target.player_type = "human";
       target.display_name = requireUser().displayName || "あなた";
@@ -2097,7 +2102,8 @@
         await rest("/rpc/add_debug_cpu_to_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
       }
       await loadTables();
-      await loadSeats();
+      const rows = await loadSeats();
+      await tryAutoStartTableFromSeats(tableId, rows).catch((error) => log("CPU追加後の自動開始確認に失敗しました。", rawErrorText(error)));
       return;
     } catch (error) {
       log("DBのCPU追加に失敗したため、ローカルデバッグCPUを追加しました。", rawErrorText(error));
@@ -3708,14 +3714,39 @@
     await rest("/rpc/admin_collect_club_points", { method: "POST", body: JSON.stringify({ p_club_id: clubId, p_from_user_id: targetUserId, p_amount: amount }) });
     await loadClubPoints();
   };
+  const refreshLobbyNow = async (reason = "auto") => {
+    if (!state.accessToken || !state.user) return;
+    if (document.visibilityState !== "visible") return;
+    if (document.body.dataset.screen !== "club-home") return;
+    if (state.lobbyRefreshInFlight) {
+      state.lobbyRefreshPending = true;
+      return;
+    }
+    state.lobbyRefreshInFlight = true;
+    try {
+      await loadTables();
+      const tableId = selectedTableId();
+      if (tableId) {
+        await loadSeats().catch((error) => log(`席の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
+        if (state.onlineGameOpened) {
+          await loadActiveGameState(tableId).catch((error) => log(`対局状態の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
+          renderOnlineGamePanel();
+        }
+      }
+    } finally {
+      state.lobbyRefreshInFlight = false;
+      if (state.lobbyRefreshPending) {
+        state.lobbyRefreshPending = false;
+        window.setTimeout(() => refreshLobbyNow("pending").catch((error) => log("保留中の自動更新に失敗しました。", rawErrorText(error))), 150);
+      }
+    }
+  };
   const startPolling = () => {
     clearInterval(state.pollTimer);
     state.pollTimer = setInterval(() => {
       if (document.visibilityState !== "visible") return;
-      const tableId = selectedTableId();
-      if (tableId && state.accessToken) loadSeats().catch((error) => log("席の自動更新に失敗しました。", rawErrorText(error)));
-      if (tableId && state.accessToken) loadActiveGameState(tableId).catch((error) => log("対局状態の自動更新に失敗しました。", rawErrorText(error)));
-    }, 10000);
+      if (document.body.dataset.screen === "club-home") refreshLobbyNow("gamePoll").catch((error) => log("卓状況の自動更新に失敗しました。", rawErrorText(error)));
+    }, GAME_AUTO_REFRESH_MS);
     renderDebug("ポーリング中");
   };
   const startClubPolling = () => {
@@ -3728,9 +3759,9 @@
         return;
       }
       if (document.body.dataset.screen === "club-home") {
-        loadTables().catch((error) => log("卓状況の自動更新に失敗しました。", rawErrorText(error)));
+        refreshLobbyNow("clubPoll").catch((error) => log("卓状況の自動更新に失敗しました。", rawErrorText(error)));
       }
-    }, 30000);
+    }, LOBBY_AUTO_REFRESH_MS);
   };
   const render = () => {
     const activeClubId = selectedClubId();
@@ -4094,6 +4125,7 @@
         setActiveClubId($("clubSelect").value);
         render();
         loadClubStats().catch(() => {});
+        refreshLobbyNow("clubChange").catch(() => {});
       });
     }
     if (has("clubId")) {
@@ -4119,6 +4151,7 @@
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       await settleRecentlyLeftTable().catch((error) => showError("ラス半終了後の退席処理に失敗しました", error));
       startClubPolling();
+      refreshLobbyNow("boot").catch(() => {});
       if (returnClubId) {
         setActiveClubId(returnClubId);
         localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);

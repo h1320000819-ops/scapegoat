@@ -42,6 +42,7 @@ const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
   turquoise5pCount: 2,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
+const TSUMO_LOSSLESS_ROUNDS = ["東1局", "東2局", "東3局", "南1局", "南2局", "南3局"];
 const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
   fiveTileComposition: "red3blue1",
   flowerComposition: "red3blue1",
@@ -1748,6 +1749,9 @@ const renderTileView = ({ tile, isDrawnTile = false, isTsumogiri = false, faceDo
 };
 
 const isRiichiDeclarationDiscard = (phase) => phase === "waitingForRiichiDiscard";
+const isRiichiChoicePending = (pending) =>
+  Boolean(pending?.options?.some((option) => option.type === "riichi")) &&
+  !pending?.options?.some((option) => option.fromPlayerId || ["ron", "pon"].includes(option.type));
 const canUseTsumogiriShortcut = (gameState, viewerPlayerId) => {
   const player = getCurrentPlayer(gameState);
   return gameState.phase === "waitingForHumanDiscard" &&
@@ -1756,6 +1760,20 @@ const canUseTsumogiriShortcut = (gameState, viewerPlayerId) => {
     player?.id === viewerPlayerId &&
     player?.type === "human" &&
     Boolean(player.drawnTile);
+};
+const formatRoundLabel = (state) => {
+  const round = state?.round ?? {};
+  const honba = Number(round.honba ?? state?.honba ?? 0);
+  let base = state?.handLog?.roundLabel || "";
+  if (isTsumoLossless3maState(state)) {
+    const index = Number(round.hanchanRoundIndex ?? 0);
+    base = TSUMO_LOSSLESS_ROUNDS[index] || base || "東1局";
+  } else {
+    const wind = round.roundWind === "south" ? "南" : round.roundWind === "west" ? "西" : round.roundWind === "north" ? "北" : "東";
+    const handNumber = Math.max(1, Number(round.handNumber ?? 1));
+    base = `${wind}${handNumber}局`;
+  }
+  return `${base}${honba > 0 ? `（${honba}本場）` : ""}`;
 };
 const getSeatRoleLabel = (state, playerId) => {
   const players = state?.players ?? [];
@@ -1775,7 +1793,8 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
   if (gameState.screen && gameState.screen !== "game") return fail("対局画面ではありません");
   if (gameState.handLog?.result) return fail("結果画面を表示中です");
   if (gameState.phase === "showingWinAnnouncement" || gameState.phase === "showingFlowerAnnouncement") return fail("演出中です");
-  if (gameState.pendingAction) return fail("pendingAction が残っています");
+  const pendingRiichiChoice = isRiichiChoicePending(gameState.pendingAction);
+  if (gameState.pendingAction && !pendingRiichiChoice) return fail("pendingAction が残っています");
   if (!["waitingForHumanDiscard", "waitingForRiichiDiscard", "playing"].includes(gameState.phase)) return fail(`打牌フェーズではありません (${gameState.phase})`);
   const player = getCurrentPlayer(gameState);
   if (!player) return fail("現在プレイヤーが見つかりません");
@@ -1915,7 +1934,7 @@ const createInitialGameState = (players) => {
     doraIndicators: [],
     uraDoraIndicators: [],
     kanCount: 0,
-    round: { roundWind: "east", handNumber: 1, dealerPlayerId: players[0]?.id ?? "" },
+    round: { roundWind: "east", handNumber: 1, hanchanRoundIndex: 0, honba: 0, dealerPlayerId: players[0]?.id ?? "" },
     currentPlayerIndex: 0,
     turnIndex: 0,
     isWaitingForHumanAction: false,
@@ -4217,19 +4236,23 @@ class GameController {
     this.state.settings.ruleConfig = ruleConfig;
     Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownSeconds: null, resultAutoCloseHandled: false, resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
+    if (!preserveScores) this.state.riichiStickCount = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
     this.stopAllClocks();
     if (!preserveScores) {
+      this.state.round.roundWind = "east";
       this.state.round.handNumber = 1;
+      this.state.round.hanchanRoundIndex = 0;
+      this.state.round.honba = 0;
       this.state.round.dealerPlayerId = this.state.players[0]?.id ?? "";
     }
     const startingScore = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
-    for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0 });
+    for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0 });
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
     this.state.handLog = {
       handId: `east-${this.state.round.handNumber}-${Date.now()}`,
-      roundLabel: `東場`,
+      roundLabel: formatRoundLabel(this.state),
       dealerId: this.state.round.dealerPlayerId,
       events: [],
       initialSeatOrder: this.state.players.map((p) => p.id),
@@ -4249,7 +4272,10 @@ class GameController {
   }
   startNextHand() {
     const result = this.state.handLog.result;
+    const dealerWon = result?.type === "win" && result.winnerId === this.state.round.dealerPlayerId;
+    const isDraw = result?.type === "exhaustiveDraw";
     const nextDealerId = result?.type === "win" ? result.winnerId : this.state.round.dealerPlayerId;
+    this.state.round.honba = dealerWon || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
     this.state.round.dealerPlayerId = nextDealerId;
     this.state.round.handNumber++;
     console.log("[NextHand]", nextDealerId);
@@ -4493,6 +4519,7 @@ class GameController {
       return;
     }
     this.state.discardDebugMessage = "";
+    const discardWithoutRiichiFromChoice = isRiichiChoicePending(this.state.pendingAction) && this.state.phase !== "waitingForRiichiDiscard";
     if (!player) {
       console.warn("[Discard] blocked: current player missing", { tileId, phase: this.state.phase });
       return;
@@ -4554,6 +4581,7 @@ class GameController {
     }
     const discardType = drawn ? "tsumogiri" : "tedashi";
     player.discardedTiles.push({ tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex });
+    if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
     if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
@@ -4572,6 +4600,11 @@ class GameController {
     appendReplaySnapshot(this.state);
     console.log("[Discard]", player.id, tile, discardType);
     if (isRiichiDiscardPhase) {
+      if (isTsumoLossless3maState(this.state) && !player.riichiStickPaid) {
+        player.score = Number(player.score || 0) - 1000;
+        player.riichiStickPaid = true;
+        this.state.riichiStickCount = Number(this.state.riichiStickCount || 0) + 1;
+      }
       player.isRiichi = true;
       player.ippatsu = true;
       player.riichiTurnIndex = this.state.turnIndex;
@@ -4645,6 +4678,19 @@ class GameController {
     const meldTiles = winner.melds.flatMap((meld) => meld.tiles ?? []);
     const winningTiles = [...input.winningTiles, ...(input.drawnTile ? [input.drawnTile] : []), ...meldTiles].filter((t) => !isFlowerTile(t));
     const score = input.scoreResult ?? this.ruleEngine.calculateScore(this.state, winner, { ...input, winnerId: winner.id, dealerPlayerId: this.state.round.dealerPlayerId, playerIds: this.state.players.map((p) => p.id), winningTiles, nukiDoraCount: winner.nukiDoraTiles.length, nukiDoraTiles: winner.nukiDoraTiles });
+    if (isTsumoLossless3maState(this.state)) {
+      const riichiStickCount = Number(this.state.riichiStickCount || 0);
+      const riichiStickPoints = riichiStickCount * 1000;
+      if (riichiStickPoints > 0) {
+        score.payments ??= Object.fromEntries(this.state.players.map((p) => [p.id, 0]));
+        score.payments[winner.id] = Number(score.payments[winner.id] || 0) + riichiStickPoints;
+        score.paymentDeltas = Object.entries(score.payments).map(([playerId, delta]) => ({ playerId, delta }));
+        score.winnerGain = Number(score.payments[winner.id] || 0);
+        score.riichiStickCount = riichiStickCount;
+        score.riichiStickPoints = riichiStickPoints;
+        this.state.riichiStickCount = 0;
+      }
+    }
     applyWinPayments(this.state, winner.id, input.winType, score, input.discarderId);
     let isFeverContinuation = false;
     if (winner.feverRiichiActive) {
@@ -5194,20 +5240,18 @@ class GameController {
 
 const renderActionPrompt = (pending, state = null) => {
   const viewerId = state ? getLocalHumanPlayerId(state) : null;
-  const showTsumogiri = state && viewerId && canUseTsumogiriShortcut(state, viewerId);
   if (!pending?.options?.length) {
-    return showTsumogiri ? `<section class="action-prompt mobile-action-prompt"><div class="actions"><button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button></div></section>` : "";
+    return "";
   }
   if (viewerId && pending.playerId && pending.playerId !== viewerId) {
-    return showTsumogiri ? `<section class="action-prompt mobile-action-prompt"><div class="actions"><button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button></div></section>` : "";
+    return "";
   }
   if (pending.options.some((option) => option.type === "ron")) {
     console.log("[Ron] available", { playerId: pending.playerId, options: pending.options });
   }
   const labels = { ron: "ロン", tsumo: "ツモ", riichi: "リーチ", pon: "ポン", kan: "カン" };
   const options = pending.options.map((option) => `<button type="button" data-confirm-action="${option.type}">${labels[option.type] ?? option.type}</button>`).join("");
-  const tsumogiri = showTsumogiri ? `<button type="button" class="tsumogiri-action" data-tsumogiri-action>ツモ切り</button>` : "";
-  return `<section class="action-prompt mobile-action-prompt"><div class="actions">${options}${tsumogiri}<button type="button" data-skip-action>スキップ</button></div></section>`;
+  return `<section class="action-prompt mobile-action-prompt"><div class="actions">${options}<button type="button" data-skip-action>スキップ</button></div></section>`;
 };
 const renderHandLog = (state) => {
   const name = (id) => state.players.find((p) => p.id === id)?.name ?? id;
@@ -5347,7 +5391,6 @@ class GameView {
     bindFastButton("[data-nuki-tile-id]", (b) => this.handlers.onNuki(b.dataset.nukiTileId));
     bindFastButton("[data-confirm-action]", (b) => this.handlers.onConfirmAction(b.dataset.confirmAction));
     bindFastButton("[data-skip-action]", () => this.handlers.onSkipAction());
-    bindFastButton("[data-tsumogiri-action]", () => this.handlers.onTsumogiri?.());
     bindFastButton("[data-force-discard-resync]", () => this.handlers.onForceDiscardResync?.());
     const handleResultOkPointer = (event) => {
       event.preventDefault();
@@ -6021,8 +6064,14 @@ class GameView {
     </aside>`;
   }
   finalResult(state) {
+    const award = state.finalResult?.riichiStickAward || state.handLog?.result?.riichiStickAward || null;
+    const awardPlayer = award?.winnerId ? state.players.find((player) => player.id === award.winnerId) : null;
+    const riichiStickAwardLine = award?.points > 0
+      ? `<p>リーチ棒: ${escapeHtml(awardPlayer?.name || "トップ")} +${Number(award.points || 0)}点</p>`
+      : "";
     return `<section class="score-result result-modal"><h2>最終結果</h2>
       <ul>${state.players.map((player) => `<li>${player.name}: ${player.score}点</li>`).join("")}</ul>
+      ${riichiStickAwardLine}
       <p>累積レーキ: ${state.rakePool ?? 0}点</p>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
@@ -6034,7 +6083,7 @@ class GameView {
   }
   centerInfoClean(state, dealer) {
     const baibaDetails = getVisibleBaibaMultiplierDetails(state);
-    const roundLabel = `東場${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
+    const roundLabel = `${formatRoundLabel(state)}${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
     const playerRows = (state.players ?? []).map((player) => {
       const role = getSeatRoleLabel(state, player.id);
       return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${player.score}点</strong><em>${role}</em></li>`;
@@ -6042,9 +6091,11 @@ class GameView {
     const doraTiles = (state.doraIndicators ?? []).map((tile) => renderTileView({ tile })).join("");
     const liveWallCount = state.liveWall?.length ?? 0;
     const rinshanWallCount = state.rinshanWall?.length ?? 0;
+    const riichiStickLine = isTsumoLossless3maState(state) ? `<div class="center-riichi-sticks">リーチ棒 x${Number(state.riichiStickCount || 0)}</div>` : "";
     return `<section class="center-info">
       <div class="round-label">${roundLabel}</div>
       <ul class="center-scores">${playerRows}</ul>
+      ${riichiStickLine}
       <div class="center-bottom-info">
         <div class="center-wall"><span>山 ${liveWallCount}枚</span><span>嶺上 ${rinshanWallCount}枚</span></div>
         <div class="center-dora"><span>ドラ表示牌</span><div class="center-dora-tiles">${doraTiles || "なし"}</div></div>
@@ -6090,7 +6141,6 @@ class GameView {
     const playerName = seatView?.playerName ?? player.name;
     const discards = seatView?.discards ?? player.discardedTiles;
     return `<section class="discard-area discard-${seat}" aria-label="${playerName}の捨て牌">
-      <div class="discard-title">${playerName}</div>
       <div class="discard-grid">${discards.map((discard) => `<span class="discard ${discard.discardType === "tsumogiri" ? "tsumogiri" : "tedashi"} ${discard.isRiichiDiscard ? "riichi-discard" : ""}">${renderTileView({ tile: discard.tile, isTsumogiri: discard.discardType === "tsumogiri" })}</span>`).join("")}</div>
     </section>`;
   }
@@ -6159,6 +6209,7 @@ class GameView {
     const hasPayment = Array.isArray(result.payments)
       ? result.payments.some((payment) => Number(payment.delta || 0) !== 0)
       : Object.values(result.payments || {}).some((delta) => Number(delta || 0) !== 0);
+    const carryRiichiStickCount = isTsumoLossless3maState(state) ? Number(state.riichiStickCount || 0) : 0;
     return `<section class="score-result result-modal"><h2>流局</h2>
       <h3>テンパイ状況</h3>
       ${tenpaiCount === 0 ? `<p class="score-note">全員ノーテン</p>` : ""}
@@ -6174,6 +6225,7 @@ class GameView {
       }).join("")}</div>
       <h3>点数移動</h3>
       ${hasPayment ? `<ul>${this.paymentRows(state, result.payments ?? {})}</ul>` : `<p>点数移動なし</p>`}
+      ${carryRiichiStickCount > 0 ? `<p>リーチ棒 x${carryRiichiStickCount} は次局へ持ち越し</p>` : ""}
       <h3>現在点数</h3>
       <ul>${state.players.map((player) => `<li>${player.name}: ${result.finalScores?.[player.id] ?? player.score}点</li>`).join("")}</ul>
       ${renderResultOkButton(state)}
@@ -6196,6 +6248,58 @@ class GameView {
         ? Object.fromEntries(score.payments.map((payment) => [payment.playerId, payment.delta]))
         : score.payments ?? {};
     const signed = (value = 0) => `${value > 0 ? "+" : ""}${value}点`;
+    if (isTsumoLossless3maState(state)) {
+      const yakuRowsForAllRed = yakuList.map((yaku) => {
+        const suffix = yaku.detail ? `（${escapeHtml(yaku.detail)}）` : "";
+        return `<li>${escapeHtml(yaku.name)}${suffix} ${Number(yaku.han || 0) ? `${Number(yaku.han)}翻` : ""}</li>`;
+      });
+      const doraNormal = Number(score.dora?.normal ?? 0);
+      const doraColored = Number(score.dora?.colored ?? 0);
+      const doraNuki = Number(score.dora?.nuki ?? 0);
+      const doraUra = winnerRiichi ? Number(score.dora?.ura ?? 0) : 0;
+      if (doraNormal > 0) yakuRowsForAllRed.push(`<li>ドラ ${doraNormal}翻</li>`);
+      if (doraColored > 0) yakuRowsForAllRed.push(`<li>赤・色ドラ ${doraColored}翻</li>`);
+      if (doraNuki > 0) yakuRowsForAllRed.push(`<li>抜きドラ ${doraNuki}翻</li>`);
+      if (doraUra > 0) yakuRowsForAllRed.push(`<li>裏ドラ ${doraUra}翻</li>`);
+      const chipSettlement = result?.chipSettlement || score.chipSettlement;
+      const tobiPrize = result?.tobiPrize || score.tobiPrize;
+      const settledChipPoint = chipSettlement?.chipPoint ?? tobiPrize?.chipPoint ?? null;
+      const chipPoint = settledChipPoint !== null
+        ? Number(settledChipPoint)
+        : Number(state.settings?.ruleConfig?.chipValuePoints || 5000) / 1000 * Number(state.settings?.pointRate || 1);
+      const currentChipPayments = Object.fromEntries(state.players.map((player) => [player.id, 0]));
+      [chipSettlement?.payments, tobiPrize?.payments].forEach((paymentSource) => {
+        Object.entries(paymentSource || {}).forEach(([playerId, delta]) => {
+          currentChipPayments[playerId] = Math.round((Number(currentChipPayments[playerId] || 0) + Number(delta || 0)) * 10) / 10;
+        });
+      });
+      const totalChipPayments = state.hanchanClubPointPayments || currentChipPayments;
+      const pointToChips = (points) => chipPoint ? Math.round((Number(points || 0) / chipPoint) * 10) / 10 : 0;
+      const signedChips = (chips = 0) => `${chips > 0 ? "+" : ""}${chips}枚`;
+      const scoreLabel = `${score.limitType && score.limitType !== "通常" ? `${score.limitType} ` : ""}${score.finalPoints ?? score.totalPoints ?? 0}点`;
+      return `<section class="score-result result-modal allred-score-result"><h2>和了結果</h2>
+        <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
+        <div class="allred-result-grid">
+          <div><strong>手牌（13枚）</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>
+          <div><strong>和了牌</strong><div class="result-tiles">${displayWinningTile ? renderTileView({ tile: displayWinningTile, isDrawnTile: true }) : ""}</div></div>
+          <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
+          <div><strong>裏ドラ表示牌</strong><div class="result-tiles">${winnerRiichi ? state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし" : "リーチなし"}</div></div>
+        </div>
+        <h3>役一覧</h3>
+        <ul>${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
+        <h3>点数</h3>
+        <p class="final-score-line">${scoreLabel}${Number(score.riichiStickPoints || result?.riichiStickPoints || 0) > 0 ? ` / リーチ棒 +${Number(score.riichiStickPoints || result?.riichiStickPoints)}点` : ""}</p>
+        <h3>点数の移動</h3>
+        <ul>${state.players.map((player) => `<li>${player.name} <strong>${player.score}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}</ul>
+        <h3>祝儀の移動</h3>
+        <ul>${state.players.map((player) => {
+          const totalChips = pointToChips(totalChipPayments[player.id]);
+          const currentChips = pointToChips(currentChipPayments[player.id]);
+          return `<li>${player.name} ${signedChips(totalChips)}（${signedChips(currentChips)}）</li>`;
+        }).join("")}</ul>
+        ${renderResultOkButton(state)}
+      </section>`;
+    }
     const yakuRows = yakuList.map((yaku) => {
       const suffix = yaku.detail ? `（${escapeHtml(yaku.detail)}）` : "";
       return `<li>${escapeHtml(yaku.name)}${suffix}</li>`;
@@ -6288,7 +6392,6 @@ view = new GameView(document.querySelector("#game-root"), {
   onDraw: () => controller.advanceUntilHumanAction(),
   onDiscard: (id) => controller.discardTile(id),
   onForceDiscardResync: () => controller.resyncSocketGameState("manualDiscardResync"),
-  onTsumogiri: () => controller.handleTsumogiriShortcut(),
   onNuki: (id) => controller.performNukiDora(getCurrentPlayer(controller.getState()).id, id),
   onConfirmAction: (type) => controller.confirmPendingAction(type),
   onSkipAction: () => controller.skipPendingAction(),

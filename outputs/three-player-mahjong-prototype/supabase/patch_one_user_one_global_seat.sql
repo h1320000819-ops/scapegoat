@@ -1,6 +1,6 @@
--- One account can occupy only one seat across a club.
+-- Enforce one account = one seat across all tables.
 -- Run this whole file in Supabase SQL Editor.
--- SQL-language only. No PL/pgSQL variables and no dollar-quoted bodies.
+-- Pressed seat wins: when a user sits, every other seat held by that user is released.
 
 drop function if exists public.shared_sit_at_table(uuid, integer);
 
@@ -58,7 +58,7 @@ as '
         display_name = null,
         is_last_hand_declared = false,
         updated_at = now()
-    from target_table t, target_seat ts
+    from target_seat ts
     where s.user_id = auth.uid()
       and not (s.table_id = ts.table_id and s.seat_index = ts.seat_index)
     returning s.table_id
@@ -70,9 +70,9 @@ as '
         display_name = null,
         is_last_hand_declared = false,
         updated_at = now()
-    from target_seat
-    where s.table_id = target_seat.table_id
-      and s.seat_index = target_seat.seat_index
+    from target_seat ts
+    where s.table_id = ts.table_id
+      and s.seat_index = ts.seat_index
     returning s.table_id
   ),
   refreshed_released_tables as (
@@ -119,4 +119,4 @@ as '
 
 grant execute on function public.shared_sit_at_table(uuid, integer) to authenticated;
 
-select 'patch_one_account_one_seat_autostart_ok' as result;
+select 'patch_one_user_one_global_seat_ok' as result;

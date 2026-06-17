@@ -69,12 +69,6 @@ begin
       is_last_hand_declared = false,
       updated_at = now()
   where s.user_id = v_user_id
-    and exists (
-      select 1
-      from public.tables t
-      where t.table_id = s.table_id
-        and t.club_id = v_table_club_id
-    )
     and not (s.table_id = p_table_id and s.seat_index = v_target_seat_index);
 
   update public.table_seats

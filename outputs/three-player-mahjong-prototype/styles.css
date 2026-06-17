@@ -447,6 +447,14 @@ button:hover {
   text-shadow: 0 0 8px rgba(255, 104, 38, 0.9);
 }
 
+.center-riichi-sticks {
+  color: #fef3c7;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  margin-top: 2px;
+}
+
 .hand-row {
   align-items: center;
   background: rgba(0, 0, 0, 0.18);
@@ -654,7 +662,7 @@ button:hover {
   background: rgba(5, 13, 22, 0.2);
   border-radius: 8px;
   height: var(--river-height);
-  padding: 8px;
+  padding: 4px;
   position: absolute;
   transform-origin: center center;
   width: var(--river-width);
@@ -679,20 +687,14 @@ button:hover {
   transform: translateY(-50%) rotate(-90deg);
 }
 
-.discard-title {
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 12px;
-  font-weight: 800;
-  margin-bottom: 5px;
-}
-
 .discard-grid {
   display: grid;
   gap: var(--discard-gap);
   grid-auto-flow: row;
   grid-template-columns: repeat(6, var(--discard-tile-width));
   grid-template-rows: repeat(4, var(--discard-tile-height));
-  justify-content: start;
+  justify-content: center;
+  align-content: center;
   min-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3);
   overflow: hidden;
 }
@@ -1633,6 +1635,35 @@ button:hover {
   width: 680px;
 }
 
+.allred-score-result {
+  max-height: min(92dvh, 760px);
+  max-width: min(94vw, 760px);
+  overflow: auto;
+  padding: 14px;
+  width: 760px;
+}
+
+.allred-result-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.allred-score-result h3 {
+  margin: 10px 0 4px;
+}
+
+.allred-score-result ul {
+  margin: 4px 0;
+}
+
+.allred-score-result .result-tiles {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
 .score-winner-line {
   font-size: 18px;
   font-weight: 800;
@@ -2085,10 +2116,6 @@ button:hover {
     width: var(--river-width);
   }
 
-  .discard-title {
-    display: none;
-  }
-
   .discard-grid {
     grid-template-columns: repeat(6, var(--discard-tile-width));
     grid-template-rows: repeat(4, var(--discard-tile-height));
@@ -2228,12 +2255,6 @@ button:hover {
     min-width: 64px;
     padding: 8px 10px;
     touch-action: manipulation;
-  }
-
-  .action-prompt .actions .tsumogiri-action {
-    background: #2e90fa;
-    border-color: #84caff;
-    color: #fff;
   }
 
   .assist-controls {

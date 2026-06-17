@@ -1,13 +1,13 @@
-const CACHE_NAME = "anmika-pwa-20260618-allred-win-a";
+const CACHE_NAME = "anmika-pwa-20260618-one-global-seat-a";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260618-pwa-mobile-a",
-  "/runtime/app.js?v=20260618-allred-win-a",
-  "/runtime/online-debug.js?v=20260618-seat-point-a",
-  "/runtime/pwa.js?v=20260618-allred-win-a",
+  "/styles.css?v=20260618-riichi-discard-round-a",
+  "/runtime/app.js?v=20260618-riichi-discard-round-a",
+  "/runtime/online-debug.js?v=20260618-one-global-seat-a",
+  "/runtime/pwa.js?v=20260618-auto-refresh-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg"
