@@ -1775,6 +1775,14 @@ button:hover {
     top: 8px;
   }
 
+  .seat-top {
+    top: 24px;
+  }
+
+  .seat-top .hand-row {
+    transform: translateY(-8px);
+  }
+
   .seat-right {
     right: 10px;
     width: 150px;
@@ -1862,7 +1870,7 @@ button:hover {
 
   .seat-top {
     max-width: 620px;
-    top: -12px;
+    top: 12px;
     width: min(78vw, 620px);
   }
 
@@ -2067,7 +2075,7 @@ button:hover {
   }
 
   .seat-top .hand-row {
-    transform: translateY(-28px);
+    transform: translateY(-8px);
   }
 
   .seat-right .hand-row {
