@@ -2505,7 +2505,6 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     const isDealer = player.id === state.round?.dealerPlayerId;
     const honba = Number(state.round?.honba ?? state.honba ?? 0);
     const payments = Object.fromEntries(ensureArray(state.players).map((p) => [p.id, 0]));
-    const chipSettlement = null;
     let basePoints = 0;
     let limitType = "通常";
     let childPay = 0;
@@ -2550,7 +2549,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
       ].filter(Boolean),
       dora: { normal: normalDora, colored, nuki, ura: uraDora },
       bonuses: { honba: honba * 1000, chipPending: false },
-      chipSettlement,
+      chipSettlement: null,
       baibaMultiplier: 1,
       payments,
       paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
