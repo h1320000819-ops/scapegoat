@@ -944,10 +944,15 @@ const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
     },
   };
 };
-const truncatePointUnitTowardZero = (value) => {
+const roundPlayerPointDeltaInClubFavor = (value) => {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return 0;
-  return (numeric < 0 ? Math.ceil(numeric * 10) : Math.floor(numeric * 10)) / 10;
+  return Math.floor(numeric * 10) / 10;
+};
+const roundClubPointCreditInClubFavor = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.ceil(numeric * 10) / 10;
 };
 const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   const rate = Number(pointRate || 1);
@@ -963,7 +968,7 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
     const rawValue = Number(delta || 0) * rate;
     if (!rawValue) continue;
     rawClubPointDeltas[playerId] = Math.round(rawValue * 1000) / 1000;
-    const pointValue = truncatePointUnitTowardZero(rawValue);
+    const pointValue = roundPlayerPointDeltaInClubFavor(rawValue);
     if (!pointValue) continue;
     allPointDeltas[playerId] = pointValue;
     const player = playerById.get(playerId);
@@ -984,8 +989,8 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   let rakePlayerDeduction = 0;
   if (shouldApplyRake) {
     rakeRaw = winnerRawGain * (rakePercent / 100);
-    const winnerAfterRake = truncatePointUnitTowardZero(winnerRawGain - rakeRaw);
-    rakePlayerDeduction = truncatePointUnitTowardZero(winnerRawGain) - winnerAfterRake;
+    const winnerAfterRake = roundPlayerPointDeltaInClubFavor(winnerRawGain - rakeRaw);
+    rakePlayerDeduction = roundPlayerPointDeltaInClubFavor(winnerRawGain) - winnerAfterRake;
     deltas[winnerId] = winnerAfterRake;
     allPointDeltas[winnerId] = winnerAfterRake;
   }
@@ -1010,7 +1015,7 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
         rakeRaw: scoreRakeApplied ? Math.round(scoreRakePoints * rate * 1000) / 1000 : Math.round(rakeRaw * 1000) / 1000,
         rakeGamePoints: scoreRakeApplied ? Math.round(scoreRakePoints * 1000) / 1000 : null,
         playerDeduction: rakePlayerDeduction,
-        roundingPolicy: "0.1pt未満はプレイヤー側に渡さずクラブ側へ寄せる",
+        roundingPolicy: "小数第2位以下は常にクラブ側へ寄せる",
       },
     },
   };
@@ -1079,7 +1084,7 @@ const syncAnmikaRakeLogEffect = async (room, result, pointRate = 1) => {
   const table = await getRoomTableContext(room);
   if (!table?.club_id) return false;
   const winner = asArray(room.state.players).find((player) => player.id === winnerId);
-  const rakeAmount = Math.round(rakePoints * Number(pointRate || 1) * 10) / 10;
+  const rakeAmount = roundClubPointCreditInClubFavor(rakePoints * Number(pointRate || 1));
   await supabaseRest("/club_rake_logs", {
     method: "POST",
     prefer: "return=minimal",

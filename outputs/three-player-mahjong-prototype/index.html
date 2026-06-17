@@ -166,7 +166,10 @@
     }
     if (location.pathname === "/online-debug" || location.pathname === "/online-debug/" || (location.pathname.startsWith("/table/") && !isLocalDebugGameRoute)) {
       const tableId = pathTableId;
-      const nextUrl = `${location.origin}/online-debug/index.html${tableId ? `?tableId=${encodeURIComponent(tableId)}` : ""}`;
+      const params = new URLSearchParams(location.search);
+      if (tableId) params.set("tableId", tableId);
+      const query = params.toString();
+      const nextUrl = `${location.origin}/online-debug/index.html${query ? `?${query}` : ""}`;
       location.replace(nextUrl);
       return;
     }
@@ -179,7 +182,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260617-rinshan-replay-a";
+    const assetVersion = "20260617-last-hand-table-list-a";
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>

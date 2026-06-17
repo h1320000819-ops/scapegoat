@@ -583,7 +583,7 @@
       if (path.includes("/online-debug/")) return new URL(`./index.html${query}`, window.location.href).href;
       return new URL(`online-debug/index.html${query}`, window.location.href).href;
     }
-    return `${location.origin}/online-debug${query}`;
+    return `${location.origin}/online-debug/index.html${query}`;
   };
   const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const debugTileAssetPath = (fileName) => (location.protocol === "file:" ? `../public/tiles/${fileName}` : `/tiles/${fileName}`);
@@ -4032,17 +4032,23 @@
     if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
     updateRangeLabels();
     probeGameServer().catch(() => {});
+    const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
+    if (state.user && state.accessToken && returnClubId) {
+      setActiveClubId(returnClubId);
+      localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);
+      document.body.dataset.screen = "club-home";
+    }
     render();
     if (state.user && state.accessToken) {
       await loadClubs().catch((error) => showError(JA_MESSAGES.actionFailed, error));
       await settleRecentlyLeftTable().catch((error) => showError("ラス半終了後の退席処理に失敗しました", error));
       startClubPolling();
-      const returnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY);
       if (returnClubId && state.clubs.some((club) => club.club_id === returnClubId)) {
         setActiveClubId(returnClubId);
         localStorage.setItem(DEBUG_RETURN_CLUB_KEY, returnClubId);
         document.body.dataset.screen = "club-home";
         await loadTables().catch((error) => showError(JA_MESSAGES.actionFailed, error));
+        render();
       }
       const tableIdFromUrl = normalizeRemoteTableId(new URLSearchParams(location.search).get("tableId"));
       if (tableIdFromUrl) {

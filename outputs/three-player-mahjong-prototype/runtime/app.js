@@ -456,7 +456,7 @@ const forgetLocalOnlineDebugTable = (tableId) => {
 const onlineDebugLobbyUrl = (clubId = "") => {
   const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
   if (globalThis.location?.protocol === "file:") return new URL(`online-debug/index.html${query}`, globalThis.location.href).href;
-  return `${globalThis.location?.origin || ""}/online-debug${query}`;
+  return `${globalThis.location?.origin || ""}/online-debug/index.html${query}`;
 };
 const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
