@@ -9,6 +9,10 @@ alter table public.club_members
   alter column point_balance type numeric(14, 1)
   using point_balance::numeric;
 
+alter table public.clubs
+  alter column point_balance type numeric(14, 1)
+  using point_balance::numeric;
+
 alter table public.club_points
   alter column amount type numeric(14, 1)
   using amount::numeric;
@@ -45,6 +49,8 @@ declare
   v_item record;
   v_user_id uuid;
   v_amount numeric(14, 1);
+  v_total_delta numeric(14, 1) := 0;
+  v_club_delta numeric(14, 1) := 0;
 begin
   if p_club_id is null then
     raise exception 'club_id is required';
@@ -68,6 +74,8 @@ begin
     if v_amount = 0 then
       continue;
     end if;
+
+    v_total_delta := round((v_total_delta + v_amount)::numeric, 1);
 
     update public.club_members
     set point_balance = round((coalesce(point_balance, 0) + v_amount)::numeric, 1)
@@ -97,6 +105,17 @@ begin
       coalesce(p_metadata, '{}'::jsonb)
     );
   end loop;
+
+  v_club_delta := round((-v_total_delta)::numeric, 1);
+  if v_club_delta <> 0 then
+    update public.clubs
+    set point_balance = round((coalesce(point_balance, 0) + v_club_delta)::numeric, 1)
+    where club_id = p_club_id;
+
+    if not found then
+      raise exception 'club not found: %', p_club_id;
+    end if;
+  end if;
 end;
 $$;
 

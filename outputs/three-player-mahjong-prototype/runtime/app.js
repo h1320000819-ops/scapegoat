@@ -1462,6 +1462,9 @@ const buildSimpleReplaySnapshots = (replay) => {
   return snapshots;
 };
 const getReplaySnapshots = (replay) => {
+  const isHanchanReplay = replay?.summary?.scope === "hanchan"
+    || (replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && (replay?.summary?.handMarkers?.length ?? 0) > 1);
+  if (isHanchanReplay && replay?.snapshots?.length) return replay.snapshots;
   const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
   if (simpleSnapshots.length) return simpleSnapshots;
   if (replay?.snapshots?.length) return replay.snapshots;
@@ -2732,6 +2735,22 @@ const calculateExhaustiveDrawPayments = (state) => {
 };
 const applyWinPayments = (gameState, winnerId, winType, scoreResult, loserId) => {
   const activeTable = gameState.activeTableId ? loadTables().find((table) => table.id === gameState.activeTableId) : null;
+  if (isTsumoLossless3maState(gameState)) {
+    const presetPayments = Array.isArray(scoreResult.paymentDeltas)
+      ? Object.fromEntries(scoreResult.paymentDeltas.map((payment) => [payment.playerId, Number(payment.delta || 0)]))
+      : { ...(scoreResult.payments || {}) };
+    const payments = Object.fromEntries(gameState.players.map((player) => [player.id, Number(presetPayments[player.id] || 0)]));
+    scoreResult.payments = payments;
+    scoreResult.paymentDeltas = Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta }));
+    scoreResult.winnerGain = payments[winnerId] ?? 0;
+    scoreResult.originalWinnerGain = scoreResult.winnerGain;
+    scoreResult.rakePoints = 0;
+    scoreResult.rakeAmount = 0;
+    scoreResult.rakePercent = 0;
+    for (const player of gameState.players) player.score += payments[player.id] ?? 0;
+    gameState.log.unshift(`点数移動 ${scoreResult.paymentDeltas.map((p) => `${p.playerId}:${p.delta >= 0 ? "+" : ""}${p.delta}`).join(" ")}`);
+    return gameState;
+  }
   const totalPoints = scoreResult.finalPoints ?? scoreResult.totalPoints;
   const payments = Object.fromEntries(gameState.players.map((player) => [player.id, 0]));
   if (winType === "tsumo") {
@@ -3639,8 +3658,16 @@ class GameController {
         saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", socketUrl: serverUrl, lastReconnectReason: "reuseExistingSocket", lastError: "" });
         await waitForSocketConnected(this.gameSocket, SOCKET_CONNECT_TIMEOUT_MS + 15000);
       }
-      saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: this.gameSocket.id, socketUrl: serverUrl, lastReconnectReason: "reuseExistingSocket", lastError: "" });
-      return;
+      saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: this.gameSocket.id, socketUrl: serverUrl, lastReconnectReason: "replaceExistingSocketForFreshJoin", lastError: "" });
+      this.gameSocket.off("game:state");
+      this.gameSocket.off("game:needInitialState");
+      this.gameSocket.off("server:shutdown");
+      this.gameSocket.off("connect");
+      this.gameSocket.off("disconnect");
+      this.gameSocket.off("connect_error");
+      this.gameSocket.disconnect();
+      this.gameSocket = null;
+      globalThis.anmikaGameSocket = null;
     }
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
@@ -3838,6 +3865,22 @@ class GameController {
         }
       }, 1200);
     }
+    setTimeout(() => {
+      const latest = loadOnlineSync();
+      if (
+        latest?.transport === "socketio" &&
+        latest?.tableId === sync.tableId &&
+        socket.connected &&
+        this.state.phase === "onlineLoading"
+      ) {
+        this.resyncSocketGameState("startupWatchdog").then((synced) => {
+          if (!synced && this.state.phase === "onlineLoading") sendInitialSocketState("startupWatchdog");
+        }).catch((error) => {
+          console.warn("[SocketGame] startup watchdog resync failed", error);
+          if (this.state.phase === "onlineLoading") sendInitialSocketState("startupWatchdog");
+        });
+      }
+    }, 1800);
   }
   async resyncSocketGameState(reason = "resync") {
     const sync = loadOnlineSync();
@@ -5980,8 +6023,13 @@ class GameView {
     const replayViewerId = getValidReplayViewerId(snapshot, state.replayViewerId, replay);
     const viewerOptions = (replay.summary?.players ?? displayState.players.map((player) => ({ playerId: player.id, name: player.name }))).map((player) => `<option value="${player.playerId}" ${replayViewerId === player.playerId ? "selected" : ""}>${player.name}</option>`).join("");
     const handMarkers = replay.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
+    const handButtonItems = handMarkers.map((marker, markerIndex) => {
+      const nextIndex = handMarkers[markerIndex + 1]?.index ?? snapshots.length;
+      const active = index >= marker.index && index < nextIndex;
+      return `<button type="button" data-replay-index="${marker.index}" ${active ? "class=\"active\"" : ""}>${escapeHtml(marker.label)}</button>`;
+    }).join("");
     const handButtons = handMarkers.length > 1
-      ? `<div class="replay-hand-selector" data-replay-control>${handMarkers.map((marker) => `<button type="button" data-replay-index="${marker.index}" ${index >= marker.index && index < ((handMarkers[handMarkers.indexOf(marker) + 1]?.index) ?? snapshots.length) ? "class=\"active\"" : ""}>${escapeHtml(marker.label)}</button>`).join("")}</div>`
+      ? `<div class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span>${handButtonItems}</div>`
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
@@ -5993,11 +6041,11 @@ class GameView {
         <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
         <strong>${index + 1} / ${snapshots.length}</strong>
         <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
+        ${handButtons}
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
       </div>
-      ${handButtons}
     </section>`;
   }
   clubListScreen(state) {
@@ -6102,15 +6150,40 @@ class GameView {
     </aside>`;
   }
   finalResult(state) {
-    const award = state.finalResult?.riichiStickAward || state.handLog?.result?.riichiStickAward || null;
-    const awardPlayer = award?.winnerId ? state.players.find((player) => player.id === award.winnerId) : null;
-    const riichiStickAwardLine = award?.points > 0
-      ? `<p>リーチ棒: ${escapeHtml(awardPlayer?.name || "トップ")} +${Number(award.points || 0)}点</p>`
-      : "";
+    const roundPoint = (value) => {
+      const numeric = Number(value || 0);
+      if (!Number.isFinite(numeric)) return 0;
+      const rounded = Math.round((numeric + Math.sign(numeric) * Number.EPSILON) * 10) / 10;
+      return Object.is(rounded, -0) ? 0 : Number(rounded.toFixed(1));
+    };
+    const formatPoint = (value) => {
+      const rounded = roundPoint(value);
+      const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+      return `${rounded >= 0 ? "+" : ""}${text}pt`;
+    };
+    const umaValues = (() => {
+      const umaType = state.settings?.ruleConfig?.umaType || "20-0--20";
+      if (umaType === "30-0--30") return [30, 0, -30];
+      if (umaType === "20-10--30") return [20, 10, -30];
+      return [20, 0, -20];
+    })();
+    const seatOrder = state.round?.initialSeatOrder || state.players.map((player) => player.id);
+    const ranked = [...state.players].sort((a, b) => {
+      const scoreDiff = Number(b.score || 0) - Number(a.score || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return seatOrder.indexOf(a.id) - seatOrder.indexOf(b.id);
+    });
+    const settlementPoints = {};
+    let lowerTotal = 0;
+    ranked.forEach((player, rankIndex) => {
+      if (rankIndex === 0) return;
+      const pointDelta = roundPoint(Number(player.score || 0) / 1000 - 40 + Number(umaValues[rankIndex] || 0));
+      settlementPoints[player.id] = pointDelta;
+      lowerTotal += pointDelta;
+    });
+    if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
     return `<section class="score-result result-modal"><h2>最終結果</h2>
-      <ul>${state.players.map((player) => `<li>${player.name}: ${player.score}点</li>`).join("")}</ul>
-      ${riichiStickAwardLine}
-      <p>累積レーキ: ${state.rakePool ?? 0}点</p>
+      <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${Number(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
   }
@@ -6339,7 +6412,6 @@ class GameView {
         </div>
         <h3>役一覧</h3>
         <ul>${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
-        <h3>点数</h3>
         <p class="final-score-line">${scoreLabel}</p>
         <h3>点数の移動</h3>
         <ul>${state.players.map((player) => `<li>${player.name} <strong>${player.score}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}</ul>
@@ -6393,15 +6465,10 @@ class GameView {
       <h3>半荘精算</h3>
       <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${formatPoint(item.pointDelta)}pt</li>`).join("")}</ul>
     </section>` : "";
-    const rakePoints = Number(score.rakePoints ?? score.rakeAmount ?? 0);
-    const rakeLine = rakePoints > 0
-      ? `<p class="score-rake-line">レーキ: ${playerName(score.rakePayerId || result?.winnerId)} が ${rakePoints}点支払い（${Number(score.rakePercent || 0)}% / 元の和了収入 ${Number(score.originalWinnerGain ?? 0)}点）</p>`
-      : "";
     return `<section class="score-result result-modal compact-score-result"><h2>和了結果</h2>
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
-      ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント・レーキ精算なし</p>` : ""}
-      ${rakeLine}
+      ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント精算なし</p>` : ""}
       <div class="score-tile-section score-main-tiles score-hand-win-row">
         ${resultHandLineView}
         ${resultWinningTileView}

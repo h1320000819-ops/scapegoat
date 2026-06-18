@@ -1276,12 +1276,15 @@ const buildSimpleReplayPayload = (room, { scope = "hand", initialState = null, e
 const compactReplaySnapshotList = (snapshots, limit) => asArray(snapshots)
   .slice(Math.max(0, asArray(snapshots).length - limit))
   .map(compactStateForReplay);
+const HAND_REPLAY_SNAPSHOT_LIMIT = 260;
+const HANCHAN_REPLAY_SNAPSHOT_LIMIT = 2400;
 const buildRoomReplayPayload = (room) => {
   const state = room?.state;
   if (!room?.tableId || !state?.handLog?.handId) return null;
-  const replaySnapshots = compactReplaySnapshotList(state.replaySnapshots, 220);
-  const hanchanReplaySnapshots = compactReplaySnapshotList(state.hanchanReplaySnapshots, 450);
+  const replaySnapshots = compactReplaySnapshotList(state.replaySnapshots, HAND_REPLAY_SNAPSHOT_LIMIT);
+  const hanchanReplaySnapshots = compactReplaySnapshotList(state.hanchanReplaySnapshots, HANCHAN_REPLAY_SNAPSHOT_LIMIT);
   if (!replaySnapshots.length && !hanchanReplaySnapshots.length) return null;
+  const isAllRedHanchanReplay = isTsumoLossless3maState(state) && hanchanReplaySnapshots.length > replaySnapshots.length;
   return {
     schemaVersion: 1,
     tableId: String(room.tableId),
@@ -1295,7 +1298,7 @@ const buildRoomReplayPayload = (room) => {
       ? compactStateForReplay(state.hanchanReplayInitialState)
       : hanchanReplaySnapshots[0] || null,
     hanchanReplaySnapshots,
-    simpleReplay: buildSimpleReplayPayload(room),
+    simpleReplay: isAllRedHanchanReplay ? null : buildSimpleReplayPayload(room),
     updatedAt: now(),
   };
 };
@@ -1395,14 +1398,14 @@ const appendServerReplaySnapshot = (state) => {
   const last = state.replaySnapshots.at(-1);
   if (last?.version !== snapshot.version || last?.phase !== snapshot.phase || last?.turnIndex !== snapshot.turnIndex) {
     state.replaySnapshots.push(snapshot);
-    if (state.replaySnapshots.length > 220) state.replaySnapshots.splice(0, state.replaySnapshots.length - 220);
+    if (state.replaySnapshots.length > HAND_REPLAY_SNAPSHOT_LIMIT) state.replaySnapshots.splice(0, state.replaySnapshots.length - HAND_REPLAY_SNAPSHOT_LIMIT);
   }
   if (isTsumoLossless3maState(state)) {
     state.hanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
     const lastHanchan = state.hanchanReplaySnapshots.at(-1);
     if (lastHanchan?.version !== snapshot.version || lastHanchan?.phase !== snapshot.phase || lastHanchan?.turnIndex !== snapshot.turnIndex) {
       state.hanchanReplaySnapshots.push(snapshot);
-      if (state.hanchanReplaySnapshots.length > 450) state.hanchanReplaySnapshots.splice(0, state.hanchanReplaySnapshots.length - 450);
+      if (state.hanchanReplaySnapshots.length > HANCHAN_REPLAY_SNAPSHOT_LIMIT) state.hanchanReplaySnapshots.splice(0, state.hanchanReplaySnapshots.length - HANCHAN_REPLAY_SNAPSHOT_LIMIT);
     }
   }
 };
@@ -1560,7 +1563,8 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     return false;
   }
   const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
-  const simpleReplay = buildSimpleReplayPayload(room, {
+  const isHanchanReplay = scope === "hanchan";
+  const simpleReplay = isHanchanReplay ? null : buildSimpleReplayPayload(room, {
     scope,
     initialState: initialState || compactSnapshots[0] || room.state,
     events: room.state?.handLog?.events,
@@ -1582,6 +1586,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
     handMarkers: handMarkersFromSnapshots(compactSnapshots),
     replayFormat: simpleReplay?.format || "snapshot-v1",
+    snapshotCount: compactSnapshots.length,
     ...summary,
   };
   await supabaseRest("/replays", {
@@ -1595,7 +1600,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       summary: replaySummary,
       initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || compactSnapshots[0] || room.state),
       events: simpleReplay?.events || asArray(room.events),
-      snapshots: [],
+      snapshots: isHanchanReplay ? compactSnapshots : [],
     },
   });
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
@@ -1719,10 +1724,20 @@ const syncClubPointEffects = async (room) => {
     if (!isTsumoLossless3maState(state)) return;
     const entryRake = Number(state.settings?.ruleConfig?.entryRakePoints || 0);
     if (entryRake > 0) {
-      const payments = Object.fromEntries(nonCpuPlayersForPointSettlement(state).map((player) => [player.id, -entryRake]));
+      const entryRakePlayers = nonCpuPlayersForPointSettlement(state);
+      const payments = Object.fromEntries(entryRakePlayers.map((player) => [player.id, -entryRake]));
+      const clubReserveDelta = roundClubPointCreditInClubFavor(entryRake * entryRakePlayers.length);
       await syncOneClubPointEffect(room, `${room.gameId}:entryRake`, "entry_rake", payments, {
         label: "半荘開始時レーキ",
         entryRakePoints: entryRake,
+        entryRakePlayerCount: entryRakePlayers.length,
+        clubReserveDelta,
+        rake: {
+          type: "entry",
+          amountPerPlayer: entryRake,
+          totalAmount: clubReserveDelta,
+          payerIds: entryRakePlayers.map((player) => player.id),
+        },
       });
       await syncEntryRakeLogEffect(room, entryRake);
     }

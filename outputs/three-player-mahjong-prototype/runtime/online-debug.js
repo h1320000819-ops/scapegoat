@@ -14,6 +14,8 @@
   };
 
   const config = window.ANMIKA_SUPABASE_CONFIG || {};
+  const SUPER_CLUB_CREATOR_USER_ID = "3cda7884-9464-4b26-b7a2-bd79cc5ab65f";
+  const SUPER_CLUB_CREATOR_EMAIL = "h1320000819@gamil.com";
   const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
   const TSUMO_LOSSLESS_3MA_LABEL = "ツモ損なし全赤三麻";
   const RULE_LABELS = {
@@ -50,6 +52,7 @@
     memberships: [],
     joinRequests: [],
     adminJoinRequests: [],
+    clubCreationStatus: null,
     tables: [],
     activeGameState: null,
     activeGameEvents: [],
@@ -100,6 +103,8 @@
   const selectedTableId = () => normalizeRemoteTableId(state.activeTableId || (has("tableSelect") ? $("tableSelect").value : "") || new URLSearchParams(location.search).get("tableId") || "");
   const selectedMembership = () => state.memberships.find((row) => row.clubs && row.clubs.club_id === selectedClubId());
   const isAdmin = () => selectedMembership()?.role === "admin";
+  const isSuperClubCreator = () => state.user?.id === SUPER_CLUB_CREATOR_USER_ID || String(state.user?.email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL;
+  const canCreateClub = () => Boolean(state.clubCreationStatus?.can_create || state.clubCreationStatus?.canCreate || isSuperClubCreator());
   const escapeHtml = (value) =>
     String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -505,6 +510,11 @@
     if (message.includes("JWT expired") || message.includes("PGRST303")) return "ログイン期限が切れました。自動更新に失敗した場合は、いったんログアウトして再ログインしてください。";
     if (message.includes("ByteString") || message.includes("greater than 255")) return "ログイン情報または通信ヘッダーが壊れています。いったんログアウトして再ログインしてください。";
     if (message.includes("duplicate key") && message.includes("owner_user_id")) return "このアカウントではすでにクラブを作成済みです。加入済みクラブ一覧を更新してください。";
+    if (message.includes("club creation not permitted")) return "このアカウントにはクラブ作成権限がありません。";
+    if (message.includes("club creation limit reached")) return "このアカウントで作成できるクラブ数は1つまでです。";
+    if (message.includes("club creation grant admin required")) return "クラブ作成権限を付与できるのは特権アカウントだけです。";
+    if (message.includes("super account required")) return "この設定を変更できるのは特権アカウントだけです。";
+    if (message.includes("percent must be between 0 and 100")) return "割合は0%から100%の間で入力してください。";
     if (message.includes("login id already used") || message.includes("users_login_id_unique")) return "このログインIDはすでに使われています。別のIDを入力してください。";
     if (message.includes("amount exceeds club point limit")) return "一度に操作できるポイントは10,000,000ポイント以下です。";
     if (message.includes("club reserve would be negative")) return "クラブ保管ポイントが不足しています。送信でクラブ保管ポイントをマイナスにはできません。";
@@ -1292,9 +1302,86 @@
       },
     };
   }).filter((row) => row.clubs?.club_id);
+  const normalizeClubCreationStatus = (row) => {
+    const source = Array.isArray(row) ? row[0] : row;
+    if (!source) {
+      return {
+        can_create: isSuperClubCreator(),
+        is_super_creator: isSuperClubCreator(),
+        has_permission: false,
+        owned_club_count: state.clubs.filter((club) => club.owner_user_id === state.user?.id).length,
+        create_limit: isSuperClubCreator() ? null : 1,
+      };
+    }
+    return {
+      ...source,
+      can_create: Boolean(source.can_create ?? source.canCreate),
+      is_super_creator: Boolean(source.is_super_creator ?? source.isSuperCreator),
+      has_permission: Boolean(source.has_permission ?? source.hasPermission),
+      owned_club_count: Number(source.owned_club_count ?? source.ownedClubCount ?? 0),
+      create_limit: source.create_limit ?? source.createLimit ?? null,
+    };
+  };
+  const loadClubCreationStatus = async () => {
+    if (!state.user?.id || !state.accessToken) {
+      state.clubCreationStatus = null;
+      return null;
+    }
+    try {
+      const rows = await rest("/rpc/get_my_club_creation_status", { method: "POST", body: JSON.stringify({}) });
+      state.clubCreationStatus = normalizeClubCreationStatus(rows);
+    } catch (error) {
+      if (!isMissingRpcError(error, "get_my_club_creation_status")) {
+        log("クラブ作成権限の取得に失敗しました。", rawErrorText(error));
+      }
+      state.clubCreationStatus = normalizeClubCreationStatus(null);
+    }
+    return state.clubCreationStatus;
+  };
+  const ensureSuperClubMemberships = async () => {
+    if (!state.user?.id || !state.accessToken || !isSuperClubCreator()) return;
+    try {
+      await rest("/rpc/ensure_super_club_memberships", { method: "POST", body: JSON.stringify({}) });
+    } catch (error) {
+      if (!isMissingRpcError(error, "ensure_super_club_memberships")) {
+        log("特権アカウントのクラブ自動参加処理に失敗しました。", rawErrorText(error));
+      }
+    }
+  };
+  const loadClubSuperRakeShare = async (clubId) => {
+    if (!clubId) return { percent: 0 };
+    try {
+      const rows = await rest("/rpc/get_club_super_rake_share", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      return { percent: Number(row?.percent || 0), updatedAt: row?.updated_at || "" };
+    } catch (error) {
+      if (!isMissingRpcError(error, "get_club_super_rake_share")) {
+        log("特権アカウント配分率の取得に失敗しました。", rawErrorText(error));
+      }
+      return { percent: 0 };
+    }
+  };
+  const saveClubSuperRakeShare = async (clubId, percent) => {
+    if (!isSuperClubCreator()) throw new Error("super account required");
+    const value = Number(percent);
+    if (!Number.isFinite(value) || value < 0 || value > 100) throw new Error("percent must be between 0 and 100");
+    try {
+      await rest("/rpc/set_club_super_rake_share", {
+        method: "POST",
+        body: JSON.stringify({ p_club_id: clubId, p_percent: value }),
+      });
+    } catch (error) {
+      if (isMissingRpcError(error, "set_club_super_rake_share")) {
+        throw new Error("特権アカウント配分率設定用のDB関数が見つかりません。supabase/patch_super_club_rake_share.sql を実行してください。");
+      }
+      throw new Error(toJapaneseError(rawErrorText(error)));
+    }
+  };
   const loadClubs = async () => {
     const user = requireUser();
     const rows = [];
+    await loadClubCreationStatus().catch(() => {});
+    await ensureSuperClubMemberships();
     try {
       const repairedRows = await rest("/rpc/repair_my_approved_join_memberships", { method: "POST", body: JSON.stringify({}) });
       rows.push(...normalizeMembershipRows(repairedRows || []));
@@ -1371,6 +1458,12 @@
     render();
   };
   const createClub = async () => {
+    await loadClubCreationStatus().catch(() => {});
+    if (!canCreateClub()) {
+      throw new Error(state.clubCreationStatus?.owned_club_count
+        ? "club creation limit reached"
+        : "club creation not permitted");
+    }
     let result;
     try {
       result = await rest("/rpc/create_club_with_owner", { method: "POST", body: JSON.stringify({ p_name: $("clubName").value.trim() || "Test Club" }) });
@@ -1391,6 +1484,7 @@
       state.clubs = [club, ...state.clubs];
     }
     document.body.dataset.screen = "clubs";
+    await loadClubCreationStatus().catch(() => {});
     render();
   };
   const requestJoin = async (targetClub) => {
@@ -1619,6 +1713,23 @@
     }
     log(`${name} に管理者権限を付与しました。`);
     await loadClubs();
+  };
+  const grantClubCreationPermission = async (member) => {
+    if (!isSuperClubCreator()) throw new Error("club creation grant admin required");
+    const targetUserId = member.user_id || member.users?.user_id;
+    if (!targetUserId) throw new Error("対象ユーザーが見つかりません。");
+    const name = member.display_name || member.users?.display_name || member.login_id || member.users?.login_id || targetUserId;
+    if (!confirm(`${name} にクラブ作成権限を付与しますか？\n付与されたアカウントは1つだけクラブを作成できます。`)) return;
+    try {
+      await rest("/rpc/grant_club_creation_permission", { method: "POST", body: JSON.stringify({ p_user_id: targetUserId }) });
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (isMissingRpcError(error, "grant_club_creation_permission")) {
+        throw new Error("クラブ作成権限付与用のDB関数が見つかりません。supabase/patch_club_creation_permissions.sql を実行してください。");
+      }
+      throw new Error(toJapaneseError(raw));
+    }
+    log(`${name} にクラブ作成権限を付与しました。`);
   };
   const removeClubMember = async (member) => {
     const clubId = selectedClubId();
@@ -3445,6 +3556,9 @@
       const memberIconHtml = memberIcon
         ? `<img class="club-list-icon" src="${escapeHtml(memberIcon)}" alt="メンバーアイコン" />`
         : `<div class="club-list-icon club-list-icon-placeholder" aria-label="メンバーアイコン未設定">${escapeHtml((member.display_name || userInfo.display_name || "P").slice(0, 1))}</div>`;
+      const clubCreationGrantHtml = isSuperClubCreator() && memberUserId !== SUPER_CLUB_CREATOR_USER_ID
+        ? '<button type="button" data-action="grantClubCreation">クラブ作成権限を付与</button>'
+        : "";
       const row = document.createElement("div");
       row.className = "point-user-row";
       row.innerHTML = `
@@ -3454,8 +3568,17 @@
         <span>権限: ${roleLabel}</span>
         <span>ポイント: ${formatPoint(member.point_balance)}</span>
         <span>加入: ${new Date(member.joined_at || Date.now()).toLocaleString()}</span>
+        ${clubCreationGrantHtml}
         ${member.role !== "admin" ? '<button type="button" data-action="grantAdmin">管理者権限を付与</button><button type="button" data-action="removeMember" class="danger">削除</button>' : ""}
       `;
+      row.querySelector('[data-action="grantClubCreation"]')?.addEventListener("click", async () => {
+        try {
+          await grantClubCreationPermission(member);
+          await renderClubMembersPage(body);
+        } catch (error) {
+          showError("クラブ作成権限の付与に失敗しました", error);
+        }
+      });
       row.querySelector('[data-action="grantAdmin"]')?.addEventListener("click", async () => {
         try {
           await grantClubAdminRole(member);
@@ -3484,6 +3607,17 @@
     }
     const club = state.clubs.find((item) => item.club_id === clubId) || selectedMembership()?.clubs || {};
     const clubIcon = club.icon_url || "";
+    const superRakeShare = await loadClubSuperRakeShare(clubId);
+    const superRakeSharePercent = Number(superRakeShare.percent || 0);
+    const superShareControls = isSuperClubCreator()
+      ? `
+        <label>特権アカウントへのレーキ配分率
+          <input id="superRakeSharePercentInput" type="number" min="0" max="100" step="0.1" value="${superRakeSharePercent}" />
+        </label>
+        <p class="muted">このクラブがレーキ機能で回収したクラブポイントのうち、設定した割合を特権アカウントへ自動付与します。</p>
+        <button type="button" id="saveSuperRakeShareButton" class="secondary">レーキ配分率を保存</button>
+      `
+      : `<p class="muted">特権アカウントへのレーキ配分率: ${formatPoint(superRakeSharePercent)}%</p>`;
     body.innerHTML = `
       <div class="primary-actions">
         <button type="button" class="secondary" id="openJoinRequestsButton">加入申請一覧</button>
@@ -3505,6 +3639,10 @@
         <button type="button" id="saveClubNameButton">クラブ名を変更</button>
         <button type="button" id="saveClubIconButton" class="secondary">クラブアイコンを変更</button>
       </div>
+      <section class="card">
+        <h4>特権アカウント配分</h4>
+        ${superShareControls}
+      </section>
     `;
     document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
     document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
@@ -3523,6 +3661,15 @@
         await renderClubSettingsPage(body);
       } catch (error) {
         showError("クラブアイコン変更に失敗しました", error);
+      }
+    });
+    document.getElementById("saveSuperRakeShareButton")?.addEventListener("click", async () => {
+      try {
+        const percent = Number(document.getElementById("superRakeSharePercentInput")?.value || 0);
+        await saveClubSuperRakeShare(clubId, percent);
+        await renderClubSettingsPage(body);
+      } catch (error) {
+        showError("レーキ配分率の保存に失敗しました", error);
       }
     });
   };
@@ -3862,6 +4009,24 @@
     else if (document.body.dataset.screen === "auth") document.body.dataset.screen = shouldOpenTableListOnBoot ? "club-home" : "clubs";
     const selectedClub = state.clubs.find((club) => club.club_id === activeClubId) || null;
     if (has("clubHomeTitle")) $("clubHomeTitle").textContent = selectedClub ? selectedClub.name : "クラブ";
+    if (has("createClubButton")) {
+      const button = $("createClubButton");
+      const status = state.clubCreationStatus;
+      const allowed = canCreateClub();
+      button.disabled = !allowed;
+      button.title = allowed ? "" : "このアカウントにはクラブ作成権限がありません。";
+      if (!has("clubCreationStatus")) {
+        button.closest(".row")?.insertAdjacentHTML("afterend", '<p id="clubCreationStatus" class="muted"></p>');
+      }
+      if (has("clubCreationStatus")) {
+        const ownedCount = Number(status?.owned_club_count ?? state.clubs.filter((club) => club.owner_user_id === state.user?.id).length);
+        $("clubCreationStatus").textContent = status?.is_super_creator || isSuperClubCreator()
+          ? `クラブ作成: 特権アカウントのため複数作成できます（作成済み ${ownedCount}件）。`
+          : status?.has_permission
+            ? (allowed ? "クラブ作成: 権限あり。1つだけ作成できます。" : `クラブ作成: 作成済みです（${ownedCount}件）。`)
+            : "クラブ作成: 権限がありません。";
+      }
+    }
     if (has("createTableButton")) {
       $("createTableButton").disabled = !isAdmin();
       $("createTableButton").title = isAdmin() ? "" : "卓作成権限がありません。";
