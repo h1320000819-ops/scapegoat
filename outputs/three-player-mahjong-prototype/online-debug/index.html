@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f3028" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="繧｢繝ｳ繝溘き" />
+    <meta name="apple-mobile-web-app-title" content="アンミカ" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/public/icons/anmika-icon.svg" type="image/svg+xml" />
@@ -207,27 +207,27 @@
     <main>
       <div class="top">
         <div>
-          <h1>&#12525;&#12499;&#12540;</h1>
-          <p id="configStatus">遒ｺ隱堺ｸｭ...</p>
+          <h1>ロビー</h1>
+          <p id="configStatus">確認中...</p>
           <p id="lanHint" class="warn"></p>
           <div class="link-panel">
-            <div><strong>PC逕ｨURL:</strong> <span id="pcDebugUrl">遒ｺ隱堺ｸｭ...</span></div>
-            <div><strong>繧ｹ繝槭・逕ｨURL:</strong> <span id="mobileDebugUrl">遒ｺ隱堺ｸｭ...</span></div>
-            <button id="copyMobileUrlButton" type="button">繧ｹ繝槭・逕ｨURL繧偵さ繝斐・</button>
+            <div><strong>PC用URL:</strong> <span id="pcDebugUrl">確認中...</span></div>
+            <div><strong>スマホ用URL:</strong> <span id="mobileDebugUrl">確認中...</span></div>
+            <button id="copyMobileUrlButton" type="button">スマホ用URLをコピー</button>
           </div>
         </div>
         <div class="signed-in-only">
-          <p>迴ｾ蝨ｨ縺ｮ繝ｦ繝ｼ繧ｶ繝ｼ: <strong id="currentUser">譛ｪ繝ｭ繧ｰ繧､繝ｳ</strong></p>
+          <p>現在のユーザー: <strong id="currentUser">未ログイン</strong></p>
           <div class="club-header-actions">
-            <button id="globalBackButton" type="button" class="secondary">謌ｻ繧・/button>
-            <button id="settingsToggleButton" class="gear-button" type="button" aria-label="險ｭ螳・>笞・/button>
+            <button id="globalBackButton" type="button" class="secondary">戻る</button>
+            <button id="settingsToggleButton" class="gear-button" type="button" aria-label="設定">⚙</button>
             <div id="settingsDrawer" class="settings-menu drawer">
-              <button type="button" data-settings-page="account">繧｢繧ｫ繧ｦ繝ｳ繝郁ｨｭ螳・/button>
-              <button type="button" data-settings-page="joinRequests">蜉蜈･逕ｳ隲・/button>
-              <button type="button" data-settings-page="clubSettings">繧ｯ繝ｩ繝冶ｨｭ螳・/button>
-              <button type="button" data-settings-page="points">繧ｯ繝ｩ繝悶・繧､繝ｳ繝・/button>
-              <button type="button" data-settings-page="history">繝昴う繝ｳ繝亥庶謾ｯ</button>
-              <button type="button" data-settings-page="replays">迚瑚ｭ應ｸ隕ｧ</button>
+              <button type="button" data-settings-page="account">アカウント設定</button>
+              <button type="button" data-settings-page="joinRequests">加入申請</button>
+              <button type="button" data-settings-page="clubSettings">クラブ設定</button>
+              <button type="button" data-settings-page="points">クラブポイント</button>
+              <button type="button" data-settings-page="history">ポイント収支</button>
+              <button type="button" data-settings-page="replays">牌譜一覧</button>
             </div>
           </div>
         </div>
@@ -236,176 +236,179 @@
       <div id="errorBox" class="error-box"></div>
 
       <section class="screen screen-auth">
-        <h2>繝ｭ繧ｰ繧､繝ｳ / 繧｢繧ｫ繧ｦ繝ｳ繝井ｽ懈・</h2>
-        <p class="muted">繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ縺ｨ繝代せ繝ｯ繝ｼ繝峨〒繝ｭ繧ｰ繧､繝ｳ縺励∪縺吶ゅΟ繧ｰ繧､繝ｳID縺ｯ隴伜挨逕ｨ縺ｫ閾ｪ蜍慕匱陦後＆繧後∪縺吶・/p>
+        <h2>ログイン / アカウント作成</h2>
+        <p class="muted">メールアドレスとパスワードでログインします。ログインIDは識別用に自動発行されます。</p>
         <div class="row">
-          <label>繝励Ξ繧､繝､繝ｼ蜷・<input id="displayName" autocomplete="name" value="Player" /></label>
-          <label>繝｡繝ｼ繝ｫ繧｢繝峨Ξ繧ｹ <input id="email" type="email" autocomplete="email" placeholder="蠢・・ required /></label>
-          <label>繝代せ繝ｯ繝ｼ繝・<input id="password" type="password" autocomplete="current-password" /></label>
+          <label>プレイヤー名 <input id="displayName" autocomplete="name" value="Player" /></label>
+          <label>メールアドレス <input id="email" type="email" autocomplete="email" placeholder="必須" required /></label>
+          <label>パスワード <input id="password" type="password" autocomplete="current-password" /></label>
         </div>
         <div class="row">
-          <button id="signUpButton">繧｢繧ｫ繧ｦ繝ｳ繝井ｽ懈・</button>
-          <button id="signInButton">繝ｭ繧ｰ繧､繝ｳ</button>
-          <button id="debugSignInButton" class="secondary" type="button">繝・ヰ繝・げ繝ｭ繧ｰ繧､繝ｳ</button>
+          <button id="signUpButton">アカウント作成</button>
+          <button id="signInButton">ログイン</button>
+          <button id="debugSignInButton" class="secondary" type="button">デバッグログイン</button>
         </div>
-        <p class="muted">繝・ヰ繝・げ繝ｭ繧ｰ繧､繝ｳ縺ｯ莉ｮ繧｢繧ｫ繧ｦ繝ｳ繝医ｒ閾ｪ蜍穂ｽ懈・縺励※繝ｭ繧ｰ繧､繝ｳ縺励∪縺吶よ悽逡ｪ蜑阪↓蜑企勁縺吶ｋ讖溯・縺ｧ縺吶・/p>
+        <p class="muted">デバッグログインは仮アカウントを自動作成してログインします。本番前に削除する機能です。</p>
       </section>
 
       <section class="screen screen-clubs">
-        <h2>繧ｯ繝ｩ繝夜∈謚・/h2>
+        <h2>クラブ選択</h2>
         <div class="row">
-          <label>繧ｯ繝ｩ繝門錐 <input id="clubName" value="繧｢繝ｳ繝溘き繧ｯ繝ｩ繝・ /></label>
-          <button id="createClubButton">繧ｯ繝ｩ繝紋ｽ懈・</button>
-          <button id="loadClubsButton" class="secondary">譖ｴ譁ｰ</button>
+          <label>クラブ名 <input id="clubName" value="アンミカクラブ" /></label>
+          <button id="createClubButton">クラブ作成</button>
+          <button id="loadClubsButton" class="secondary">更新</button>
         </div>
         <div class="row">
-          <label>繧ｯ繝ｩ繝蜂D <input id="clubId" placeholder="C-XXXXXX" /></label>
-          <button id="searchClubButton" class="secondary">讀懃ｴ｢</button>
-          <button id="requestJoinButton">蜉蜈･逕ｳ隲・/button>
+          <label>クラブID <input id="clubId" placeholder="C-XXXXXX" /></label>
+          <button id="searchClubButton" class="secondary">検索</button>
+          <button id="requestJoinButton">加入申請</button>
         </div>
-        <div id="clubSearchResult" class="link-panel muted">繧ｯ繝ｩ繝蜂D縺ｧ讀懃ｴ｢縺励※縺上□縺輔＞縲・/div>
-        <h3>蜉蜈･貂医∩繧ｯ繝ｩ繝・/h3>
+        <div id="clubSearchResult" class="link-panel muted">クラブIDで検索してください。</div>
+        <h3>加入済みクラブ</h3>
         <div id="clubCards" class="card-grid"></div>
       </section>
 
       <section class="screen screen-club-home">
         <div class="club-main-header">
           <div>
-            <h2 id="clubHomeTitle">繝ｭ繝薙・</h2>
-            <p class="muted">蜊謎ｽ懈・縺ｨ蜊謎ｸ隕ｧ繧偵％縺薙〒謫堺ｽ懊＠縺ｾ縺吶・/p>
+            <h2 id="clubHomeTitle">ロビー</h2>
+            <p class="muted">卓作成と卓一覧をここで操作します。</p>
           </div>
           <div class="club-header-actions">
-            <button id="backToClubsButton" type="button" class="secondary">繧ｯ繝ｩ繝夜∈謚槭∈謌ｻ繧・/button>
-            <button id="settingsGearButton" class="gear-button" type="button" aria-label="險ｭ螳・>笞・/button>
+            <button id="backToClubsButton" type="button" class="secondary">クラブ選択へ戻る</button>
+            <button id="settingsGearButton" class="gear-button" type="button" aria-label="設定">⚙</button>
           </div>
         </div>
 
         <div class="primary-actions admin-only">
-          <button id="showCreateTableButton">蜊謎ｽ懈・</button>
-          <button id="loadTablesButton" class="secondary">譖ｴ譁ｰ</button>
+          <button id="showCreateTableButton">卓作成</button>
+          <button id="loadTablesButton" class="secondary">更新</button>
         </div>
-        <p class="member-blocked muted">蜊謎ｽ懈・縺ｯ繧ｯ繝ｩ繝也ｮ｡逅・・・縺ｿ蜿ｯ閭ｽ縺ｧ縺吶・/p>
+        <p class="member-blocked muted">卓作成はクラブ管理者のみ可能です。</p>
 
         <section id="tableCreatePanel" class="modal-panel">
           <div class="row">
-            <button id="backFromCreateTableButton" type="button" class="secondary">謌ｻ繧・/button>
+            <button id="backFromCreateTableButton" type="button" class="secondary">戻る</button>
           </div>
-          <h3>蜊謎ｽ懈・</h3>
-          <label>蜊灘錐 <input id="tableName" placeholder="繧｢繝ｳ繝溘き繝ｭ繧ｱ繝・ヨ蜊・ /></label>
-          <label>繝ｫ繝ｼ繝ｫ
+          <h3>卓作成</h3>
+          <label>卓名 <input id="tableName" placeholder="アンミカロケット卓" /></label>
+          <label>ルール
             <select id="ruleId">
-              <option value="anmika-rocket">繧｢繝ｳ繝溘き繝ｭ繧ｱ繝・ヨ</option>
-              <option value="tsumo-lossless-red-3ma">繝・Δ謳阪↑縺怜・襍､荳蛾ｺｻ</option>
-              <option value="normal-4ma" disabled>繝弱・繝槭Ν蝗幃ｺｻ・域悴螳溯｣・ｼ・/option>
-              <option value="normal-3ma" disabled>荳我ｺｺ鮗ｻ髮・域悴螳溯｣・ｼ・/option>
-              <option value="jewel" disabled>繧ｸ繝･繧ｨ繝ｫ・域悴螳溯｣・ｼ・/option>
+              <option value="anmika-rocket">アンミカロケット</option>
+              <option value="tsumo-lossless-red-3ma">ツモ損なし全赤三麻</option>
+              <option value="normal-4ma" disabled>ノーマル四麻（未実装）</option>
+              <option value="normal-3ma" disabled>三人麻雀（未実装）</option>
+              <option value="jewel" disabled>ジュエル（未実装）</option>
             </select>
           </label>
           <div id="anmikaRuleCreateFields">
             <div class="row">
-              <label>繝ｬ繝ｼ繝・ 1轤ｹ = <span id="pointRateValue">1.0</span>繝昴う繝ｳ繝・                <input id="pointRate" type="range" min="0.1" max="10" step="0.1" value="1.0" />
+              <label>レート: 1点 = <span id="pointRateValue">1.0</span>ポイント
+                <input id="pointRate" type="range" min="0.1" max="10" step="0.1" value="1.0" />
               </label>
-              <label>繝ｬ繝ｼ繧ｭ: <span id="rakePercentValue">5.0</span>%
+              <label>レーキ: <span id="rakePercentValue">5.0</span>%
                 <input id="rakePercent" type="range" min="0" max="10" step="0.5" value="5" />
               </label>
             </div>
-            <label><input id="rocket19Enabled" type="checkbox" checked /> 1繝ｻ9迚後Ο繧ｱ繝・ヨ</label>
-            <label><input id="baibaEnabled" type="checkbox" checked /> 蛟榊ｴ</label>
-            <label><input id="otokogiEnabled" type="checkbox" checked /> 逕ｷ豌励Ν繝ｼ繝ｫ</label>
-            <label><input id="feverRiichiEnabled" type="checkbox" checked /> 繝輔ぅ繝ｼ繝舌・繝ｪ繝ｼ繝・/label>
-            <label>繧ｿ繝ｼ繧ｳ繧､繧ｺ5p
+            <label><input id="rocket19Enabled" type="checkbox" checked /> 1・9牌ロケット</label>
+            <label><input id="baibaEnabled" type="checkbox" checked /> 倍場</label>
+            <label><input id="otokogiEnabled" type="checkbox" checked /> 男気ルール</label>
+            <label><input id="feverRiichiEnabled" type="checkbox" checked /> フィーバーリーチ</label>
+            <label>ターコイズ5p
               <select id="turquoise5pCount">
-                <option value="0">0譫・/option>
-                <option value="1">1譫・/option>
-                <option value="2" selected>2譫・/option>
+                <option value="0">0枚</option>
+                <option value="1">1枚</option>
+                <option value="2" selected>2枚</option>
               </select>
             </label>
           </div>
           <div id="tsumoLossless3maFields"></div>
           <div class="row">
-            <button id="createTableButton">菴懈・</button>
-            <button id="cancelCreateTableButton" class="secondary">繧ｭ繝｣繝ｳ繧ｻ繝ｫ</button>
+            <button id="createTableButton">作成</button>
+            <button id="cancelCreateTableButton" class="secondary">キャンセル</button>
           </div>
         </section>
 
-        <h3>蜊謎ｸ隕ｧ</h3>
+        <h3>卓一覧</h3>
         <div id="tableCards" class="table-list"></div>
 
         <section id="tableRoomPanel" class="modal-panel">
-          <button id="backFromTableRoomButton" type="button" class="secondary">謌ｻ繧・/button>
+          <button id="backFromTableRoomButton" type="button" class="secondary">戻る</button>
           <div class="row">
-            <button id="copyTableUrlButton">蜊填RL繧ｳ繝斐・</button>
-            <button id="sitButton">蠎ｧ繧・/button>
-            <button id="leaveButton" class="secondary">遶九▽</button>
-            <button id="addCpuButton" class="admin-only">CPU霑ｽ蜉</button>
-            <button id="removeCpuButton" class="admin-only secondary">CPU蜑企勁</button>
-            <button id="openOnlineGameButton" class="secondary">繧ｪ繝ｳ繝ｩ繧､繝ｳ蟇ｾ螻繧帝幕縺・/button>
-            <button id="loadSeatsButton" class="secondary">譖ｴ譁ｰ</button>
+            <button id="copyTableUrlButton">卓URLコピー</button>
+            <button id="sitButton">座る</button>
+            <button id="leaveButton" class="secondary">立つ</button>
+            <button id="addCpuButton" class="admin-only">CPU追加</button>
+            <button id="removeCpuButton" class="admin-only secondary">CPU削除</button>
+            <button id="openOnlineGameButton" class="secondary">オンライン対局を開く</button>
+            <button id="loadSeatsButton" class="secondary">更新</button>
           </div>
           <p id="tableUrl" class="muted"></p>
           <div id="seatRows" class="seat-list"></div>
-          <pre id="seatsOutput">蟶ｭ諠・ｱ繧定ｪｭ縺ｿ霎ｼ縺ｿ縺ｾ縺・/pre>
+          <pre id="seatsOutput">席情報を読み込みます</pre>
         </section>
 
         <section id="onlineGamePanel" class="modal-panel">
-          <button id="backFromOnlineGameButton" type="button" class="secondary">謌ｻ繧・/button>
-          <h3>繧ｪ繝ｳ繝ｩ繧､繝ｳ蟇ｾ螻</h3>
-          <label>迚・<input id="onlineTileLabel" placeholder="萓・ 3p / 譚ｱ / 逋ｽ" /></label>
+          <button id="backFromOnlineGameButton" type="button" class="secondary">戻る</button>
+          <h3>オンライン対局</h3>
+          <label>牌 <input id="onlineTileLabel" placeholder="例: 3p / 東 / 白" /></label>
           <div class="online-action-buttons">
-            <button type="button" data-online-action="draw">繝・Δ</button>
-            <button type="button" data-online-action="discard">謇鍋煙</button>
-            <button type="button" data-online-action="ron">繝ｭ繝ｳ</button>
-            <button type="button" data-online-action="tsumo">繝・Δ蜥御ｺ・/button>
-            <button type="button" data-online-action="pon">繝昴Φ</button>
-            <button type="button" data-online-action="kan">繧ｫ繝ｳ</button>
-            <button type="button" data-online-action="riichi">繝ｪ繝ｼ繝・/button>
-            <button type="button" data-online-action="skip">繧ｹ繧ｭ繝・・</button>
-            <button type="button" data-online-action="flower">闖ｯ</button>
+            <button type="button" data-online-action="draw">ツモ</button>
+            <button type="button" data-online-action="discard">打牌</button>
+            <button type="button" data-online-action="ron">ロン</button>
+            <button type="button" data-online-action="tsumo">ツモ和了</button>
+            <button type="button" data-online-action="pon">ポン</button>
+            <button type="button" data-online-action="kan">カン</button>
+            <button type="button" data-online-action="riichi">リーチ</button>
+            <button type="button" data-online-action="skip">スキップ</button>
+            <button type="button" data-online-action="flower">華</button>
           </div>
           <div id="onlineGameBoard"></div>
         </section>
       </section>
 
       <section id="settingsPagePanel" class="settings-page modal-panel">
-        <button id="backFromSettingsPageButton" type="button" class="secondary">謌ｻ繧・/button>
-        <h3 id="settingsPageTitle">險ｭ螳・/h3>
+        <button id="backFromSettingsPageButton" type="button" class="secondary">戻る</button>
+        <h3 id="settingsPageTitle">設定</h3>
         <div id="settingsPageBody"></div>
       </section>
 
       <section id="legacyPanels" hidden>
         <select id="clubSelect"></select>
         <select id="tableSelect"></select>
-        <p>繝ｭ繧ｰ繧､繝ｳID: <strong id="loginIdDisplay">譛ｪ險ｭ螳・/strong></p>
+        <p>ログインID: <strong id="loginIdDisplay">未設定</strong></p>
         <input id="newLoginId" />
         <input id="confirmPassword" type="password" />
-        <button id="changeLoginIdButton">繝ｭ繧ｰ繧､繝ｳID螟画峩</button>
-        <button id="signOutButton">繝ｭ繧ｰ繧｢繧ｦ繝・/button>
+        <button id="changeLoginIdButton">ログインID変更</button>
+        <button id="signOutButton">ログアウト</button>
         <div id="clubDetails"></div>
-        <button id="loadClubHomeButton">髢九￥</button>
+        <button id="loadClubHomeButton">開く</button>
         <input id="applicantUserId" />
-        <button id="approveJoinButton">謇ｿ隱・/button>
-        <button id="showClubPointsButton">繧ｯ繝ｩ繝悶・繧､繝ｳ繝郁｡ｨ遉ｺ</button>
+        <button id="approveJoinButton">承認</button>
+        <button id="showClubPointsButton">クラブポイント表示</button>
         <div id="clubPointPanel" class="modal-panel">
-          <pre id="pointSummary">譛ｪ蜿門ｾ・/pre>
+          <pre id="pointSummary">未取得</pre>
           <div id="pointUserRows" class="point-user-list"></div>
           <input id="pointTargetUserId" />
           <input id="pointAmount" type="number" value="100" />
-          <button id="sendPointButton">騾√ｋ</button>
-          <button id="collectPointButton">蝗槫庶</button>
+          <button id="sendPointButton">送る</button>
+          <button id="collectPointButton">回収</button>
         </div>
-        <button id="loadRakeButton">繝ｬ繝ｼ繧ｭ螻･豁ｴ</button>
-        <pre id="rakeSummary">譛ｪ蜿門ｾ・/pre>
-        <pre id="rakeHistory">譛ｪ蜿門ｾ・/pre>
-        <pre id="debugSummaryLegacy">遒ｺ隱堺ｸｭ...</pre>
-        <pre id="logOutput">繝ｭ繧ｰ縺ｯ縺薙％縺ｫ陦ｨ遉ｺ縺輔ｌ縺ｾ縺・/pre>
+        <button id="loadRakeButton">レーキ履歴</button>
+        <pre id="rakeSummary">未取得</pre>
+        <pre id="rakeHistory">未取得</pre>
+        <pre id="debugSummaryLegacy">確認中...</pre>
+        <pre id="logOutput">ログはここに表示されます</pre>
       </section>
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/pwa.js?v=20260618-compact-score-label-a"></script>
-    <script src="../runtime/online-debug.js?v=20260618-compact-score-label-a"></script>
+    <script src="../runtime/pwa.js?v=20260618-lobby-text-fix-a"></script>
+    <script src="../runtime/online-debug.js?v=20260618-lobby-text-fix-a"></script>
   </body>
 </html>
+
+
 
 
 

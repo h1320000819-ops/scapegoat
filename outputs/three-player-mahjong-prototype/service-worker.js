@@ -1,13 +1,13 @@
-﻿const CACHE_NAME = "anmika-pwa-20260618-compact-score-label-a";
+﻿const CACHE_NAME = "anmika-pwa-20260618-lobby-text-fix-a";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260618-compact-score-label-a",
-  "/runtime/app.js?v=20260618-compact-score-label-a",
-  "/runtime/online-debug.js?v=20260618-compact-score-label-a",
-  "/runtime/pwa.js?v=20260618-compact-score-label-a",
+  "/styles.css?v=20260618-lobby-text-fix-a",
+  "/runtime/app.js?v=20260618-lobby-text-fix-a",
+  "/runtime/online-debug.js?v=20260618-lobby-text-fix-a",
+  "/runtime/pwa.js?v=20260618-lobby-text-fix-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg"
@@ -46,6 +46,7 @@ self.addEventListener("fetch", (event) => {
     }))
   );
 });
+
 
 
 
