@@ -658,10 +658,30 @@
     if (!config.url || !config.anonKey) throw new Error("Supabase設定が不足しています。runtime/supabase-public-config.js を確認してください。");
   };
   const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
+  const isLikelyJwt = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
+  const clearStoredSession = () => {
+    state.accessToken = "";
+    state.refreshToken = "";
+    state.user = null;
+    state.clubs = [];
+    state.memberships = [];
+    state.tables = [];
+    localStorage.removeItem("anmikaAccessToken");
+    localStorage.removeItem("anmikaRefreshToken");
+    localStorage.removeItem("anmikaDebugUser");
+    sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
+    sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+    document.body.dataset.screen = "auth";
+  };
+  const invalidateBrokenSession = (reason = "broken auth header") => {
+    console.warn("[Auth] session cleared", { reason });
+    clearStoredSession();
+  };
   const assertHeaderValue = (name, value) => {
     const text = String(value ?? "");
     if (!isByteStringHeaderValue(text)) {
       console.warn("[Headers] non ByteString header blocked", { name, length: text.length });
+      if (name.toLowerCase() === "authorization") invalidateBrokenSession("non ByteString authorization");
       throw new Error("ログイン情報が壊れています。いったんログアウトして再ログインしてください。");
     }
     return text;
@@ -675,11 +695,21 @@
       if (value === undefined || value === null) continue;
       headers[key] = value;
     }
-    if (auth && state.accessToken) headers.Authorization = "Bearer " + state.accessToken;
+    if (auth && state.accessToken) {
+      if (!isLikelyJwt(state.accessToken) || !isByteStringHeaderValue(state.accessToken)) {
+        invalidateBrokenSession("invalid access token format");
+        throw new Error("ログイン情報が壊れています。いったん再ログインしてください。");
+      }
+      headers.Authorization = "Bearer " + state.accessToken;
+    }
     return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, assertHeaderValue(key, value)]));
   };
   const buildSafeAuthHeaders = () => {
     if (!state.accessToken) return {};
+    if (!isLikelyJwt(state.accessToken) || !isByteStringHeaderValue(state.accessToken)) {
+      invalidateBrokenSession("invalid access token format");
+      throw new Error("ログイン情報が壊れています。いったん再ログインしてください。");
+    }
     return { Authorization: assertHeaderValue("Authorization", "Bearer " + state.accessToken) };
   };
 
@@ -1107,19 +1137,14 @@
     const token = state.accessToken;
     clearInterval(state.pollTimer);
     clearInterval(state.clubPollTimer);
-    if (token) {
+    if (token && isLikelyJwt(token) && isByteStringHeaderValue(token)) {
       await request("/auth/v1/logout", {
         method: "POST",
         headers: { Authorization: "Bearer " + token },
+        auth: false,
       }).catch((error) => log("Supabaseログアウト通知に失敗しました。ローカル状態は削除します。", rawErrorText(error)));
     }
-    Object.assign(state, { accessToken: "", refreshToken: "", user: null, clubs: [], memberships: [], tables: [] });
-    localStorage.removeItem("anmikaAccessToken");
-    localStorage.removeItem("anmikaRefreshToken");
-    localStorage.removeItem("anmikaDebugUser");
-    sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
-    sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
-    document.body.dataset.screen = "auth";
+    clearStoredSession();
     render();
   };
 

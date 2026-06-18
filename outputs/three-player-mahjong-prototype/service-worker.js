@@ -1,13 +1,13 @@
-﻿const CACHE_NAME = "anmika-pwa-20260619-super-rake-share-a";
+﻿const CACHE_NAME = "anmika-pwa-20260619-lobby-utf8-a";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260619-super-rake-share-a",
-  "/runtime/app.js?v=20260619-super-rake-share-a",
-  "/runtime/online-debug.js?v=20260619-super-rake-share-a",
-  "/runtime/pwa.js?v=20260619-super-rake-share-a",
+  "/styles.css?v=20260619-lobby-utf8-a",
+  "/runtime/app.js?v=20260619-lobby-utf8-a",
+  "/runtime/online-debug.js?v=20260619-lobby-utf8-a",
+  "/runtime/pwa.js?v=20260619-lobby-utf8-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg"
