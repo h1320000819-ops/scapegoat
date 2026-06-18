@@ -343,6 +343,37 @@
     table?.table_seats || table?.seats || table?.tableSeats || state.localSeatsByTable[localSeatKey(table?.table_id)] || [],
     table?.table_id
   );
+  const enforceOneVisibleSeatForCurrentUser = (preferredTableId = state.activeTableId, preferredSeatIndex = null) => {
+    if (!state.user?.id || !Array.isArray(state.tables)) return;
+    const userId = state.user.id;
+    const ownSeats = [];
+    for (const table of state.tables) {
+      const seats = visibleTableSeats(table);
+      seats.forEach((seat) => {
+        if (seat.user_id === userId) ownSeats.push({ tableId: table.table_id, seatIndex: seat.seat_index });
+      });
+    }
+    if (ownSeats.length <= 1) return;
+    const keep =
+      ownSeats.find((seat) => String(seat.tableId) === String(preferredTableId) && (preferredSeatIndex === null || preferredSeatIndex === undefined || Number(seat.seatIndex) === Number(preferredSeatIndex))) ||
+      ownSeats.find((seat) => String(seat.tableId) === String(preferredTableId)) ||
+      ownSeats[ownSeats.length - 1];
+    state.tables = state.tables.map((table) => ({
+      ...table,
+      table_seats: visibleTableSeats(table).map((seat) => {
+        if (seat.user_id !== userId) return seat;
+        if (String(table.table_id) === String(keep.tableId) && Number(seat.seat_index) === Number(keep.seatIndex)) return seat;
+        return {
+          ...seat,
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        };
+      }),
+    }));
+    clearLocalUserSeatsExcept(keep.tableId, keep.seatIndex);
+  };
   const visibleTableWaiting = (table) => Array.isArray(table?.table_waiting_list)
     ? [...table.table_waiting_list].sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
     : [];
@@ -732,12 +763,24 @@
     document.body.dataset.screen = "club-home";
   };
   const CLUB_POINT_FIXED_TOTAL = 10000000;
+  const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
+  const roundToTenth = (value) => {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return 0;
+    const rounded = Math.round((numeric + Math.sign(numeric) * Number.EPSILON) * 10) / 10;
+    return normalizeSignedZero(Number(rounded.toFixed(1)));
+  };
+  const formatPoint = (value) => {
+    const rounded = roundToTenth(value);
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  };
+  const formatSignedPoint = (value) => `${roundToTenth(value) >= 0 ? "+" : ""}${formatPoint(value)}`;
   const clubPointSummaryFromMembers = (members = []) => {
-    const memberTotal = members.reduce((sum, member) => sum + Number(member.point_balance || 0), 0);
+    const memberTotal = roundToTenth(members.reduce((sum, member) => sum + Number(member.point_balance || 0), 0));
     return {
       fixedTotal: CLUB_POINT_FIXED_TOTAL,
       memberTotal,
-      clubReserve: CLUB_POINT_FIXED_TOTAL - memberTotal,
+      clubReserve: roundToTenth(CLUB_POINT_FIXED_TOTAL - memberTotal),
     };
   };
   const readPointAmount = (value, label = "ポイント数") => {
@@ -752,6 +795,16 @@
     if (!tableId || !state.accessToken) return null;
     const rows = await rest(`/game_states?select=*&table_id=eq.${encodeURIComponent(tableId)}&is_active=eq.true&order=updated_at.desc&limit=1`);
     state.activeGameState = rows[0] || null;
+    const activeState = state.activeGameState?.state || null;
+    const activeEnded = Boolean(activeState?.phase === "gameEnded" || activeState?.finalResult || activeState?.handLog?.result?.finalResult);
+    if (state.activeGameState && activeEnded) {
+      await deactivateTableActiveGameState(tableId, "終了済みGameStateを無効化").catch((error) => log("終了済みGameStateの無効化に失敗しました。", rawErrorText(error)));
+      state.activeGameState = null;
+      state.activeGameEvents = [];
+      renderOnlineGamePanel();
+      renderDebug("終了済みGameStateを無効化しました");
+      return null;
+    }
     if (state.activeGameState?.game_id) {
       state.activeGameEvents = await rest(`/game_events?select=event_id,action_type,turn_version,player_id,created_at,payload&game_id=eq.${encodeURIComponent(state.activeGameState.game_id)}&order=created_at.asc&limit=200`);
     } else {
@@ -761,6 +814,17 @@
     renderOnlineGamePanel();
     renderDebug("GameState同期済み");
     return state.activeGameState;
+  };
+  const newSocketGameId = (tableId) => `socket-game-${tableId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const deactivateTableActiveGameState = async (tableId, reason = "新規対局開始") => {
+    tableId = normalizeRemoteTableId(tableId);
+    if (!tableId || !state.accessToken) return;
+    await rest("/game_states?table_id=eq." + encodeURIComponent(tableId) + "&is_active=eq.true", {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
+    }).catch((error) => log(`${reason}: 古いGameStateの無効化に失敗しました。`, rawErrorText(error)));
+    if (state.activeGameState?.table_id === tableId) state.activeGameState = null;
+    state.activeGameEvents = [];
   };
   const ensureOnlineGameForTable = async (tableId = selectedTableId()) => {
     tableId = requireTableId(normalizeRemoteTableId(tableId), "オンライン対局準備");
@@ -1619,7 +1683,10 @@
     if (!isCurrentUserSeatedAt(seats)) return;
     if (state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
-    const onlineGameState = { game_id: `socket-game-${table.table_id}`, version: 0 };
+    const active = await loadActiveGameState(table.table_id).catch(() => null);
+    const onlineGameState = active?.game_id
+      ? { game_id: active.game_id, version: active.version ?? 0, resetRoom: false }
+      : { game_id: newSocketGameId(table.table_id), version: 0, resetRoom: true };
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
     markAutoOpenedTable(table.table_id);
@@ -1676,7 +1743,8 @@
     if (state.autoStartingTableIds.has(tableId)) return null;
     state.autoStartingTableIds.add(tableId);
     try {
-      const onlineGameState = { game_id: `socket-game-${tableId}`, version: 0 };
+      await deactivateTableActiveGameState(tableId, "自動新規対局開始前").catch(() => {});
+      const onlineGameState = { game_id: newSocketGameId(tableId), version: 0, resetRoom: true };
       table.status = "playing";
       table.is_debug = isDebugTable;
       table.table_seats = seats;
@@ -1846,6 +1914,7 @@
       state.tables = await rest("/tables?select=*,table_seats(*),table_waiting_list(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
     }
     await loadWaitingForTables().catch((error) => log("ウェイティング一覧の取得に失敗しました。", rawErrorText(error)));
+    enforceOneVisibleSeatForCurrentUser();
     await reconcileTablePlayingStatuses();
     await maybeAutoStartTables();
     render();
@@ -2047,6 +2116,7 @@
         await clearRemoteUserSeatsExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
         clearLocalUserSeatsExcept(tableId, ownSeat.seat_index);
         await loadTables();
+        enforceOneVisibleSeatForCurrentUser(tableId, ownSeat.seat_index);
         await loadSeats();
       }
       return;
@@ -2066,6 +2136,7 @@
       target.is_last_hand_declared = false;
       await clearMyWaiting().catch(() => {});
       saveLocalSeats(tableId, rows);
+      enforceOneVisibleSeatForCurrentUser(tableId, target.seat_index);
       renderSeatRows(rows, tableId);
       await loadTables().catch(() => render());
     }
@@ -2511,6 +2582,8 @@
       accessToken: state.accessToken,
       socketUrl: getGameServerUrl(),
       returnUrl: buildOnlineDebugReturnUrl(),
+      lastServerState: null,
+      lastSyncedAt: 0,
     };
     localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
     window.name = JSON.stringify({
@@ -2535,7 +2608,8 @@
     clearLocalUserLastHandFlagForTable(tableId);
     await clearOwnLastHandFlag(tableId).catch((error) => log("新規対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
     let rows = [];
-    let onlineGameState = { game_id: `socket-game-${tableId}`, version: 0, resetRoom: true };
+    await deactivateTableActiveGameState(tableId, "デバッグ新規対局開始前").catch(() => {});
+    let onlineGameState = { game_id: newSocketGameId(tableId), version: 0, resetRoom: true };
     try {
       await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
       log("DBの対局開始RPCを実行しました。", { tableId });
@@ -2586,7 +2660,9 @@
     clearLaunchingTable();
     const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
     const endedState = Boolean(lastState?.phase === "gameEnded" || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
-    startLocalDebugMahjong(tableId, rows, { game_id: `socket-game-${tableId}`, version: 0, resetRoom: endedState });
+    const gameId = endedState ? newSocketGameId(tableId) : (state.activeGameState?.game_id || `socket-game-${tableId}`);
+    if (endedState) await deactivateTableActiveGameState(tableId, "終了済み対局への再参加前").catch(() => {});
+    startLocalDebugMahjong(tableId, rows, { game_id: gameId, version: 0, resetRoom: endedState });
   };
   const copyTableUrl = async () => {
     const text = $("tableUrl").textContent;
@@ -2609,7 +2685,7 @@
       throw error;
     }
   };
-  const rakeAmountOf = (row) => Number(row?.rake_amount ?? row?.amount ?? 0);
+  const rakeAmountOf = (row) => roundToTenth(row?.rake_amount ?? row?.amount ?? 0);
   const fetchClubRakeRows = async (clubId) => {
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}`;
@@ -2630,9 +2706,15 @@
   const rakeTotalsByUser = (rows = []) => rows.reduce((totals, row) => {
     const userId = row.user_id || row.userId;
     if (!userId) return totals;
-    totals[userId] = Math.round((Number(totals[userId] || 0) + rakeAmountOf(row)) * 10) / 10;
+    totals[userId] = roundToTenth(Number(totals[userId] || 0) + rakeAmountOf(row));
     return totals;
   }, {});
+  const rakeLogLabel = (row = {}) => {
+    if (row.win_type === "tsumo") return "ツモ和了";
+    if (row.win_type === "ron") return "ロン和了";
+    if (Number(row.original_gain || 0) === 0 && Number(row.rake_percent || 0) === 0) return "開始時レーキ";
+    return "レーキ";
+  };
   const loadClubMembersForView = async (clubId) => {
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     try {
@@ -2662,7 +2744,7 @@
     let totalRake = "管理者のみ";
     if (isAdmin()) {
       const rows = await fetchClubRakeRows(clubId);
-      totalRake = rows ? String(rows.reduce((sum, row) => sum + Number(row.rake_amount || row.amount || 0), 0)) : "未作成";
+      totalRake = rows ? `${formatPoint(rows.reduce((sum, row) => sum + rakeAmountOf(row), 0))} pt` : "未作成";
     }
     $("clubDetails").innerHTML = [
       `<strong>クラブID:</strong> ${selectedClub?.club_code || clubId}`,
@@ -2670,9 +2752,9 @@
       `<br><strong>あなたの権限:</strong> ${isAdmin() ? "管理者" : "メンバー"}`,
       `<br><strong>会員数:</strong> ${members.length}`,
       `<br><strong>管理者数:</strong> ${adminCount}`,
-      `<br><strong>クラブポイント固定総量:</strong> ${pointSummary.fixedTotal}`,
-      `<br><strong>クラブ保管ポイント:</strong> ${pointSummary.clubReserve}`,
-      `<br><strong>メンバー保有ポイント合計:</strong> ${pointSummary.memberTotal}`,
+      `<br><strong>クラブポイント固定総量:</strong> ${formatPoint(pointSummary.fixedTotal)} pt`,
+      `<br><strong>クラブ保管ポイント:</strong> ${formatPoint(pointSummary.clubReserve)} pt`,
+      `<br><strong>メンバー保有ポイント合計:</strong> ${formatPoint(pointSummary.memberTotal)} pt`,
       `<br><strong>累積レーキ:</strong> ${totalRake}`,
     ].join("");
     document.body.dataset.role = isAdmin() ? "admin" : "member";
@@ -2692,8 +2774,8 @@
       $("rakeHistory").textContent = clubRakeLogsMissingMessage;
       return;
     }
-    const total = rows.reduce((sum, row) => sum + rakeAmountOf(row), 0);
-    $("rakeSummary").textContent = "レーキ総額: " + total;
+    const total = roundToTenth(rows.reduce((sum, row) => sum + rakeAmountOf(row), 0));
+    $("rakeSummary").textContent = "レーキ総額: " + formatPoint(total) + " pt";
     $("rakeHistory").textContent = JSON.stringify(rows, null, 2);
   };
   const ensureTsumoLossless3maCreateUi = () => {
@@ -2901,10 +2983,10 @@
       <div class="card">
         <div class="point-reserve">
           <span class="muted">クラブ側の保有ポイント</span>
-          <strong>${pointSummary.clubReserve} pt</strong>
+          <strong>${formatPoint(pointSummary.clubReserve)} pt</strong>
         </div>
-        <span>クラブポイント固定総量: ${pointSummary.fixedTotal} pt</span><br>
-        <span>メンバー保有ポイント合計: ${pointSummary.memberTotal} pt</span><br>
+        <span>クラブポイント固定総量: ${formatPoint(pointSummary.fixedTotal)} pt</span><br>
+        <span>メンバー保有ポイント合計: ${formatPoint(pointSummary.memberTotal)} pt</span><br>
         <span class="muted">送る・回収では支払う側がマイナスになる操作はできません。ゲーム結果によるマイナスとは別扱いです。</span>
       </div>
       <div id="settingsPointUserRows" class="point-user-list"></div>
@@ -2913,10 +2995,10 @@
     visibleMembers.forEach((member) => {
       const userId = member.users?.user_id || "";
       const name = member.users?.display_name || userId || "Player";
-      const paidRake = Number(paidRakeByUser[userId] || 0);
+      const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
       const row = document.createElement("div");
       row.className = "point-user-row";
-      row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span><span>支払レーキ ${paidRake} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+      row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span><span>支払レーキ ${formatPoint(paidRake)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
       const sendButton = row.querySelector('[data-action="send"]');
       if (sendButton) {
         sendButton.addEventListener("click", async () => {
@@ -2984,7 +3066,7 @@
     const width = 720;
     const height = 280;
     const pad = { left: 58, right: 24, top: 22, bottom: 44 };
-    const values = [0, ...series.map((item) => item.cumulative)];
+    const values = [0, ...series.map((item) => roundToTenth(item.cumulative))];
     const minValue = Math.min(...values);
     const maxValue = Math.max(...values);
     const range = Math.max(1, maxValue - minValue);
@@ -2995,7 +3077,7 @@
     const zeroY = yFor(0);
     const points = series.map((item, index) => `${xFor(index).toFixed(1)},${yFor(item.cumulative).toFixed(1)}`).join(" ");
     const circles = series
-      .map((item, index) => `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(item.cumulative).toFixed(1)}" r="4"><title>${escapeHtml(item.dateLabel)} ${item.amount >= 0 ? "+" : ""}${item.amount}pt / 累計 ${item.cumulative}pt</title></circle>`)
+      .map((item, index) => `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(item.cumulative).toFixed(1)}" r="4"><title>${escapeHtml(item.dateLabel)} ${formatSignedPoint(item.amount)}pt / 累計 ${formatPoint(item.cumulative)}pt</title></circle>`)
       .join("");
     return `
       <svg class="point-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="ゲーム収支の折れ線グラフ">
@@ -3003,8 +3085,8 @@
         <line x1="${pad.left}" y1="${zeroY.toFixed(1)}" x2="${width - pad.right}" y2="${zeroY.toFixed(1)}" stroke="rgba(255,255,255,.35)" stroke-dasharray="5 5"></line>
         <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,.35)"></line>
         <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,.35)"></line>
-        <text x="10" y="${yFor(maxValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${maxValue}pt</text>
-        <text x="10" y="${yFor(minValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${minValue}pt</text>
+        <text x="10" y="${yFor(maxValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${formatPoint(maxValue)}pt</text>
+        <text x="10" y="${yFor(minValue).toFixed(1)}" fill="rgba(255,255,255,.78)" font-size="13">${formatPoint(minValue)}pt</text>
         <text x="${pad.left}" y="${height - 14}" fill="rgba(255,255,255,.7)" font-size="13">${escapeHtml(series[0]?.dateLabel || "")}</text>
         <text x="${width - pad.right}" y="${height - 14}" fill="rgba(255,255,255,.7)" font-size="13" text-anchor="end">${escapeHtml(series[series.length - 1]?.dateLabel || "")}</text>
         <polyline points="${points}" fill="none" stroke="#56d8ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></polyline>
@@ -3036,17 +3118,17 @@
         log("自分のレーキ履歴取得をスキップしました。", rawErrorText(error));
         return [];
       })).filter((row) => (row.user_id || row.userId) === user.id);
-      const paidRakeTotal = Math.round(rakeRows.reduce((sum, row) => sum + rakeAmountOf(row), 0) * 10) / 10;
+      const paidRakeTotal = roundToTenth(rakeRows.reduce((sum, row) => sum + rakeAmountOf(row), 0));
       const rakeHistoryHtml = rakeRows.length
         ? `<section class="card">
             <h4>支払レーキ</h4>
-            <div class="point-summary"><strong>合計: ${paidRakeTotal} pt</strong><span>対象件数: ${rakeRows.length}件</span></div>
+            <div class="point-summary"><strong>合計: ${formatPoint(paidRakeTotal)} pt</strong><span>対象件数: ${rakeRows.length}件</span></div>
             ${rakeRows.slice(0, 50).map((row) => `
               <div class="table-seat-line">
                 <span>${escapeHtml(new Date(row.created_at || row.createdAt || Date.now()).toLocaleString())}</span>
-                <strong>${rakeAmountOf(row)} pt</strong>
-                <span>${escapeHtml(row.win_type === "tsumo" ? "ツモ和了" : row.win_type === "ron" ? "ロン和了" : "和了")}</span>
-                <span class="muted">元収入 ${Number(row.original_gain || 0)} / ${Number(row.rake_percent || 0)}%</span>
+                <strong>${formatPoint(rakeAmountOf(row))} pt</strong>
+                <span>${escapeHtml(rakeLogLabel(row))}</span>
+                <span class="muted">元収入 ${formatPoint(row.original_gain || 0)} / ${formatPoint(row.rake_percent || 0)}%</span>
               </div>`).join("")}
           </section>`
         : `<section class="card"><h4>支払レーキ</h4><p class="muted">支払レーキはまだありません。</p></section>`;
@@ -3062,8 +3144,8 @@
       }
       let cumulative = 0;
       const series = gameRows.map((row) => {
-        const amount = Number(row.amount || 0);
-        cumulative += amount;
+        const amount = roundToTenth(row.amount || 0);
+        cumulative = roundToTenth(cumulative + amount);
         const createdAt = row.created_at || row.createdAt || Date.now();
         return {
           amount,
@@ -3079,9 +3161,9 @@
           <p class="muted">自分の対局精算・レーキ・祝儀など、ゲーム上で発生したポイントだけを累積表示しています。</p>
           <p class="muted">管理者の送る・回収、ユーザー間送信は除外しています。</p>
           <div class="point-summary">
-            <strong>累計収支: ${cumulative >= 0 ? "+" : ""}${cumulative} pt</strong>
+            <strong>累計収支: ${formatSignedPoint(cumulative)} pt</strong>
             <span>対象件数: ${series.length}件</span>
-            <span>支払レーキ合計: ${paidRakeTotal} pt</span>
+            <span>支払レーキ合計: ${formatPoint(paidRakeTotal)} pt</span>
           </div>
           ${renderPointHistoryChart(series)}
         </section>
@@ -3094,9 +3176,9 @@
             .map((row) => `
               <div class="table-seat-line">
                 <span>${escapeHtml(row.dateTimeLabel)}</span>
-                <strong>${row.amount >= 0 ? "+" : ""}${row.amount} pt</strong>
+                <strong>${formatSignedPoint(row.amount)} pt</strong>
                 <span>${escapeHtml(pointReasonLabel(row.reason))}</span>
-                <span class="muted">累計 ${row.cumulative >= 0 ? "+" : ""}${row.cumulative} pt</span>
+                <span class="muted">累計 ${formatSignedPoint(row.cumulative)} pt</span>
               </div>`)
             .join("")}
         </section>`;
@@ -3370,7 +3452,7 @@
         <strong>${member.display_name || userInfo.display_name || member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "名前未設定"}</strong>
         <span>ID: ${member.login_id || userInfo.login_id || member.user_id || userInfo.user_id || "不明"}</span>
         <span>権限: ${roleLabel}</span>
-        <span>ポイント: ${Number(member.point_balance || 0)}</span>
+        <span>ポイント: ${formatPoint(member.point_balance)}</span>
         <span>加入: ${new Date(member.joined_at || Date.now()).toLocaleString()}</span>
         ${member.role !== "admin" ? '<button type="button" data-action="grantAdmin">管理者権限を付与</button><button type="button" data-action="removeMember" class="danger">削除</button>' : ""}
       `;
@@ -3613,6 +3695,11 @@
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const members = await loadClubMembersForView(clubId);
+    const rakeRows = await fetchClubRakeRows(clubId).catch((error) => {
+      log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
+      return [];
+    });
+    const paidRakeByUser = rakeTotalsByUser(rakeRows);
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
     const showAdminPointControls = isAdmin();
@@ -3623,12 +3710,13 @@
       const lines = visibleMembers.map((member) => {
         const userId = member.users?.user_id || "";
         const name = member.users?.display_name || userId || "Player";
-        return `${name}\n  現在ポイント: ${Number(member.point_balance || 0)}\n  権限: ${member.role}`;
+        const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
+        return `${name}\n  現在ポイント: ${formatPoint(member.point_balance)}\n  支払レーキ: ${formatPoint(paidRake)}\n  権限: ${member.role}`;
       });
       $("pointSummary").textContent = [
-        `クラブポイント固定総量: ${pointSummary.fixedTotal}`,
-        `クラブ保管ポイント: ${pointSummary.clubReserve}`,
-        `メンバー保有ポイント合計: ${pointSummary.memberTotal}`,
+        `クラブポイント固定総量: ${formatPoint(pointSummary.fixedTotal)}`,
+        `クラブ保管ポイント: ${formatPoint(pointSummary.clubReserve)}`,
+        `メンバー保有ポイント合計: ${formatPoint(pointSummary.memberTotal)}`,
         "",
         lines.length ? lines.join("\n\n") : "ポイント情報がありません。",
       ].join("\n");
@@ -3638,9 +3726,10 @@
       visibleMembers.forEach((member) => {
         const userId = member.users?.user_id || "";
         const name = member.users?.display_name || userId || "Player";
+        const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
         const row = document.createElement("div");
         row.className = "point-user-row";
-        row.innerHTML = `<strong>${name}</strong><span>${Number(member.point_balance || 0)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+        row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span><span>支払レーキ ${formatPoint(paidRake)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
         const sendButton = row.querySelector('[data-action="send"]');
         if (sendButton) {
           sendButton.addEventListener("click", async () => {

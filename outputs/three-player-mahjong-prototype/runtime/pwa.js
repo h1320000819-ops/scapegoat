@@ -2,10 +2,27 @@
   const isStandalone = () =>
     window.matchMedia?.("(display-mode: standalone)")?.matches ||
     window.navigator.standalone === true;
+  const isFullscreen = () =>
+    Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  const isLandscape = () =>
+    window.matchMedia?.("(orientation: landscape)")?.matches ||
+    window.innerWidth > window.innerHeight;
+  const canFullscreen = () => {
+    const element = document.documentElement;
+    return Boolean(element.requestFullscreen || element.webkitRequestFullscreen);
+  };
 
   const updateMode = () => {
     document.documentElement.dataset.pwa = isStandalone() ? "standalone" : "browser";
     document.body.dataset.pwa = isStandalone() ? "standalone" : "browser";
+    document.documentElement.dataset.fullscreen = isFullscreen() ? "on" : "off";
+    document.body.dataset.fullscreen = isFullscreen() ? "on" : "off";
+  };
+  const updateViewportSize = () => {
+    const height = window.visualViewport?.height || window.innerHeight;
+    const width = window.visualViewport?.width || window.innerWidth;
+    document.documentElement.style.setProperty("--anmika-viewport-height", `${height}px`);
+    document.documentElement.style.setProperty("--anmika-viewport-width", `${width}px`);
   };
 
   const registerServiceWorker = () => {
@@ -31,8 +48,56 @@
       .pwa-install-hint div{align-items:center;display:flex;flex-wrap:wrap;gap:8px}
       .pwa-install-hint button{background:#ffd15c;border:1px solid #9f6b00;border-radius:8px;color:#1f1704;font:inherit;font-weight:900;min-height:34px;padding:6px 10px}
       .pwa-install-hint .secondary{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24);color:#f7fff9}
+      .pwa-fullscreen-button{align-items:center;background:rgba(255,209,92,.95);border:1px solid rgba(55,38,0,.48);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.35);color:#1f1704;display:none;font:inherit;font-size:12px;font-weight:900;gap:6px;min-height:34px;padding:6px 10px;position:fixed;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));z-index:10001}
+      body[data-pwa="browser"][data-fullscreen="off"] .pwa-fullscreen-button{display:flex}
+      @media (min-width: 921px), (orientation: portrait){.pwa-fullscreen-button{display:none!important}}
     `;
     document.head.append(style);
+  };
+  const shouldOfferFullscreen = () =>
+    isMobile() &&
+    isLandscape() &&
+    !isStandalone() &&
+    !isFullscreen() &&
+    canFullscreen() &&
+    Boolean(document.querySelector(".mahjong-table, #game-root"));
+
+  const requestFullscreen = async () => {
+    if (!shouldOfferFullscreen()) return false;
+    const element = document.documentElement;
+    try {
+      if (element.requestFullscreen) await element.requestFullscreen({ navigationUI: "hide" });
+      else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
+      await screen.orientation?.lock?.("landscape").catch(() => null);
+      updateMode();
+      updateViewportSize();
+      return true;
+    } catch (error) {
+      console.warn("[PWA] fullscreen request failed", error);
+      return false;
+    }
+  };
+
+  const ensureFullscreenButton = () => {
+    ensureHintStyles();
+    let button = document.querySelector(".pwa-fullscreen-button");
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "pwa-fullscreen-button";
+      button.textContent = "\u5168\u753b\u9762";
+      button.addEventListener("click", () => requestFullscreen());
+      document.body.append(button);
+    }
+    button.hidden = !shouldOfferFullscreen();
+  };
+
+  const bindAutoFullscreenGesture = () => {
+    document.addEventListener("pointerdown", (event) => {
+      if (!shouldOfferFullscreen()) return;
+      if (event.target?.closest?.("input,select,textarea,a,[data-pwa-dismiss]")) return;
+      requestFullscreen();
+    }, { capture: true });
   };
 
   const showInstallHint = () => {
@@ -88,11 +153,38 @@
     deferredPrompt = null;
     document.querySelector(".pwa-install-hint")?.remove();
     updateMode();
+    ensureFullscreenButton();
   });
   window.matchMedia?.("(display-mode: standalone)")?.addEventListener?.("change", updateMode);
+  window.addEventListener("resize", () => {
+    updateViewportSize();
+    updateMode();
+    ensureFullscreenButton();
+  });
+  window.visualViewport?.addEventListener?.("resize", updateViewportSize);
+  window.addEventListener("orientationchange", () => {
+    setTimeout(() => {
+      updateViewportSize();
+      updateMode();
+      ensureFullscreenButton();
+    }, 250);
+  });
+  document.addEventListener("fullscreenchange", () => {
+    updateMode();
+    updateViewportSize();
+    ensureFullscreenButton();
+  });
+  document.addEventListener("webkitfullscreenchange", () => {
+    updateMode();
+    updateViewportSize();
+    ensureFullscreenButton();
+  });
   document.addEventListener("DOMContentLoaded", () => {
     updateMode();
+    updateViewportSize();
     registerServiceWorker();
+    bindAutoFullscreenGesture();
+    ensureFullscreenButton();
     setTimeout(showInstallHint, 900);
   });
 })();

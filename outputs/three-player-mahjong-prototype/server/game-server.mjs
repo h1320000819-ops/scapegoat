@@ -578,13 +578,22 @@ const syncDisconnectedLastHandLeaves = (room) => {
   persistRoom(room);
 };
 
-const loadPersistedRoom = (tableId) => {
+const loadPersistedRoom = (tableId, expectedGameId = "") => {
   const filePaths = [roomStorePath(tableId), roomBackupStorePath(tableId)];
   for (const filePath of filePaths) {
     if (!fs.existsSync(filePath)) continue;
     try {
       const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
       if (!parsed?.tableId || !parsed?.state) continue;
+      if (expectedGameId && parsed.gameId && parsed.gameId !== expectedGameId) {
+        console.log("[AnmikaGameServer] skip persisted room with old gameId", {
+          tableId,
+          file: filePath,
+          persistedGameId: parsed.gameId,
+          expectedGameId,
+        });
+        continue;
+      }
       console.log("[AnmikaGameServer] loaded persisted room", {
         tableId,
         file: filePath,
@@ -712,12 +721,20 @@ const scheduleRoomDbPersist = (room, payload) => {
   }
 };
 
-const loadPersistedRoomFromDb = async (tableId) => {
+const loadPersistedRoomFromDb = async (tableId, expectedGameId = "") => {
   if (!hasSupabaseServerWriter() || !tableId) return null;
   try {
     const rows = await supabaseRest(`/online_game_rooms?select=*&table_id=eq.${encodeURIComponent(String(tableId))}&limit=1`);
     const row = asArray(rows)[0];
     if (!row?.state) return null;
+    if (expectedGameId && row.game_id && row.game_id !== expectedGameId) {
+      console.log("[AnmikaGameServer] skip DB persisted room with old gameId", {
+        tableId,
+        persistedGameId: row.game_id,
+        expectedGameId,
+      });
+      return null;
+    }
     const parsed = {
       tableId: row.table_id || tableId,
       gameId: row.game_id || `game-${tableId}`,
@@ -865,11 +882,30 @@ const getRoomTableContext = async (room) => {
 const nonCpuPlayersForPointSettlement = (state) =>
   asArray(state?.players).filter((player) => player?.type !== "cpu" && isUuid(player?.id));
 const pointSettlementPlayerById = (state) => new Map(asArray(state?.players).map((player) => [player.id, player]));
+const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
+const roundToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const rounded = Math.round((numeric + Math.sign(numeric) * Number.EPSILON) * 10) / 10;
+  return normalizeSignedZero(Number(rounded.toFixed(1)));
+};
+const floorToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const floored = Math.floor((numeric + 1e-9) * 10) / 10;
+  return normalizeSignedZero(Number(floored.toFixed(1)));
+};
+const ceilToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const ceiled = Math.ceil((numeric - 1e-9) * 10) / 10;
+  return normalizeSignedZero(Number(ceiled.toFixed(1)));
+};
 const normalizePointDeltas = (payments = {}) => {
   const normalized = {};
   for (const [playerId, amount] of Object.entries(payments || {})) {
     if (!isUuid(playerId)) continue;
-    const value = Math.round(Number(amount || 0) * 10) / 10;
+    const value = roundToTenth(amount);
     if (value) normalized[playerId] = value;
   }
   return normalized;
@@ -881,7 +917,7 @@ const calculateServerRake = (winnerGain, rakePercent) => {
   const gain = Math.max(0, Number(winnerGain || 0));
   const percent = Math.max(0, Number(rakePercent || 0));
   if (!gain || !percent) return 0;
-  return Math.round(gain * (percent / 100) * 1000) / 1000;
+  return roundClubPointCreditInClubFavor(gain * (percent / 100));
 };
 const applyServerWinRake = (state, winnerId, scoreResult) => {
   if (!scoreResult || isTsumoLossless3maState(state)) return scoreResult;
@@ -890,11 +926,11 @@ const applyServerWinRake = (state, winnerId, scoreResult) => {
   const originalWinnerGain = Number(payments[winnerId] || 0);
   const rakePoints = calculateServerRake(originalWinnerGain, rakePercent);
   if (rakePoints > 0) {
-    payments[winnerId] = Math.round((originalWinnerGain - rakePoints) * 1000) / 1000;
-    state.rakePool = Math.round((Number(state.rakePool || 0) + rakePoints) * 1000) / 1000;
+    payments[winnerId] = roundPlayerPointDeltaInClubFavor(originalWinnerGain - rakePoints);
+    state.rakePool = roundToTenth(Number(state.rakePool || 0) + rakePoints);
   }
   scoreResult.payments = payments;
-  scoreResult.originalWinnerGain = originalWinnerGain;
+  scoreResult.originalWinnerGain = roundToTenth(originalWinnerGain);
   scoreResult.rakePoints = rakePoints;
   scoreResult.rakeAmount = rakePoints;
   scoreResult.rakePercent = rakePercent;
@@ -908,7 +944,7 @@ const pointDeltasFromResultPayments = (payments, pointRate = 1) => {
   const deltas = {};
   for (const [playerId, delta] of paymentEntries(payments)) {
     if (!isUuid(playerId)) continue;
-    const value = Math.round(Number(delta || 0) * rate * 10) / 10;
+    const value = roundToTenth(Number(delta || 0) * rate);
     if (value) deltas[playerId] = value;
   }
   return deltas;
@@ -923,7 +959,7 @@ const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
   const allDeltas = {};
   const omittedAutoPlayerDeltas = {};
   for (const [playerId, delta] of entries) {
-    const value = Math.round(Number(delta || 0) * rate * 10) / 10;
+    const value = roundToTenth(Number(delta || 0) * rate);
     if (!value) continue;
     allDeltas[playerId] = value;
     const player = playerById.get(playerId);
@@ -933,13 +969,13 @@ const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
     }
     deltas[playerId] = value;
   }
-  const realPlayerTotal = Math.round(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0) * 10) / 10;
+  const realPlayerTotal = roundToTenth(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0));
   return {
     deltas,
     metadata: {
       allDeltas,
       omittedAutoPlayerDeltas,
-      clubReserveDelta: Math.round(-realPlayerTotal * 10) / 10,
+      clubReserveDelta: roundToTenth(-realPlayerTotal),
       cpuCompensationApplied: Object.keys(omittedAutoPlayerDeltas).length > 0,
     },
   };
@@ -947,12 +983,12 @@ const pointDeltasForRealPlayers = (state, payments, pointRate = 1) => {
 const roundPlayerPointDeltaInClubFavor = (value) => {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return 0;
-  return Math.floor(numeric * 10) / 10;
+  return numeric >= 0 ? floorToTenth(numeric) : ceilToTenth(numeric);
 };
 const roundClubPointCreditInClubFavor = (value) => {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return 0;
-  return Math.ceil(numeric * 10) / 10;
+  return numeric >= 0 ? ceilToTenth(numeric) : floorToTenth(numeric);
 };
 const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   const rate = Number(pointRate || 1);
@@ -967,7 +1003,7 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   for (const [playerId, delta] of entries) {
     const rawValue = Number(delta || 0) * rate;
     if (!rawValue) continue;
-    rawClubPointDeltas[playerId] = Math.round(rawValue * 1000) / 1000;
+    rawClubPointDeltas[playerId] = roundToTenth(rawValue);
     const pointValue = roundPlayerPointDeltaInClubFavor(rawValue);
     if (!pointValue) continue;
     allPointDeltas[playerId] = pointValue;
@@ -995,8 +1031,8 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
     allPointDeltas[winnerId] = winnerAfterRake;
   }
 
-  const realPlayerTotal = Math.round(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0) * 10) / 10;
-  const clubReserveDelta = Math.round(-realPlayerTotal * 10) / 10;
+  const realPlayerTotal = roundToTenth(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0));
+  const clubReserveDelta = roundToTenth(-realPlayerTotal);
   return {
     deltas,
     metadata: {
@@ -1011,9 +1047,9 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
         source: scoreRakeApplied ? "scoreResult" : shouldApplyRake ? "clubPointFallback" : "none",
         winnerId,
         rakePercent,
-        winnerRawGain: Math.round(winnerRawGain * 1000) / 1000,
-        rakeRaw: scoreRakeApplied ? Math.round(scoreRakePoints * rate * 1000) / 1000 : Math.round(rakeRaw * 1000) / 1000,
-        rakeGamePoints: scoreRakeApplied ? Math.round(scoreRakePoints * 1000) / 1000 : null,
+        winnerRawGain: roundToTenth(winnerRawGain),
+        rakeRaw: scoreRakeApplied ? roundToTenth(scoreRakePoints * rate) : roundToTenth(rakeRaw),
+        rakeGamePoints: scoreRakeApplied ? roundToTenth(scoreRakePoints) : null,
         playerDeduction: rakePlayerDeduction,
         roundingPolicy: "小数第2位以下は常にクラブ側へ寄せる",
       },
@@ -1095,7 +1131,7 @@ const syncAnmikaRakeLogEffect = async (room, result, pointRate = 1) => {
       table_id: table.table_id,
       game_id: isUuid(room.gameId) ? room.gameId : null,
       win_type: result?.winType || null,
-      original_gain: Math.round(Number(scoreResult?.originalWinnerGain ?? 0) * 1000) / 1000,
+      original_gain: roundToTenth(scoreResult?.originalWinnerGain ?? 0),
       rake_percent: Number(scoreResult?.rakePercent ?? room.state.settings?.rakePercent ?? table.rake_percent ?? 0),
       rake_amount: rakeAmount,
       amount: rakeAmount,
@@ -1104,6 +1140,38 @@ const syncAnmikaRakeLogEffect = async (room, result, pointRate = 1) => {
   markClubPointSyncApplied(room.state, key);
   persistRoom(room);
   console.log("[RakeSync] applied", { tableId: room.tableId, gameId: room.gameId, winnerId, rakeAmount });
+  return true;
+};
+const syncEntryRakeLogEffect = async (room, entryRakePoints = 0) => {
+  if (!room?.state) return false;
+  const entryRake = roundClubPointCreditInClubFavor(entryRakePoints);
+  if (!entryRake) return false;
+  const key = `${room.gameId}:entryRakeLog`;
+  if (hasClubPointSyncApplied(room.state, key)) return false;
+  if (!hasSupabaseServerWriter()) return false;
+  const table = await getRoomTableContext(room);
+  if (!table?.club_id) return false;
+  const rows = nonCpuPlayersForPointSettlement(room.state).map((player) => ({
+    club_id: table.club_id,
+    user_id: player.id,
+    user_name: player.name || null,
+    table_id: table.table_id,
+    game_id: isUuid(room.gameId) ? room.gameId : null,
+    win_type: null,
+    original_gain: 0,
+    rake_percent: 0,
+    rake_amount: entryRake,
+    amount: entryRake,
+  }));
+  if (!rows.length) return false;
+  await supabaseRest("/club_rake_logs", {
+    method: "POST",
+    prefer: "return=minimal",
+    body: rows,
+  });
+  markClubPointSyncApplied(room.state, key);
+  persistRoom(room);
+  console.log("[RakeSync] entry rake applied", { tableId: room.tableId, gameId: room.gameId, players: rows.length, entryRake });
   return true;
 };
 const makeHiddenWallForReplay = (length) => Array.from({ length: Math.max(0, Number(length || 0)) }, () => 0);
@@ -1656,13 +1724,14 @@ const syncClubPointEffects = async (room) => {
         label: "半荘開始時レーキ",
         entryRakePoints: entryRake,
       });
+      await syncEntryRakeLogEffect(room, entryRake);
     }
     const finalSettlement = state.finalResult?.settlement;
     if (state.phase === "gameEnded" && finalSettlement?.settlements) {
       const accumulated = { ...(state.hanchanClubPointPayments || {}) };
       const combined = { ...accumulated };
       for (const [playerId, delta] of Object.entries(finalSettlement.settlements || {})) {
-        combined[playerId] = Math.round((Number(combined[playerId] || 0) + Number(delta || 0)) * 10) / 10;
+        combined[playerId] = roundToTenth(Number(combined[playerId] || 0) + Number(delta || 0));
       }
       const { deltas, metadata: compensationMetadata } = pointDeltasForRealPlayers(state, combined, 1);
       await syncOneClubPointEffect(room, `${room.gameId}:hanchanSettlement`, "hanchan_settlement", deltas, {
@@ -1789,13 +1858,13 @@ const calculateTsumoLosslessFinalSettlement = (state) => {
   ranked.forEach((player, rankIndex) => {
     if (rankIndex === 0) return;
     const raw = Number(player.score || 0) / 1000 - 40 + Number(uma[rankIndex] || 0);
-    const pointDelta = Math.round(raw * rate * 10) / 10;
+    const pointDelta = roundToTenth(raw * rate);
     settlements[player.id] = pointDelta;
     lowerTotal += pointDelta;
     details.push({ playerId: player.id, rank: rankIndex + 1, score: Number(player.score || 0), uma: uma[rankIndex] || 0, raw, pointDelta });
   });
   if (ranked[0]) {
-    settlements[ranked[0].id] = Math.round(-lowerTotal * 10) / 10;
+    settlements[ranked[0].id] = roundToTenth(-lowerTotal);
     details.unshift({ playerId: ranked[0].id, rank: 1, score: Number(ranked[0].score || 0), uma: uma[0] || 0, raw: null, pointDelta: settlements[ranked[0].id] });
   }
   return { type: "hanchanSettlement", rate, umaType: state?.settings?.ruleConfig?.umaType || "20-0--20", rankedPlayerIds: ranked.map((player) => player.id), settlements, details };
@@ -1807,7 +1876,7 @@ const getNextHanchanSeatOrder = (state) => {
 const getChipPointValue = (state) => {
   const chipValuePoints = Number(state?.settings?.ruleConfig?.chipValuePoints || 5000);
   const rate = Number(state?.settings?.pointRate || 1);
-  return Math.round((chipValuePoints / 1000) * rate * 10) / 10;
+  return roundToTenth((chipValuePoints / 1000) * rate);
 };
 const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, scoreResult) => {
   if (!isTsumoLossless3maState(state)) return null;
@@ -1818,7 +1887,7 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
   const yakumanChips = ensureArray(scoreResult?.yakuList || scoreResult?.yaku).some((item) => item.isYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
   const chipsPerPayer = blueChips + ippatsuChips + uraChips + yakumanChips;
   const chipPoint = getChipPointValue(state);
-  const pointPerPayer = Math.round(chipsPerPayer * chipPoint * 10) / 10;
+  const pointPerPayer = roundToTenth(chipsPerPayer * chipPoint);
   const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
   if (pointPerPayer !== 0) {
     if (winType === "tsumo") {
@@ -1837,7 +1906,7 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
 const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
   if (!isTsumoLossless3maState(state)) return null;
   const chipPoint = getChipPointValue(state);
-  const prize = Math.round(chipPoint * 2 * 10) / 10;
+  const prize = roundToTenth(chipPoint * 2);
   if (prize <= 0) return null;
   const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
   const recipientFor = (payerId) => {
@@ -1863,7 +1932,7 @@ const accumulateTsumoLosslessClubPointPayments = (state, payments = {}) => {
   for (const [playerId, delta] of Object.entries(payments || {})) {
     const value = Number(delta || 0);
     if (!value) continue;
-    state.hanchanClubPointPayments[playerId] = Math.round((Number(state.hanchanClubPointPayments[playerId] || 0) + value) * 10) / 10;
+    state.hanchanClubPointPayments[playerId] = roundToTenth(Number(state.hanchanClubPointPayments[playerId] || 0) + value);
   }
 };
 const awardTsumoLosslessRiichiSticks = (state, winnerId) => {
@@ -2922,7 +2991,8 @@ const applyServerFlowerEffect = (state) => {
   if (tile && isFlowerTile(tile)) {
     player.nukiDoraTiles ??= [];
     player.nukiDoraTiles.push(tile);
-    appendHandEvent(state, { type: "nukiDora", playerId: player.id, tile, turnIndex: state.turnIndex ?? 0 });
+    const replacementTile = ensureArray(state.rinshanWall)[0] || null;
+    appendHandEvent(state, { type: "nukiDora", playerId: player.id, tile, replacementTile, turnIndex: state.turnIndex ?? 0 });
     drawRinshanAfterFlower(state, player, removedFromDrawn);
     player.hand = sortHandTiles(player.hand);
   }
@@ -3059,11 +3129,21 @@ const continueAfterServerFeverWin = (state) => {
 const addDoraAfterKan = (state) => {
   state.kanCount = Number(state.kanCount || 0) + 1;
   const indicator = ensureArray(state.liveWall).shift();
+  const uraIndicator = ensureArray(state.liveWall).shift();
   if (indicator) {
     state.doraIndicators ??= [];
     state.doraIndicators.push(indicator);
-    appendHandEvent(state, { type: "doraReveal", tile: indicator, turnIndex: state.turnIndex ?? 0 });
-    console.log("[KanDora] revealed", { tableId: state.tableId, kanCount: state.kanCount, indicator: tileKindKey(indicator), doraIndicatorCount: state.doraIndicators.length });
+    state.uraDoraIndicators ??= [];
+    if (uraIndicator) state.uraDoraIndicators.push(uraIndicator);
+    appendHandEvent(state, { type: "doraReveal", tile: indicator, doraIndicators: [...state.doraIndicators], uraDoraIndicators: [...state.uraDoraIndicators], turnIndex: state.turnIndex ?? 0 });
+    console.log("[KanDora] revealed", {
+      tableId: state.tableId,
+      kanCount: state.kanCount,
+      indicator: tileKindKey(indicator),
+      uraIndicator: uraIndicator ? tileKindKey(uraIndicator) : null,
+      doraIndicatorCount: state.doraIndicators.length,
+      uraDoraIndicatorCount: state.uraDoraIndicators.length,
+    });
   }
 };
 const applyServerAction = (state, event) => {
@@ -3164,6 +3244,12 @@ const applyServerAction = (state, event) => {
   if (action === "discard") {
     const tileId = payload.tileId || payload.tile?.id;
     if (!tileId) throw new Error("打牌する牌が指定されていません");
+    const isRiichiChoiceDiscard = state.pendingAction?.playerId === player.id &&
+      ensureArray(state.pendingAction?.options).some((option) => option.type === "riichi") &&
+      state.phase !== "waitingForRiichiDiscard";
+    if (isRiichiChoiceDiscard) {
+      player.riichiDiscardTileIds = [];
+    }
     state.pendingAction = null;
     discardForServer(state, player, tileId, { isRiichiDiscard: state.phase === "waitingForRiichiDiscard" });
     return state;
@@ -3990,6 +4076,10 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
   const key = makeRoomKey(tableId);
   if (!key) throw new Error("tableId is required");
   let room = gameRooms.get(key);
+  if (room && gameId && room.gameId && room.gameId !== gameId) {
+    console.log("[AnmikaGameServer] reset room by new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+    resetRoom = true;
+  }
   if (room && resetRoom) {
     console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
     if (room.resultTimer) clearTimeout(room.resultTimer);
@@ -4001,7 +4091,7 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     gameRooms.delete(key);
   }
   if (!room) {
-    room = loadPersistedRoom(key);
+    room = loadPersistedRoom(key, gameId || "");
     if (room && resetRoom) {
       console.log("[AnmikaGameServer] ignore persisted room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
       room = null;
@@ -4038,7 +4128,7 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
 };
 const hydrateRoomFromDbIfNeeded = async (room) => {
   if (!room || room.state) return room;
-  const persisted = await loadPersistedRoomFromDb(room.tableId);
+  const persisted = await loadPersistedRoomFromDb(room.tableId, room.gameId || "");
   if (!persisted?.state) {
     console.warn("[AnmikaGameServer] no DB persisted room found", {
       tableId: room.tableId,
@@ -4249,6 +4339,19 @@ const scheduleRoomClockTimeout = (room) => {
   const delay = Math.max(0, getServerClockRemainingMs(room.state, playerId)) + 80;
   room.clockTimer = setTimeout(() => {
     room.clockTimer = null;
+    if (room.actionInFlight) {
+      console.warn("[Clock] deferred during action", {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        action: room.actionInFlight?.actionType || "",
+        playerId: room.actionInFlight?.playerId || "",
+      });
+      room.clockTimer = setTimeout(() => {
+        room.clockTimer = null;
+        scheduleRoomClockTimeout(room);
+      }, 250);
+      return;
+    }
     if (!room.state?.activeClockPlayerId) return;
     const activePlayerId = room.state.activeClockPlayerId;
     const activePlayer = findPlayer(room.state, activePlayerId);
@@ -4501,7 +4604,14 @@ io.on("connection", (socket) => {
           console.log("[ResultOk] auto OK for disconnected players", { tableId: room.tableId, playerId, serverAutoOkPlayerIds });
         }
       }
-      if (["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(actionType)) {
+      const clockGuardedAction = ["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(actionType);
+      if (clockGuardedAction) {
+        room.actionInFlight = {
+          actionType,
+          playerId,
+          requestId,
+          startedAt: now(),
+        };
         if (room.clockTimer) {
           clearTimeout(room.clockTimer);
           room.clockTimer = null;
@@ -4537,6 +4647,7 @@ io.on("connection", (socket) => {
       };
       room.state = nextState;
       room.updatedAt = now();
+      room.actionInFlight = null;
       persistRoom(room);
       if (requestId) {
         room.processedRequestIds.add(requestId);
@@ -4557,6 +4668,20 @@ io.on("connection", (socket) => {
       syncDisconnectedLastHandLeaves(room);
       if (shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
     } catch (error) {
+      if (room?.actionInFlight) room.actionInFlight = null;
+      if (room?.state && ["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(payload?.actionType)) {
+        const retryPlayerId = playerIdForAck;
+        const retryPlayer = findPlayer(room.state, retryPlayerId);
+        const current = currentPlayer(room.state);
+        const canResumeClock = retryPlayer &&
+          !room.state.handLog?.result &&
+          !["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase) &&
+          (room.state.pendingAction?.playerId === retryPlayerId || current?.id === retryPlayerId);
+        if (canResumeClock) {
+          startServerClockForPlayer(room.state, retryPlayer);
+          scheduleRoomClockTimeout(room);
+        }
+      }
       const alreadyTraced = Boolean(error?.exceptionId) || String(error?.message || "").includes("exceptionId:");
       const exceptionId = error?.exceptionId || (alreadyTraced ? "" : logServerException("game:action:rejected", error, {
         socketId: socket.id,
