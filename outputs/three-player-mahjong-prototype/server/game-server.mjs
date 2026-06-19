@@ -553,6 +553,209 @@ const syncSeatLeaveToDb = async (tableId, userId) => {
   });
   return true;
 };
+const tableSeatPlayerId = (seat) => seat?.playerId || seat?.user_id || seat?.userId || null;
+const tableSeatPlayerType = (seat) => seat?.playerType || seat?.player_type || (tableSeatPlayerId(seat) ? "human" : "empty");
+const tableSeatDisplayName = (seat, fallback = "") => seat?.displayName || seat?.display_name || fallback || null;
+const normalizeServerSeat = (seat, index = 0) => ({
+  seatIndex: Number(seat?.seatIndex ?? seat?.seat_index ?? index),
+  playerId: tableSeatPlayerId(seat),
+  playerType: tableSeatPlayerType(seat),
+  displayName: tableSeatDisplayName(seat),
+  isLastHandDeclared: Boolean(seat?.isLastHandDeclared ?? seat?.is_last_hand_declared),
+});
+const normalizeServerSeats = (seats = []) => {
+  const byIndex = new Map(asArray(seats).map((seat, index) => {
+    const normalized = normalizeServerSeat(seat, index);
+    return [normalized.seatIndex, normalized];
+  }));
+  return [0, 1, 2].map((seatIndex) => byIndex.get(seatIndex) || {
+    seatIndex,
+    playerId: null,
+    playerType: "empty",
+    displayName: null,
+    isLastHandDeclared: false,
+  });
+};
+const clearEndedRoomSeatForUser = (room, userId) => {
+  if (!room?.state || !userId) return false;
+  let changed = false;
+  room.state.seats = normalizeServerSeats(room.state.seats);
+  for (const seat of room.state.seats) {
+    if (seat?.playerId !== userId) continue;
+    seat.playerId = null;
+    seat.playerType = "empty";
+    seat.displayName = null;
+    seat.isLastHandDeclared = false;
+    changed = true;
+  }
+  if (room.players?.has?.(userId)) {
+    room.players.delete(userId);
+    changed = true;
+  }
+  if (changed) {
+    room.state.lastHandLeaveSyncedBy ??= [];
+    room.state.lastHandLeaveSyncedBy = [...new Set([...asArray(room.state.lastHandLeaveSyncedBy), userId])];
+  }
+  return changed;
+};
+const waitingDisplayName = (row) =>
+  row?.users?.display_name || row?.users?.login_id || row?.display_name || `Player ${String(row?.user_id || "").slice(0, 8)}`;
+const fillRoomSeatsFromWaitingList = async (room) => {
+  if (!room?.state || !hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
+  room.state.seats = normalizeServerSeats(room.state.seats);
+  const occupied = new Set(room.state.seats.map((seat) => seat.playerId).filter(Boolean));
+  const emptySeats = room.state.seats.filter((seat) => !seat.playerId || seat.playerType === "empty");
+  if (!emptySeats.length) return false;
+  const rows = await supabaseRest(
+    `/table_waiting_list?select=user_id,created_at,users(display_name,login_id)&table_id=eq.${encodeURIComponent(room.tableId)}&order=created_at.asc`
+  ).catch((error) => {
+    console.warn("[WaitingQueue] load failed", { tableId: room.tableId, error: error?.message || String(error) });
+    return [];
+  });
+  let changed = false;
+  for (const seat of emptySeats) {
+    const next = asArray(rows).find((row) => row?.user_id && !occupied.has(row.user_id));
+    if (!next) break;
+    occupied.add(next.user_id);
+    const name = waitingDisplayName(next);
+    seat.playerId = next.user_id;
+    seat.playerType = "human";
+    seat.displayName = name;
+    seat.isLastHandDeclared = false;
+    await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}&seat_index=eq.${encodeURIComponent(String(seat.seatIndex))}`, {
+      method: "PATCH",
+      prefer: "return=minimal",
+      body: {
+        user_id: next.user_id,
+        player_type: "human",
+        display_name: name,
+        is_last_hand_declared: false,
+      },
+    }).catch((error) => console.warn("[WaitingQueue] seat patch failed", { tableId: room.tableId, userId: next.user_id, error: error?.message || String(error) }));
+    await supabaseRest(`/table_waiting_list?table_id=eq.${encodeURIComponent(room.tableId)}&user_id=eq.${encodeURIComponent(next.user_id)}`, {
+      method: "DELETE",
+      prefer: "return=minimal",
+    }).catch((error) => console.warn("[WaitingQueue] delete failed", { tableId: room.tableId, userId: next.user_id, error: error?.message || String(error) }));
+    changed = true;
+  }
+  return changed;
+};
+const syncRoomSeatsToDb = async (room) => {
+  if (!room?.state || !hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
+  let changed = false;
+  for (const seat of normalizeServerSeats(room.state.seats)) {
+    const isCpu = seat.playerType === "cpu" || String(seat.playerId || "").startsWith("cpu");
+    await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}&seat_index=eq.${encodeURIComponent(String(seat.seatIndex))}`, {
+      method: "PATCH",
+      prefer: "return=minimal",
+      body: {
+        user_id: isCpu ? null : (seat.playerId || null),
+        player_type: seat.playerId ? (isCpu ? "cpu" : "human") : "empty",
+        display_name: seat.playerId ? seat.displayName : null,
+        is_last_hand_declared: false,
+      },
+    }).catch((error) => console.warn("[Seats] sync failed", { tableId: room.tableId, seatIndex: seat.seatIndex, error: error?.message || String(error) }));
+    changed = true;
+  }
+  return changed;
+};
+const nextHanchanPlayersFromSeats = (state) => {
+  const seats = normalizeServerSeats(state?.seats);
+  const seatPlayers = seats
+    .filter((seat) => seat.playerId || seat.playerType === "cpu")
+    .map((seat, index) => ({
+      id: seat.playerId || `cpu${index}`,
+      name: seat.displayName || (seat.playerType === "cpu" ? `CPU${Number(seat.seatIndex) + 1}` : `Player ${String(seat.playerId || "").slice(0, 8)}`),
+      type: seat.playerType === "cpu" ? "cpu" : "remote",
+    }));
+  if (seatPlayers.length < 3) return [];
+  const previousOrder = asArray(state?.round?.initialSeatOrder).filter((id) => seatPlayers.some((player) => player.id === id));
+  const baseOrder = previousOrder.length === 3 ? previousOrder : seatPlayers.map((player) => player.id);
+  const rotatedOrder = [...baseOrder.slice(1), baseOrder[0]];
+  const byId = new Map(seatPlayers.map((player) => [player.id, player]));
+  return rotatedOrder.map((id) => byId.get(id)).filter(Boolean);
+};
+const startNextTsumoLosslessHanchanIfReady = async (room) => {
+  if (!room?.state || !isTsumoLossless3maState(room.state) || room.state.phase !== "gameEnded") return false;
+  syncDeclaredLastHandLeaves(room);
+  await fillRoomSeatsFromWaitingList(room);
+  const players = nextHanchanPlayersFromSeats(room.state);
+  if (players.length < 3) {
+    await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+      method: "PATCH",
+      prefer: "return=minimal",
+      body: { status: "waiting" },
+    }).catch(() => {});
+    room.updatedAt = now();
+    persistRoom(room);
+    broadcastState(room);
+    return false;
+  }
+  const previousGameId = room.gameId;
+  const nextGameId = `game-${randomUUID()}`;
+  const settings = {
+    ...(room.state.settings || {}),
+    isLastHand: false,
+  };
+  const ruleConfig = normalizeRuleConfigForRule(settings.ruleId || settings.gameType || TSUMO_LOSSLESS_3MA_RULE_ID, settings.ruleConfig);
+  room.gameId = nextGameId;
+  room.version = Number(room.version || 0) + 1;
+  room.lastHandLeaveSyncedUserIds = new Set();
+  room.disconnectedLeaveSyncedUserIds = new Set();
+  room.processedRequestIds = new Set();
+  room.events = [];
+  room.state = createServerInitialState({
+    tableId: room.tableId,
+    gameId: nextGameId,
+    players,
+    settings,
+    ruleConfig,
+  });
+  room.state.version = room.version;
+  room.state.onlineMeta = {
+    ...(room.state.onlineMeta || {}),
+    transport: "socket.io",
+    reason: "nextHanchanAutoStart",
+    previousGameId,
+    publishedBy: null,
+    publishedAt: now(),
+  };
+  ensureRoomPlayerRegistry(room);
+  await syncRoomSeatsToDb(room);
+  await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: { status: "playing" },
+  }).catch(() => {});
+  room.updatedAt = now();
+  persistRoom(room);
+  broadcastState(room);
+  scheduleRoomServerEffect(room);
+  scheduleRoomClockTimeout(room);
+  scheduleDisconnectedTimeouts(room);
+  console.log("[Hanchan] next hanchan started", { tableId: room.tableId, previousGameId, nextGameId, playerIds: players.map((player) => player.id) });
+  return true;
+};
+const syncDeclaredLastHandLeaves = (room) => {
+  if (!room?.state || room.state.phase !== "gameEnded") return;
+  if (!(room.lastHandLeaveSyncedUserIds instanceof Set)) {
+    room.lastHandLeaveSyncedUserIds = new Set(asArray(room.lastHandLeaveSyncedUserIds || room.state.lastHandLeaveSyncedBy));
+  }
+  const ids = asArray(room.state.lastHandDeclaredBy).filter((id) => id && !room.lastHandLeaveSyncedUserIds.has(id));
+  if (!ids.length) return;
+  let changed = false;
+  for (const userId of ids) {
+    room.lastHandLeaveSyncedUserIds.add(userId);
+    changed = clearEndedRoomSeatForUser(room, userId) || changed;
+    syncSeatLeaveToDb(room.tableId, userId)
+      .then((updated) => console.warn("[LastHand] declared player left after game end", { tableId: room.tableId, userId, dbUpdated: updated }))
+      .catch((error) => console.error("[LastHand] failed to leave declared player", { tableId: room.tableId, userId, error: error?.message || String(error) }));
+  }
+  if (changed) {
+    room.updatedAt = now();
+    persistRoom(room);
+  }
+};
 const syncDisconnectedLastHandLeaves = (room) => {
   if (!room?.state || room.state.phase !== "gameEnded") return;
   if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
@@ -562,14 +765,7 @@ const syncDisconnectedLastHandLeaves = (room) => {
   if (!ids.length) return;
   for (const userId of ids) {
     room.disconnectedLeaveSyncedUserIds.add(userId);
-    for (const seat of asArray(room.state.seats)) {
-      if (seat?.playerId !== userId) continue;
-      seat.playerId = null;
-      seat.playerType = "empty";
-      seat.displayName = null;
-      seat.isLastHandDeclared = false;
-    }
-    room.players?.delete?.(userId);
+    clearEndedRoomSeatForUser(room, userId);
     syncSeatLeaveToDb(room.tableId, userId)
       .then((updated) => console.warn("[Reconnect] disconnected player left after game end", { tableId: room.tableId, userId, dbUpdated: updated }))
       .catch((error) => console.error("[Reconnect] failed to leave disconnected player", { tableId: room.tableId, userId, error: error?.message || String(error) }));
@@ -610,6 +806,7 @@ const loadPersistedRoom = (tableId, expectedGameId = "") => {
         players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
         processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
         disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
+        lastHandLeaveSyncedUserIds: new Set(asArray(parsed.lastHandLeaveSyncedUserIds || parsed.state?.lastHandLeaveSyncedBy)),
         updatedAt: Number(parsed.updatedAt || now()),
       };
       hydrateRoomReplayJson(room);
@@ -635,6 +832,7 @@ const roomFromPersistedPayload = (parsed, tableId) => {
     players: new Map(asArray(parsed.players || parsed.playerConnections).map((record) => [record.userId, { ...record }]).filter(([userId]) => userId)),
     processedRequestIds: new Set(asArray(parsed.processedRequestIds)),
     disconnectedLeaveSyncedUserIds: new Set(asArray(parsed.disconnectedLeaveSyncedUserIds)),
+    lastHandLeaveSyncedUserIds: new Set(asArray(parsed.lastHandLeaveSyncedUserIds || parsed.state?.lastHandLeaveSyncedBy)),
     updatedAt: Number(parsed.updatedAt || now()),
   };
   hydrateRoomReplayJson(room);
@@ -789,6 +987,7 @@ const buildRoomPersistPayload = (room) => ({
   players: roomPlayerConnectionList(room),
   processedRequestIds: [...(room.processedRequestIds || [])].slice(-500),
   disconnectedLeaveSyncedUserIds: [...(room.disconnectedLeaveSyncedUserIds || [])].slice(-100),
+  lastHandLeaveSyncedUserIds: [...(room.lastHandLeaveSyncedUserIds || room.state?.lastHandLeaveSyncedBy || [])].slice(-100),
   updatedAt: room.updatedAt || now(),
 });
 
@@ -1424,6 +1623,26 @@ const handMarkersFromSnapshots = (snapshots) => {
   });
   return markers;
 };
+const replayEventsFromSnapshots = (snapshots) => {
+  const events = [];
+  const list = asArray(snapshots);
+  for (let index = 1; index < list.length; index++) {
+    const previous = list[index - 1];
+    const current = list[index];
+    const previousHandId = previous?.handLog?.handId || "";
+    const currentHandId = current?.handLog?.handId || "";
+    const previousEvents = asArray(previous?.handLog?.events);
+    const currentEvents = asArray(current?.handLog?.events);
+    if (currentHandId && previousHandId && currentHandId !== previousHandId) {
+      events.push({ type: "handStart", handId: currentHandId, roundLabel: current?.handLog?.roundLabel || "" });
+      continue;
+    }
+    events.push(currentEvents.length > previousEvents.length
+      ? (currentEvents[previousEvents.length] || currentEvents.at(-1) || null)
+      : (currentEvents.at(-1) || null));
+  }
+  return events.filter(Boolean).map(compactReplayEvent);
+};
 const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻" : "アンミカロケット";
 const replayResultSummary = (state, result) => {
   if (!result) return "結果なし";
@@ -1570,6 +1789,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     events: room.state?.handLog?.events,
     result,
   });
+  const replayEvents = simpleReplay?.events || (isHanchanReplay ? replayEventsFromSnapshots(compactSnapshots) : asArray(room.events));
   const replayId = randomUUID();
   const replaySummary = {
     replayId,
@@ -1599,7 +1819,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       game_id: isUuid(room.gameId) ? room.gameId : null,
       summary: replaySummary,
       initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || compactSnapshots[0] || room.state),
-      events: simpleReplay?.events || asArray(room.events),
+      events: replayEvents,
       snapshots: isHanchanReplay ? compactSnapshots : [],
     },
   });
@@ -1780,13 +2000,18 @@ const resetResultCountdownState = (state) => {
   state.resultCountdownSeconds = null;
   state.resultAutoCloseHandled = false;
   state.resultOkPlayerIds = [];
+  state.resultCountdownResultId = "";
+  state.resultAutoCloseHandledResultId = "";
 };
 const startResultCountdownState = (state) => {
   if (!state) return;
+  const resultId = getCurrentResultId(state);
   state.resultCountdownStartedAt = Date.now();
   state.resultCountdownSeconds = Math.ceil(RESULT_AUTO_OK_DELAY_MS / 1000);
   state.resultAutoCloseHandled = false;
   state.resultOkPlayerIds = [];
+  state.resultCountdownResultId = resultId;
+  state.resultAutoCloseHandledResultId = "";
 };
 
 const DEFAULT_RULE_CONFIG = {
@@ -1856,6 +2081,20 @@ const isTsumoLosslessHanchanFinished = (state) => {
   if (!isTsumoLossless3maState(state)) return false;
   if (ensureArray(state.players).some((player) => Number(player.score || 0) <= 0)) return true;
   return getTsumoLosslessRoundIndex(state) >= TSUMO_LOSSLESS_ROUNDS.length - 1;
+};
+const isTsumoLosslessDealerContinuation = (state, result) => {
+  if (!isTsumoLossless3maState(state)) return false;
+  const dealerId = state?.round?.dealerPlayerId || "";
+  if (!dealerId || !result) return false;
+  if (result.type === "win") return result.winnerId === dealerId;
+  if (result.type === "exhaustiveDraw") return ensureArray(result.tenpaiPlayerIds).includes(dealerId);
+  return false;
+};
+const shouldEndTsumoLosslessHanchanAfterResult = (state, result) => {
+  if (!isTsumoLossless3maState(state)) return false;
+  if (ensureArray(state.players).some((player) => Number(player.score || 0) <= 0)) return true;
+  if (getTsumoLosslessRoundIndex(state) < TSUMO_LOSSLESS_ROUNDS.length - 1) return false;
+  return !isTsumoLosslessDealerContinuation(state, result);
 };
 const rankTsumoLosslessPlayers = (state) =>
   [...ensureArray(state.players)].sort((a, b) => {
@@ -1966,13 +2205,12 @@ const topPlayerIdForTsumoLossless = (state) =>
 const applyTsumoLosslessRoundAdvance = (state, result) => {
   if (!isTsumoLossless3maState(state)) return;
   state.round ??= {};
-  const dealerId = state.round.dealerPlayerId;
-  const isDealerWin = result?.type === "win" && result.winnerId === dealerId;
+  const dealerContinues = isTsumoLosslessDealerContinuation(state, result);
   const isDraw = result?.type === "exhaustiveDraw";
   state.round.honba = Number(state.round.honba || 0);
-  if (isDealerWin || isDraw) state.round.honba += 1;
+  if (dealerContinues || isDraw) state.round.honba += 1;
   else state.round.honba = 0;
-  state.round.hanchanRoundIndex = getTsumoLosslessRoundIndex(state) + 1;
+  if (!dealerContinues) state.round.hanchanRoundIndex = getTsumoLosslessRoundIndex(state) + 1;
 };
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
   const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
@@ -3211,7 +3449,7 @@ const applyServerAction = (state, event) => {
     if (continueAfterServerFeverWin(state)) return state;
     if (isTsumoLossless3maState(state)) {
       const result = state.handLog?.result;
-      if (isTsumoLosslessHanchanFinished(state)) {
+      if (shouldEndTsumoLosslessHanchanAfterResult(state, result)) {
         return prepareTsumoLosslessGameEnd(state, ensureArray(state.players).some((p) => Number(p.score || 0) <= 0) ? "tobi" : "south3End");
       }
       applyTsumoLosslessRoundAdvance(state, result);
@@ -3333,7 +3571,8 @@ const applyServerAction = (state, event) => {
     if (player.drawnTile?.id === tileId) player.drawnTile = null;
     player.nukiDoraTiles ??= [];
     player.nukiDoraTiles.push(tile);
-    appendHandEvent(state, { type: "nukiDora", playerId: player.id, tile, turnIndex: state.turnIndex ?? 0 });
+    const replacementTile = ensureArray(state.rinshanWall)[0] || null;
+    appendHandEvent(state, { type: "nukiDora", playerId: player.id, tile, replacementTile, turnIndex: state.turnIndex ?? 0 });
     drawFromWall(state, player, "rinshanWall");
     player.hand = sortHandTiles(player.hand);
     state.phase = "waitingForHumanDiscard";
@@ -4128,6 +4367,7 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     players: new Map(),
     processedRequestIds: new Set(),
     disconnectedLeaveSyncedUserIds: new Set(),
+    lastHandLeaveSyncedUserIds: new Set(),
     updatedAt: now(),
   };
     gameRooms.set(key, room);
@@ -4138,6 +4378,9 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
   }
   if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
     room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
+  }
+  if (!(room.lastHandLeaveSyncedUserIds instanceof Set)) {
+    room.lastHandLeaveSyncedUserIds = new Set(asArray(room.lastHandLeaveSyncedUserIds || room.state?.lastHandLeaveSyncedBy));
   }
   return room;
 };
@@ -4160,6 +4403,7 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
   room.events = asArray(persisted.events);
   room.processedRequestIds = new Set(asArray(persisted.processedRequestIds));
   room.disconnectedLeaveSyncedUserIds = new Set(asArray(persisted.disconnectedLeaveSyncedUserIds));
+  room.lastHandLeaveSyncedUserIds = new Set(asArray(persisted.lastHandLeaveSyncedUserIds || persisted.state?.lastHandLeaveSyncedBy));
   room.updatedAt = Number(persisted.updatedAt || now());
   room.sockets = existingSockets;
   room.players = existingPlayers.size ? existingPlayers : persisted.players;
@@ -4191,6 +4435,31 @@ const broadcastState = (room) => {
     }
   }
 };
+const scheduleStartupStateBurst = (room, reason = "startupBurst") => {
+  if (!room?.state) return;
+  const tableId = room.tableId;
+  const gameId = room.gameId;
+  const version = Number(room.version || room.state.version || 0);
+  [250, 800, 1600, 2800].forEach((delay) => {
+    setTimeout(() => {
+      const current = gameRooms.get(makeRoomKey(tableId));
+      if (!current?.state || current.gameId !== gameId) return;
+      if (Number(current.version || current.state.version || 0) < version) return;
+      try {
+        current.state.onlineMeta = {
+          ...(current.state.onlineMeta || {}),
+          transport: "socket.io",
+          reason,
+          publishedBy: null,
+          publishedAt: now(),
+        };
+        broadcastState(current);
+      } catch (error) {
+        logServerException("game:startupBurst", error, { tableId, gameId, version });
+      }
+    }, delay);
+  });
+};
 const clearRoomLastHandForUser = (room, userId) => {
   if (!room?.state || !userId) return false;
   const isStillSeated = ensureArray(room.state.seats).some((seat) => seat?.playerId === userId);
@@ -4216,8 +4485,13 @@ const isEndedRoomState = (state) => Boolean(
 );
 const applyAutoResultOk = (state) => {
   if (!isWaitingForResultOk(state)) return false;
+  const resultId = getCurrentResultId(state);
+  if (!resultId) return false;
+  if (state.resultCountdownResultId !== resultId) return false;
+  if (state.resultAutoCloseHandledResultId === resultId) return false;
   const startedAt = Number(state.resultCountdownStartedAt || 0);
   if (!startedAt || Date.now() - startedAt < RESULT_AUTO_OK_DELAY_MS) return false;
+  state.resultAutoCloseHandledResultId = resultId;
   const requiredOkPlayerIds = ensureArray(state.players).filter((player) => player.type !== "cpu").map((player) => player.id);
   const cpuPlayerIds = ensureArray(state.players).filter((player) => player.type === "cpu").map((player) => player.id);
   state.resultOkPlayerIds = [...new Set([...(state.resultOkPlayerIds ?? []), ...requiredOkPlayerIds, ...cpuPlayerIds])];
@@ -4226,7 +4500,7 @@ const applyAutoResultOk = (state) => {
   if (continueAfterServerFeverWin(state)) return true;
   if (isTsumoLossless3maState(state)) {
     const result = state.handLog?.result;
-    if (isTsumoLosslessHanchanFinished(state)) {
+    if (shouldEndTsumoLosslessHanchanAfterResult(state, result)) {
       prepareTsumoLosslessGameEnd(state, ensureArray(state.players).some((p) => Number(p.score || 0) <= 0) ? "tobi" : "south3End");
       return true;
     }
@@ -4252,8 +4526,14 @@ const scheduleRoomResultTimeout = (room) => {
     room.resultTimer = null;
   }
   if (!isWaitingForResultOk(room.state)) return;
-  room.state.resultCountdownStartedAt ??= Date.now();
   const timerResultId = getCurrentResultId(room.state);
+  if (!timerResultId) return;
+  if (room.state.resultCountdownResultId !== timerResultId) {
+    room.state.resultCountdownStartedAt = Date.now();
+    room.state.resultCountdownResultId = timerResultId;
+    room.state.resultAutoCloseHandledResultId = "";
+  }
+  room.state.resultCountdownStartedAt ??= Date.now();
   const timerStartedAt = Number(room.state.resultCountdownStartedAt || Date.now());
   const delay = Math.max(0, timerStartedAt + RESULT_AUTO_OK_DELAY_MS - Date.now());
   room.resultTimer = setTimeout(() => {
@@ -4280,6 +4560,7 @@ const scheduleRoomResultTimeout = (room) => {
       };
       room.updatedAt = now();
       persistRoom(room);
+      syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
       syncClubPointEffects(room);
       broadcastState(room);
@@ -4498,6 +4779,8 @@ io.on("connection", (socket) => {
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
+        const isStartupPhase = Number(room.state?.turnIndex || 0) <= 1 && !ensureArray(room.state?.handLog?.events).some((event) => event?.type === "discard");
+        if (isStartupPhase) scheduleStartupStateBurst(room, "joinStartupBurst");
       } else {
         socket.emit("game:needInitialState", { tableId: room.tableId, gameId: room.gameId });
       }
@@ -4530,6 +4813,8 @@ io.on("connection", (socket) => {
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
+        const isStartupPhase = Number(room.state?.turnIndex || 0) <= 1 && !ensureArray(room.state?.handLog?.events).some((event) => event?.type === "discard");
+        if (isStartupPhase) scheduleStartupStateBurst(room, "alreadyInitializedStartupBurst");
         return;
       }
       const recoveredClientState = isRecoverableClientState(state, room.tableId, room.gameId) ? clone(state) : null;
@@ -4564,7 +4849,12 @@ io.on("connection", (socket) => {
       markRoomPlayerConnected(room, userId || socket.data.userId, socket);
       resumeClockForReconnectedPlayer(room, userId || socket.data.userId);
       scheduleDisconnectedTimeouts(room);
+      scheduleRoomServerEffect(room);
+      scheduleRoomClockTimeout(room);
+      scheduleRoomResultTimeout(room);
       persistRoom(room);
+      broadcastState(room);
+      scheduleStartupStateBurst(room, "serverInitialBurst");
       ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
       console.error("[AnmikaGameServer] initState failed", { socketId: socket.id, payload: { tableId: payload?.tableId, gameId: payload?.gameId, userId: payload?.userId }, error: error?.message || String(error) });
@@ -4680,6 +4970,7 @@ io.on("connection", (socket) => {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
+      syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
       if (shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
     } catch (error) {
@@ -4729,6 +5020,32 @@ io.on("connection", (socket) => {
         error: error?.message || String(error),
       });
       ack?.({ ok: false, error: error.message, exceptionId, ...(room?.state ? publicRoomState(room, playerIdForAck) : {}) });
+    }
+  });
+
+  socket.on("game:finalResultOk", async (payload = {}, ack) => {
+    let room = null;
+    try {
+      const { tableId, gameId, userId } = payload || {};
+      room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom: false }));
+      const viewerId = userId || socket.data.userId || null;
+      if (!room?.state) throw new Error("GameStateが初期化されていません");
+      if (!isTsumoLossless3maState(room.state) || room.state.phase !== "gameEnded") {
+        ack?.({ ok: true, advanced: false, ...publicRoomState(room, viewerId) });
+        return;
+      }
+      const hasDeclaredLeaver = asArray(room.state.lastHandDeclaredBy).filter(Boolean).length > 0;
+      const advanced = await startNextTsumoLosslessHanchanIfReady(room);
+      ack?.({ ok: true, advanced, hasDeclaredLeaver, ...publicRoomState(room, viewerId) });
+    } catch (error) {
+      const exceptionId = logServerException("game:finalResultOk", error, {
+        socketId: socket.id,
+        tableId: payload?.tableId,
+        gameId: payload?.gameId,
+        userId: payload?.userId || socket.data.userId || "",
+        version: room?.version,
+      });
+      ack?.({ ok: false, error: `${error?.message || String(error)} (exceptionId: ${exceptionId})`, exceptionId, ...(room?.state ? publicRoomState(room, payload?.userId || socket.data.userId) : {}) });
     }
   });
 

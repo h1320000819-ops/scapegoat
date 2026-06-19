@@ -70,13 +70,20 @@ create table if not exists public.club_super_rake_shares (
 alter table public.club_super_rake_shares enable row level security;
 
 drop policy if exists "super rake shares club members read" on public.club_super_rake_shares;
+drop policy if exists "super rake shares club admins read" on public.club_super_rake_shares;
 drop policy if exists "super rake shares super write" on public.club_super_rake_shares;
 
-create policy "super rake shares club members read"
+create policy "super rake shares club admins read"
 on public.club_super_rake_shares for select
 using (
   public.is_super_club_creator(auth.uid())
-  or public.is_club_member(club_id, auth.uid())
+  or exists (
+    select 1
+    from public.club_members cm
+    where cm.club_id = club_super_rake_shares.club_id
+      and cm.user_id = auth.uid()
+      and cm.role = 'admin'
+  )
 );
 
 create policy "super rake shares super write"
@@ -189,8 +196,17 @@ begin
     raise exception 'club_id is required';
   end if;
 
-  if not (public.is_super_club_creator(auth.uid()) or public.is_club_member(p_club_id, auth.uid())) then
-    raise exception 'not club member';
+  if not (
+    public.is_super_club_creator(auth.uid())
+    or exists (
+      select 1
+      from public.club_members cm
+      where cm.club_id = p_club_id
+        and cm.user_id = auth.uid()
+        and cm.role = 'admin'
+    )
+  ) then
+    raise exception 'admin required';
   end if;
 
   return query

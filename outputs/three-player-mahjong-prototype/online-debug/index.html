@@ -50,6 +50,7 @@
       }
       .signed-in-only { position: relative; }
       .screen, .drawer, .modal-panel, .signed-in-only, .admin-only, .member-blocked { display: none !important; }
+      .super-only { display: none !important; }
       body[data-screen="auth"] .screen-auth,
       body[data-screen="clubs"] .screen-clubs,
       body[data-screen="club-home"] .screen-club-home,
@@ -58,6 +59,7 @@
       body[data-role="member"] .member-blocked { display: block !important; }
       body[data-role="admin"] .admin-only.row,
       body[data-role="admin"] .admin-only.primary-actions { display: flex !important; }
+      body[data-super="true"] .super-only { display: block !important; }
       section, .drawer.open, .modal-panel.open {
         border: 1px solid var(--line);
         border-radius: 12px;
@@ -227,6 +229,7 @@
               <button type="button" data-settings-page="clubSettings">クラブ設定</button>
               <button type="button" data-settings-page="points">クラブポイント</button>
               <button type="button" data-settings-page="history">ポイント収支</button>
+              <button type="button" data-settings-page="deletePointLogs" class="super-only">削除ログ</button>
               <button type="button" data-settings-page="replays">牌譜一覧</button>
             </div>
           </div>
@@ -403,8 +406,8 @@
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/pwa.js?v=20260619-lobby-utf8-a"></script>
-    <script src="../runtime/online-debug.js?v=20260619-lobby-utf8-a"></script>
+    <script src="../runtime/pwa.js?v=20260620-delete-club-super-a"></script>
+    <script src="../runtime/online-debug.js?v=20260620-delete-club-super-a"></script>
   </body>
 </html>
 

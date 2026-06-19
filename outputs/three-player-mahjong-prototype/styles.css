@@ -151,6 +151,10 @@ button:hover {
   z-index: 6;
 }
 
+.center-info-allred {
+  height: calc(var(--center-info-height) + 18px);
+}
+
 .round-label {
   color: #62e6ee;
   font-size: 15px;
@@ -242,7 +246,7 @@ button:hover {
   gap: 3px;
   justify-content: start;
   line-height: 1;
-  min-height: 48px;
+  min-height: 42px;
   min-width: 0;
   overflow: visible;
 }
@@ -1548,6 +1552,21 @@ button:hover {
   z-index: 3;
 }
 
+.win-result-modal {
+  padding-top: 44px;
+}
+
+.win-result-modal [data-result-ok] {
+  bottom: auto;
+  left: auto;
+  min-height: 34px;
+  padding: 7px 12px;
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  width: auto;
+}
+
 .result-backdrop {
   inset: 0;
   position: absolute;
@@ -2139,12 +2158,16 @@ button:hover {
   .center-info {
     border-radius: 6px;
     font-size: 6px;
-    max-height: var(--center-info-height);
     min-height: var(--center-info-height);
+    max-height: none;
     overflow: hidden;
     padding: 1px 2px;
     top: 40%;
     width: var(--center-info-width);
+  }
+
+  .center-info-allred {
+    min-height: calc(var(--center-info-height) + 14px);
   }
 
   .round-label {
@@ -2193,7 +2216,7 @@ button:hover {
     display: grid;
     gap: 1px;
     justify-content: start;
-    min-height: 24px;
+    min-height: 18px;
     overflow: visible;
   }
 
@@ -2204,7 +2227,7 @@ button:hover {
 
   .center-dora-tiles {
     align-items: flex-start;
-    min-height: 17px;
+    min-height: 14px;
     overflow: visible;
   }
 
@@ -2389,24 +2412,36 @@ button:hover {
   }
 
   .score-result.result-modal {
-    font-size: 6px;
+    font-size: 7px;
     line-height: 1.05;
     max-width: min(116vw, 620px);
     padding: 3px 4px 6px;
     top: 48%;
-    transform: translate(-50%, -50%) scale(0.72);
+    transform: translate(-50%, -50%) scale(0.8);
     width: 620px;
   }
 
+  .score-result.result-modal.win-result-modal {
+    padding-top: 18px;
+  }
+
+  .win-result-modal [data-result-ok] {
+    min-height: 20px;
+    padding: 4px 8px;
+    right: 4px;
+    top: 3px;
+    width: auto;
+  }
+
   .compact-score-result {
-    font-size: 6px;
+    font-size: 7px;
     max-width: min(116vw, 620px);
     padding: 3px 4px 6px;
     width: 620px;
   }
 
   .allred-score-result {
-    font-size: 6px;
+    font-size: 7px;
     max-height: 98dvh;
     max-width: min(116vw, 620px);
     padding: 3px 4px 6px;
@@ -2418,19 +2453,19 @@ button:hover {
   }
 
   .result-modal h2 {
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1;
     margin-bottom: 1px;
   }
 
   .result-modal h3 {
-    font-size: 7px;
+    font-size: 8px;
     line-height: 1;
     margin: 2px 0 0;
   }
 
   .allred-score-result h3 {
-    font-size: 7px;
+    font-size: 8px;
     margin: 2px 0 0;
   }
 
@@ -2445,7 +2480,7 @@ button:hover {
   }
 
   .score-winner-line {
-    font-size: 8px;
+    font-size: 9px;
     line-height: 1;
     margin-bottom: 0;
   }
@@ -2490,7 +2525,7 @@ button:hover {
   .score-meld-block strong,
   .score-hand-block strong,
   .score-winning-tile strong {
-    font-size: 6px;
+    font-size: 7px;
     line-height: 1;
   }
 
@@ -2513,9 +2548,9 @@ button:hover {
   .score-result .result-melds .tile,
   .score-result .result-melds .tile-image,
   .score-result .result-melds .tile-fallback {
-    height: 20px;
-    min-width: 14px;
-    width: 14px;
+    height: 23px;
+    min-width: 16px;
+    width: 16px;
   }
 
   .score-result .result-melds .meld-kakan {
@@ -2553,7 +2588,7 @@ button:hover {
 
   .score-payments li {
     border-radius: 2px;
-    font-size: 6px;
+    font-size: 7px;
     gap: 2px;
     line-height: 1;
     min-height: 0;
@@ -2562,16 +2597,16 @@ button:hover {
 
   .score-payments li strong,
   .score-payments li span {
-    font-size: 6px;
+    font-size: 7px;
   }
 
   .score-extra-settlement {
-    font-size: 6px;
+    font-size: 7px;
     margin: 1px 0;
   }
 
   .score-extra-settlement h3 {
-    font-size: 7px;
+    font-size: 8px;
     margin: 1px 0 0;
   }
 
@@ -2587,7 +2622,7 @@ button:hover {
   .score-extra-settlement li {
     background: rgba(18, 63, 98, 0.08);
     border-radius: 2px;
-    font-size: 6px;
+    font-size: 7px;
     line-height: 1;
     padding: 1px;
   }
@@ -2621,16 +2656,16 @@ button:hover {
   }
 
   .result-hand-meld-separator {
-    height: 17px;
+    height: 21px;
     margin: 0 2px;
   }
 
   .result-tiles .tile,
   .result-tiles .tile-image,
   .result-tiles .tile-fallback {
-    height: 16px;
-    min-width: 12px;
-    width: 12px;
+    height: 20px;
+    min-width: 15px;
+    width: 15px;
   }
 
   .result-melds-inline {
@@ -2649,18 +2684,18 @@ button:hover {
   .result-melds-inline .tile,
   .result-melds-inline .tile-image,
   .result-melds-inline .tile-fallback {
-    height: 16px;
-    min-width: 12px;
-    width: 12px;
+    height: 20px;
+    min-width: 15px;
+    width: 15px;
   }
 
   .result-modal [data-result-ok] {
     border-radius: 999px;
     bottom: auto;
-    font-size: 9px;
+    font-size: 10px;
     left: auto;
-    min-height: 22px;
-    padding: 2px 8px;
+    min-height: 24px;
+    padding: 3px 9px;
     position: absolute;
     right: 6px;
     top: 5px;

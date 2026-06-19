@@ -104,6 +104,7 @@
   const selectedMembership = () => state.memberships.find((row) => row.clubs && row.clubs.club_id === selectedClubId());
   const isAdmin = () => selectedMembership()?.role === "admin";
   const isSuperClubCreator = () => state.user?.id === SUPER_CLUB_CREATOR_USER_ID || String(state.user?.email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL;
+  const canViewSuperRakeShare = () => isAdmin() || isSuperClubCreator();
   const canCreateClub = () => Boolean(state.clubCreationStatus?.can_create || state.clubCreationStatus?.canCreate || isSuperClubCreator());
   const escapeHtml = (value) =>
     String(value ?? "")
@@ -677,6 +678,25 @@
     console.warn("[Auth] session cleared", { reason });
     clearStoredSession();
   };
+  const isValidAccessToken = (value) => !value || (isByteStringHeaderValue(value) && isLikelyJwt(value));
+  const isValidRefreshToken = (value) => !value || isByteStringHeaderValue(value);
+  const sanitizeStoredSession = () => {
+    const storedAccessToken = localStorage.getItem("anmikaAccessToken") || "";
+    const storedRefreshToken = localStorage.getItem("anmikaRefreshToken") || "";
+    if (!isValidAccessToken(storedAccessToken) || !isValidRefreshToken(storedRefreshToken)) {
+      invalidateBrokenSession("invalid stored token");
+      return false;
+    }
+    if (state.accessToken && !isValidAccessToken(state.accessToken)) {
+      invalidateBrokenSession("invalid state access token");
+      return false;
+    }
+    if (state.refreshToken && !isValidRefreshToken(state.refreshToken)) {
+      invalidateBrokenSession("invalid state refresh token");
+      return false;
+    }
+    return true;
+  };
   const assertHeaderValue = (name, value) => {
     const text = String(value ?? "");
     if (!isByteStringHeaderValue(text)) {
@@ -982,12 +1002,20 @@
 
   const refreshSession = async () => {
     if (!state.refreshToken) throw new Error("ログイン期限が切れました。再ログインしてください。");
+    if (!isValidRefreshToken(state.refreshToken)) {
+      invalidateBrokenSession("invalid refresh token");
+      throw new Error("ログイン情報が壊れています。いったん再ログインしてください。");
+    }
     const data = await auth("/token?grant_type=refresh_token", { method: "POST", body: JSON.stringify({ refresh_token: state.refreshToken }) });
     saveSession(data, null);
     return data;
   };
   const saveSession = (session, profile) => {
     if (session?.access_token) {
+      if (!isValidAccessToken(session.access_token) || (session.refresh_token && !isValidRefreshToken(session.refresh_token))) {
+        invalidateBrokenSession("invalid session token from auth response");
+        throw new Error("ログイン情報が壊れています。いったん再ログインしてください。");
+      }
       state.accessToken = session.access_token;
       state.refreshToken = session.refresh_token || state.refreshToken || "";
       localStorage.setItem("anmikaAccessToken", state.accessToken);
@@ -1374,6 +1402,7 @@
     }
   };
   const loadClubSuperRakeShare = async (clubId) => {
+    if (!canViewSuperRakeShare()) return { percent: 0 };
     if (!clubId) return { percent: 0 };
     try {
       const rows = await rest("/rpc/get_club_super_rake_share", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
@@ -1779,6 +1808,36 @@
     }
     log(`${name} をクラブから削除しました。`);
     await loadClubs();
+  };
+  const deleteClub = async (clubId = selectedClubId()) => {
+    const club = state.clubs.find((item) => item.club_id === clubId) || selectedMembership()?.clubs || {};
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isSuperClubCreator()) throw new Error("クラブ削除ができるのは特権アカウントだけです。");
+    const clubName = club.name || "このクラブ";
+    if (!window.confirm(`${clubName} を削除しますか？\n卓、席、メンバー、加入申請などクラブ内のデータが削除されます。`)) return;
+    const typed = window.prompt(`確認のため、クラブ名「${clubName}」を入力してください。`);
+    if (typed !== clubName) {
+      throw new Error("クラブ名が一致しなかったため削除を中止しました。");
+    }
+    try {
+      const result = await rest("/rpc/delete_club_for_admin", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
+      if (result && result.ok === false) throw new Error(result.message || "クラブ削除に失敗しました。");
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (isMissingRpcError(error, "delete_club_for_admin")) {
+        throw new Error("クラブ削除用のDB関数が見つかりません。supabase/patch_delete_club_for_admin.sql を実行してください。");
+      }
+      throw new Error(toJapaneseError(raw));
+    }
+    state.activeClubId = "";
+    sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
+    state.memberships = state.memberships.filter((row) => row.clubs?.club_id !== clubId);
+    state.clubs = state.clubs.filter((item) => item.club_id !== clubId);
+    state.tables = [];
+    document.body.dataset.screen = "clubs";
+    await loadClubs().catch(() => {});
+    render();
+    log("クラブを削除しました。", { clubId, clubName });
   };
 
   const openClubHome = async (clubId) => {
@@ -3322,6 +3381,52 @@
       body.innerHTML = `<p class="muted">ポイント履歴テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
     }
   };
+  const renderDeletePointLogsPage = async (body) => {
+    if (!isSuperClubCreator()) {
+      body.innerHTML = `<p class="muted">このログを見られるのは特権アカウントだけです。</p>`;
+      return;
+    }
+    try {
+      const rows = await rest("/club_delete_point_logs?select=*&order=created_at.desc&limit=300");
+      const grouped = new Map();
+      (rows || []).forEach((row) => {
+        const key = row.deleted_club_id || row.log_id;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(row);
+      });
+      if (!rows?.length) {
+        body.innerHTML = `<section class="card"><h4>削除ログ</h4><p class="muted">クラブ削除ログはまだありません。</p></section>`;
+        return;
+      }
+      body.innerHTML = [...grouped.entries()].map(([, group]) => {
+        const head = group[0] || {};
+        const memberRows = group.filter((row) => row.entry_type === "member_balance");
+        const reserveRow = group.find((row) => row.entry_type === "club_reserve") || head;
+        return `
+          <section class="card">
+            <h4>${escapeHtml(head.club_name || "削除済みクラブ")}</h4>
+            <p class="muted">
+              削除日時: ${escapeHtml(new Date(head.created_at || Date.now()).toLocaleString())}<br>
+              クラブID: ${escapeHtml(head.deleted_club_id || "")}<br>
+              クラブコード: ${escapeHtml(head.club_code || "")}<br>
+              削除者: ${escapeHtml(head.deleted_by || "")}<br>
+              クラブ保管ポイント: ${formatPoint(reserveRow.club_reserve_balance || 0)} pt
+            </p>
+            ${memberRows.map((row) => `
+              <div class="table-seat-line">
+                <span>${escapeHtml(row.member_name || row.member_user_id || "不明")}</span>
+                <strong>${formatPoint(row.point_balance || 0)} pt</strong>
+                <span>${escapeHtml(row.member_role || "")}</span>
+                <span class="muted">${escapeHtml(row.member_user_id || "")}</span>
+              </div>
+            `).join("") || `<p class="muted">メンバー残高ログなし</p>`}
+          </section>
+        `;
+      }).join("");
+    } catch (error) {
+      body.innerHTML = `<p class="muted">削除ログを取得できませんでした。supabase/patch_delete_club_for_admin.sql を実行してください。</p><pre>${getErrorText(error)}</pre>`;
+    }
+  };
   const replayRuleName = (summary = {}) => {
     const ruleId = summary.ruleId || summary.rule_id || summary.gameType || "";
     if (ruleId === "tsumo-lossless-3ma") return "ツモ損なし全赤三麻";
@@ -3668,6 +3773,11 @@
         <h4>特権アカウント配分</h4>
         ${superShareControls}
       </section>
+      <section class="card">
+        <h4>危険な操作</h4>
+        <p class="muted">クラブ削除は特権アカウントのみ実行できます。削除時にはポイント残高ログを保存します。</p>
+        ${isSuperClubCreator() ? `<button type="button" id="deleteClubButton" class="danger">クラブ削除</button>` : `<p class="muted">このアカウントではクラブ削除できません。</p>`}
+      </section>
     `;
     document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
     document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
@@ -3695,6 +3805,13 @@
         await renderClubSettingsPage(body);
       } catch (error) {
         showError("レーキ配分率の保存に失敗しました", error);
+      }
+    });
+    document.getElementById("deleteClubButton")?.addEventListener("click", async () => {
+      try {
+        await deleteClub(clubId);
+      } catch (error) {
+        showError("クラブ削除に失敗しました", error);
       }
     });
   };
@@ -3811,6 +3928,11 @@
     if (page === "history") {
       title.textContent = "ポイント収支";
       await renderPointHistoryPage(body);
+      return;
+    }
+    if (page === "deletePointLogs") {
+      title.textContent = "クラブ削除ログ";
+      await renderDeletePointLogsPage(body);
       return;
     }
     if (page === "replays") {
@@ -4032,6 +4154,7 @@
     if (state.user && has("userId")) $("userId").value = state.user.loginId || state.user.id;
     if (!state.user || !state.accessToken) document.body.dataset.screen = "auth";
     else if (document.body.dataset.screen === "auth") document.body.dataset.screen = shouldOpenTableListOnBoot ? "club-home" : "clubs";
+    document.body.dataset.super = isSuperClubCreator() ? "true" : "false";
     const selectedClub = state.clubs.find((club) => club.club_id === activeClubId) || null;
     if (has("clubHomeTitle")) $("clubHomeTitle").textContent = selectedClub ? selectedClub.name : "クラブ";
     if (has("createClubButton")) {
@@ -4330,6 +4453,7 @@
     });
   };
   const init = async () => {
+    sanitizeStoredSession();
     await completeOAuthRedirectIfNeeded().catch((error) => showError("外部ログイン処理に失敗しました", error));
     showLanHint();
     ensureTsumoLossless3maCreateUi();

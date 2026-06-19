@@ -2,6 +2,7 @@
 const INITIAL_TIME_MS = 20000;
 const RESULT_COUNTDOWN_SECONDS = 15;
 const ONLINE_LOADING_DISPLAY_DELAY_MS = 5000;
+const SOCKET_STARTUP_RESYNC_DELAYS_MS = [600, 1400, 2600, 4200, 6500];
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -556,6 +557,35 @@ const submitOnlineGameAction = async (actionType, payload = {}, options = {}) =>
   const nextSync = { ...sync, version: (sync.version ?? 0) + 1, lastActionType: actionType, lastEventAt: Date.now() };
   saveOnlineSync(nextSync);
   return data;
+};
+const submitOnlineFinalResultOk = async (options = {}) => {
+  const sync = loadOnlineSync();
+  if (!sync?.enabled || sync.transport !== "socketio" || !sync.tableId || !sync.gameId) return null;
+  const response = await socketEmitWithAck(globalThis.anmikaGameSocket, "game:finalResultOk", {
+    tableId: sync.tableId,
+    gameId: sync.gameId,
+    userId: sync.userId,
+  }, options.timeoutMs ?? 12000);
+  saveOnlineSync({
+    ...sync,
+    gameId: response?.gameId ?? response?.state?.gameId ?? sync.gameId,
+    version: response?.version ?? response?.state?.version ?? sync.version ?? 0,
+    lastActionType: "finalResultOk",
+    lastEventAt: Date.now(),
+    lastServerState: response?.state ?? sync.lastServerState ?? null,
+    lastSyncedAt: Date.now(),
+  });
+  saveSocketDebugStatus({
+    lastAction: "finalResultOk",
+    lastError: "",
+    clientVersion: sync.version ?? 0,
+    serverVersion: response?.version ?? response?.state?.version ?? "",
+    currentVersion: response?.version ?? response?.state?.version ?? sync.version ?? 0,
+  });
+  if (response?.state && globalThis.__anmikaController?.applyOnlineStateSnapshot) {
+    globalThis.__anmikaController.applyOnlineStateSnapshot(response.state);
+  }
+  return response;
 };
 const refreshOnlineSyncFromServer = async () => {
   const sync = loadOnlineSync();
@@ -1318,11 +1348,18 @@ const applySimpleReplayEvent = (state, event) => {
     return state;
   }
   if (event.type === "draw" && player) {
+    const source = replayDrawSourceForEvent(state, event);
+    const previous = previousReplayEvent(state);
+    if (player.drawnTile && source === "rinshanWall" && previous?.type === "nukiDora" && sameTileKind(player.drawnTile, event.tile)) {
+      state.lastDrawnTile = player.drawnTile;
+      state.phase = "waitingForHumanDiscard";
+      setReplayActivePlayer(state, player.id);
+      return state;
+    }
     if (player.drawnTile) {
       addReplayIntegrityWarning(state, { type: "drawWhileDrawnTileExists", playerId: player.id, oldTileId: player.drawnTile.id, newTileId: event.tile?.id || "" });
       player.drawnTile = null;
     }
-    const source = replayDrawSourceForEvent(state, event);
     const tile = removeReplayWallTile(state, event.tile, source) || event.tile;
     player.drawnTile = tile;
     state.lastDrawnTile = tile;
@@ -1402,8 +1439,7 @@ const applySimpleReplayEvent = (state, event) => {
     const tile = removeReplayDrawnOrHandTile(player, event.tile) || event.tile;
     player.nukiDoraTiles ??= [];
     if (tile) player.nukiDoraTiles.push(tile);
-    const fallbackReplacement = event.replacementTile ? null : (state.rinshanWall || [])[0] || null;
-    const replacementTile = event.replacementTile || fallbackReplacement;
+    const replacementTile = event.replacementTile || null;
     if (replacementTile) {
       const replacement = removeReplayWallTile(state, replacementTile, "rinshanWall") || replacementTile;
       if (wasDrawnFlower || !player.drawnTile) {
@@ -1482,7 +1518,38 @@ const getReplaySnapshots = (replay) => {
     })),
   ];
 };
-const getReplayEvents = (replay) => getSimpleReplayPayload(replay)?.events || replay?.events || [];
+const replayUsesSnapshotSteps = (replay) => Boolean(replay?.snapshots?.length) && (
+  replay?.summary?.scope === "hanchan"
+  || replay?.summary?.replayFormat === "snapshot-v1"
+  || replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID
+);
+const deriveReplayEventsFromSnapshots = (snapshots = []) => {
+  const derived = [];
+  for (let index = 1; index < snapshots.length; index++) {
+    const previous = snapshots[index - 1];
+    const current = snapshots[index];
+    const previousHandId = previous?.handLog?.handId || "";
+    const currentHandId = current?.handLog?.handId || "";
+    const previousEvents = Array.isArray(previous?.handLog?.events) ? previous.handLog.events : [];
+    const currentEvents = Array.isArray(current?.handLog?.events) ? current.handLog.events : [];
+    if (currentHandId && previousHandId && currentHandId !== previousHandId) {
+      derived.push({ type: "handStart", handId: currentHandId });
+      continue;
+    }
+    if (currentEvents.length > previousEvents.length) {
+      derived.push(currentEvents[previousEvents.length] || currentEvents.at(-1) || null);
+      continue;
+    }
+    derived.push(currentEvents.at(-1) || null);
+  }
+  return derived;
+};
+const getReplayEvents = (replay) => {
+  const simpleEvents = getSimpleReplayPayload(replay)?.events;
+  if (simpleEvents) return simpleEvents;
+  if (replayUsesSnapshotSteps(replay)) return deriveReplayEventsFromSnapshots(replay.snapshots);
+  return replay?.events || [];
+};
 const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
   if (event.type === "draw") return true;
@@ -1791,6 +1858,14 @@ const formatRoundLabel = (state) => {
   }
   return `${base}${honba > 0 ? `（${honba}本場）` : ""}`;
 };
+const isTsumoLosslessDealerContinuation = (state, result) => {
+  if (!isTsumoLossless3maState(state)) return false;
+  const dealerId = state?.round?.dealerPlayerId || "";
+  if (!dealerId || !result) return false;
+  if (result.type === "win") return result.winnerId === dealerId;
+  if (result.type === "exhaustiveDraw") return Array.isArray(result.tenpaiPlayerIds) && result.tenpaiPlayerIds.includes(dealerId);
+  return false;
+};
 const getSeatRoleLabel = (state, playerId) => {
   const players = state?.players ?? [];
   const dealerIndex = players.findIndex((player) => player.id === state?.round?.dealerPlayerId);
@@ -1834,7 +1909,7 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
 };
 const getDiscardBlockReason = (gameState, viewerPlayerId, tileId = null) => getDiscardStatus(gameState, viewerPlayerId, tileId).reason;
 const canDiscard = (gameState, viewerPlayerId, tileId = null) => getDiscardStatus(gameState, viewerPlayerId, tileId).can;
-const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLastHand);
+const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLastHand) && !isTsumoLossless3maState(gameState);
 const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   const localUserId = sync?.userId || gameState?.onlineSync?.userId || CURRENT_USER_ID;
   if (!localUserId) return false;
@@ -1871,6 +1946,7 @@ const hasLocalPlayerConfirmedResult = (state) => {
 const getCurrentResultId = (state) => state.handLog?.result?.resultId || "";
 const isResultCountdownExpired = (state) => Boolean(
   state.handLog?.result &&
+  state.resultCountdownResultId === getCurrentResultId(state) &&
   state.resultCountdownStartedAt &&
   Date.now() - Number(state.resultCountdownStartedAt) >= RESULT_COUNTDOWN_SECONDS * 1000
 );
@@ -2861,6 +2937,7 @@ class GameController {
     this.lastAppliedOnlinePublishedAt = 0;
     this.onlineInitialPublisher = false;
     this.socketInitialStateInFlight = false;
+    this.socketStartupResyncTimers = [];
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
     this.lastDisplayedResultKey = "";
@@ -2891,6 +2968,35 @@ class GameController {
   }
   clearOnlineLoadingMessage() {
     this.setOnlineLoadingMessage("");
+  }
+  clearSocketStartupResyncTimers() {
+    for (const timer of this.socketStartupResyncTimers || []) clearTimeout(timer);
+    this.socketStartupResyncTimers = [];
+  }
+  scheduleSocketStartupResync(reason = "startup") {
+    const sync = loadOnlineSync();
+    const socket = globalThis.anmikaGameSocket;
+    if (sync?.transport !== "socketio" || !socket) return;
+    const tableId = sync.tableId;
+    const gameId = sync.gameId;
+    this.clearSocketStartupResyncTimers();
+    this.socketStartupResyncTimers = SOCKET_STARTUP_RESYNC_DELAYS_MS.map((delay, index) => setTimeout(() => {
+      const latest = loadOnlineSync();
+      if (latest?.transport !== "socketio" || latest.tableId !== tableId || latest.gameId !== gameId) return;
+      if (!globalThis.anmikaGameSocket?.connected) return;
+      const hasDiscard = this.state.handLog?.events?.some?.((event) => event?.type === "discard");
+      const stillEarly = this.state.phase === "onlineLoading" || Number(this.state.turnIndex || 0) <= 1 || !hasDiscard;
+      if (!stillEarly) return;
+      this.resyncSocketGameState(`${reason}:${index + 1}`).catch((error) => {
+        console.warn("[SocketGame] startup resync failed", { reason, index: index + 1, error: error?.message || String(error) });
+      });
+    }, delay));
+  }
+  shouldKeepSocketStartupResync(state = this.state) {
+    if (!isSocketAuthoritativeGame()) return false;
+    const hasDiscard = state.handLog?.events?.some?.((event) => event?.type === "discard");
+    if (["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) return false;
+    return state.phase === "onlineLoading" || Number(state.turnIndex || 0) <= 1 || !hasDiscard;
   }
   setupGlobalResultOkHandler() {
     if (globalThis.__anmikaResultOkHandlerInstalled) return;
@@ -3024,6 +3130,15 @@ class GameController {
   }
   tickResultCountdown() {
     if (!this.state.handLog.result) return;
+    const resultId = getCurrentResultId(this.state);
+    if (this.state.resultCountdownResultId !== resultId) {
+      this.state.resultCountdownStartedAt = Date.now();
+      this.state.resultCountdownResultId = resultId;
+      this.state.resultAutoCloseHandled = false;
+      this.state.resultAutoCloseHandledResultId = "";
+      this.state.resultOkSubmitted = false;
+      this.state.resultOkSubmittedAt = null;
+    }
     this.state.resultCountdownStartedAt ??= Date.now();
     this.state.resultCountdownSeconds ??= RESULT_COUNTDOWN_SECONDS;
     const nextSeconds = Math.max(0, RESULT_COUNTDOWN_SECONDS - Math.floor((Date.now() - this.state.resultCountdownStartedAt) / 1000));
@@ -3037,12 +3152,14 @@ class GameController {
       !hasLocalPlayerConfirmedResult(this.state) &&
       Date.now() - Number(this.state.resultOkSubmittedAt || 0) > 3500
     );
-    if (nextSeconds <= 0 && (isSocketAuthoritativeGame() || !this.state.resultAutoCloseHandled || canRetrySubmittedOk)) {
+    const alreadyAutoHandled = this.state.resultAutoCloseHandledResultId === resultId;
+    if (nextSeconds <= 0 && !alreadyAutoHandled && (isSocketAuthoritativeGame() || !this.state.resultAutoCloseHandled || canRetrySubmittedOk)) {
       if (canRetrySubmittedOk) {
         this.state.resultOkSubmitted = false;
         this.state.resultAutoCloseHandled = false;
       }
       this.state.resultAutoCloseHandled = true;
+      this.state.resultAutoCloseHandledResultId = resultId;
       this.handleResultOk({ autoAllResultOk: true });
     }
   }
@@ -3535,11 +3652,18 @@ class GameController {
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Number(next.resultCountdownStartedAt || 0) || Date.now();
+      next.resultCountdownResultId = getCurrentResultId(next);
       next.resultCountdownSeconds = Number(next.resultCountdownSeconds || 0) || RESULT_COUNTDOWN_SECONDS;
       next.resultAutoCloseHandled = false;
+      next.resultAutoCloseHandledResultId = "";
       next.resultOkSubmitted = false;
+      next.resultOkSubmittedAt = null;
     }
-    if (!next.handLog?.result) this.lastDisplayedResultKey = "";
+    if (!next.handLog?.result) {
+      this.lastDisplayedResultKey = "";
+      next.resultCountdownResultId = "";
+      next.resultAutoCloseHandledResultId = "";
+    }
     if (next.activeClockPlayerId && next.activeClockPlayerId === currentUserId) {
       next.playerClocks ??= this.state.playerClocks ?? createPlayerClocks(next.players, next.settings?.initialClockMs ?? INITIAL_TIME_MS);
       next.playerClocks[currentUserId] ??= { playerId: currentUserId, remainingMs: next.settings?.initialClockMs ?? INITIAL_TIME_MS, isInByoyomi: false };
@@ -3627,6 +3751,7 @@ class GameController {
     );
     if (shouldRunClock) this.startClockForPlayer(humanPlayer.id);
     else if (humanPlayer && this.state.activeClockPlayerId === humanPlayer.id) this.stopClockForPlayer(humanPlayer.id, false);
+    if (!this.shouldKeepSocketStartupResync(this.state)) this.clearSocketStartupResyncTimers();
     this.onStateChanged(this.state);
     return true;
   }
@@ -3732,6 +3857,7 @@ class GameController {
             lastError: "",
           });
           this.applyOnlineStateSnapshot(response.state);
+          this.scheduleSocketStartupResync(`rejoin:${reason}`);
           if (reason === "connect" || reason === "reconnect") {
             this.setOnlineLoadingMessage("対局へ復帰しました");
             this.onStateChanged(this.state);
@@ -3805,6 +3931,7 @@ class GameController {
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
           this.applyOnlineStateSnapshot(response.state);
+          this.scheduleSocketStartupResync(`init:${reason}`);
         }
       } catch (error) {
         console.warn("[SocketGame] 初期局面の作成に失敗しました", error);
@@ -3829,7 +3956,10 @@ class GameController {
     socket.on("connect", () => {
       console.log("[SocketGame] connected", { socketId: socket.id, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: loadOnlineSync()?.version ?? sync.version ?? 0 });
       saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: socket.id, socketUrl: serverUrl, lastReconnectReason: didInitialJoin ? "reconnect" : "initialConnect", lastError: "" });
-      if (didInitialJoin) rejoinSocketRoom("connect");
+      if (didInitialJoin) {
+        rejoinSocketRoom("connect");
+        this.scheduleSocketStartupResync("connect");
+      }
     });
     socket.on("disconnect", (reason) => {
       if (reason === "io client disconnect") return;
@@ -3857,6 +3987,7 @@ class GameController {
     if (joinResponse?.state) {
       saveOnlineSync({ ...loadOnlineSync(), version: joinResponse.version ?? 0, lastServerState: joinResponse.state, lastSyncedAt: Date.now() });
       this.applyOnlineStateSnapshot(joinResponse.state);
+      this.scheduleSocketStartupResync("join");
     } else {
       setTimeout(() => {
         const latest = loadOnlineSync();
@@ -4309,7 +4440,7 @@ class GameController {
     this.state.settings.ruleId = ruleId;
     this.state.settings.gameType = this.state.settings.gameType || ruleId;
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownSeconds: null, resultAutoCloseHandled: false, resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.riichiStickCount = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
@@ -4349,7 +4480,20 @@ class GameController {
     const result = this.state.handLog.result;
     const dealerWon = result?.type === "win" && result.winnerId === this.state.round.dealerPlayerId;
     const isDraw = result?.type === "exhaustiveDraw";
-    const nextDealerId = result?.type === "win" ? result.winnerId : this.state.round.dealerPlayerId;
+    if (isTsumoLossless3maState(this.state)) {
+      const dealerContinues = isTsumoLosslessDealerContinuation(this.state, result);
+      this.state.round.honba = dealerContinues || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
+      if (!dealerContinues) this.state.round.hanchanRoundIndex = Number(this.state.round.hanchanRoundIndex || 0) + 1;
+      const order = Array.isArray(this.state.round.initialSeatOrder) && this.state.round.initialSeatOrder.length
+        ? this.state.round.initialSeatOrder
+        : this.state.players.map((player) => player.id);
+      this.state.round.dealerPlayerId = order[Number(this.state.round.hanchanRoundIndex || 0) % Math.max(1, order.length)] || this.state.players[0]?.id || "";
+      this.state.round.handNumber = Number(this.state.round.hanchanRoundIndex || 0) + 1;
+      console.log("[NextHand]", this.state.round.dealerPlayerId);
+      this.startGame({ preserveScores: true });
+      return;
+    }
+    const nextDealerId = dealerWon ? this.state.round.dealerPlayerId : (result?.type === "win" ? result.winnerId : this.state.round.dealerPlayerId);
     this.state.round.honba = dealerWon || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
     this.state.round.dealerPlayerId = nextDealerId;
     this.state.round.handNumber++;
@@ -4366,6 +4510,8 @@ class GameController {
     }
     if (options.autoAllResultOk && !isResultCountdownExpired(this.state)) {
       console.warn("[ResultOk] early auto ignored", { resultId: result.resultId, countdownStartedAt: this.state.resultCountdownStartedAt, phase: this.state.phase });
+      this.state.resultAutoCloseHandled = false;
+      this.state.resultAutoCloseHandledResultId = "";
       return;
     }
     if (isSocketAuthoritativeGame()) {
@@ -4462,22 +4608,43 @@ class GameController {
     this.startNextHand();
   }
   async handleFinalResultOk() {
+    const sync = loadOnlineSync();
+    if (isSocketAuthoritativeGame() && isTsumoLossless3maState(this.state)) {
+      try {
+        const response = await submitOnlineFinalResultOk({ timeoutMs: 15000 });
+        if (response?.advanced && response?.state) {
+          this.onlineGameEndedReturnScheduled = false;
+          this.state.screen = "game";
+          this.emit();
+          return;
+        }
+      } catch (error) {
+        console.warn("[SocketGame] final result ok failed", error);
+        this.state.log.unshift(`次の半荘開始に失敗: ${error.message}`);
+        this.emit();
+        return;
+      }
+    }
     this.stopAllClocks();
     const activeTableId = this.state.activeTableId;
+    const shouldLeave = shouldLeaveOnlineTableAfterGameEnded(this.state, sync);
     this.state.phase = "idle";
     this.state.handLog.result = null;
     this.state.pendingAction = null;
     this.state.activeTableId = null;
     this.state.screen = "home";
     this.refreshStoredData();
-    const sync = loadOnlineSync();
     if (sync?.returnUrl) {
-      const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
-      await leaveOnlineTableForSync(sync);
-      if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
-      forgetLocalOnlineDebugTable(activeTableId);
+      if (shouldLeave) {
+        const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
+        await leaveOnlineTableForSync(sync);
+        if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
+        forgetLocalOnlineDebugTable(activeTableId);
+        window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
+      } else {
+        window.location.href = sync.returnUrl;
+      }
       saveOnlineSync(null);
-      window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
       return;
     }
     this.emit();
@@ -4487,6 +4654,7 @@ class GameController {
     const activeTableId = this.state.activeTableId || sync?.localTableId || sync?.tableId || "";
     const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
     const returnUrl = onlineLoadingReturnUrl();
+    this.clearSocketStartupResyncTimers();
     this.stopAllClocks();
     this.state.pendingAction = null;
     this.state.isWaitingForHumanAction = false;
@@ -6203,7 +6371,8 @@ class GameView {
     const liveWallCount = state.liveWall?.length ?? 0;
     const rinshanWallCount = state.rinshanWall?.length ?? 0;
     const riichiStickLine = isTsumoLossless3maState(state) ? `<div class="center-riichi-sticks">リーチ棒 x${Number(state.riichiStickCount || 0)}</div>` : "";
-    return `<section class="center-info">
+    const centerClass = `center-info${isTsumoLossless3maState(state) ? " center-info-allred" : ""}`;
+    return `<section class="${centerClass}">
       <div class="round-label">${roundLabel}</div>
       <ul class="center-scores">${playerRows}</ul>
       ${riichiStickLine}
@@ -6403,7 +6572,7 @@ class GameView {
         ? score.limitType
         : `${Number(score.han ?? score.totalHan ?? 0)}翻`;
       const scoreLabel = `${allRedScoreRank}${score.isTsumo ? "ツモ" : "ロン"}`;
-      return `<section class="score-result result-modal allred-score-result"><h2>和了結果</h2>
+      return `<section class="score-result result-modal win-result-modal allred-score-result"><h2>和了結果</h2>
         <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
         <div class="allred-result-grid">
           <div class="score-hand-win-row allred-hand-win-row">${resultHandLineView}${resultWinningTileView}</div>
@@ -6465,7 +6634,7 @@ class GameView {
       <h3>半荘精算</h3>
       <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${formatPoint(item.pointDelta)}pt</li>`).join("")}</ul>
     </section>` : "";
-    return `<section class="score-result result-modal compact-score-result"><h2>和了結果</h2>
+    return `<section class="score-result result-modal win-result-modal compact-score-result"><h2>和了結果</h2>
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント精算なし</p>` : ""}

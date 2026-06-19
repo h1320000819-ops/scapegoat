@@ -7,8 +7,12 @@
   const isLandscape = () =>
     window.matchMedia?.("(orientation: landscape)")?.matches ||
     window.innerWidth > window.innerHeight;
+  const fullscreenTarget = () =>
+    document.querySelector(".app-shell") ||
+    document.body ||
+    document.documentElement;
   const canFullscreen = () => {
-    const element = document.documentElement;
+    const element = fullscreenTarget();
     return Boolean(element.requestFullscreen || element.webkitRequestFullscreen);
   };
 
@@ -59,12 +63,21 @@
     isLandscape() &&
     !isStandalone() &&
     !isFullscreen() &&
-    canFullscreen() &&
-    Boolean(document.querySelector(".mahjong-table, #game-root"));
+    canFullscreen();
+
+  const hideBrowserChrome = () => {
+    if (!isMobile()) return;
+    updateViewportSize();
+    setTimeout(() => {
+      try {
+        window.scrollTo(0, 1);
+      } catch {}
+    }, 50);
+  };
 
   const requestFullscreen = async () => {
     if (!shouldOfferFullscreen()) return false;
-    const element = document.documentElement;
+    const element = fullscreenTarget();
     try {
       if (element.requestFullscreen) await element.requestFullscreen({ navigationUI: "hide" });
       else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
@@ -76,6 +89,11 @@
       console.warn("[PWA] fullscreen request failed", error);
       return false;
     }
+  };
+
+  const requestFullscreenSoon = () => {
+    hideBrowserChrome();
+    requestFullscreen().catch(() => false);
   };
 
   const ensureFullscreenButton = () => {
@@ -93,11 +111,14 @@
   };
 
   const bindAutoFullscreenGesture = () => {
-    document.addEventListener("pointerdown", (event) => {
+    const onFirstInteraction = (event) => {
       if (!shouldOfferFullscreen()) return;
-      if (event.target?.closest?.("input,select,textarea,a,[data-pwa-dismiss]")) return;
-      requestFullscreen();
-    }, { capture: true });
+      if (event.target?.closest?.("input,select,textarea,[data-pwa-dismiss],[data-pwa-install]")) return;
+      requestFullscreenSoon();
+    };
+    document.addEventListener("pointerdown", onFirstInteraction, { capture: true });
+    document.addEventListener("touchend", onFirstInteraction, { capture: true, passive: true });
+    document.addEventListener("click", onFirstInteraction, { capture: true });
   };
 
   const showInstallHint = () => {
@@ -160,14 +181,32 @@
     updateViewportSize();
     updateMode();
     ensureFullscreenButton();
+    requestFullscreenSoon();
   });
-  window.visualViewport?.addEventListener?.("resize", updateViewportSize);
+  window.visualViewport?.addEventListener?.("resize", () => {
+    updateViewportSize();
+    hideBrowserChrome();
+  });
   window.addEventListener("orientationchange", () => {
     setTimeout(() => {
       updateViewportSize();
       updateMode();
       ensureFullscreenButton();
+      requestFullscreenSoon();
     }, 250);
+  });
+  window.addEventListener("pageshow", () => {
+    updateMode();
+    updateViewportSize();
+    ensureFullscreenButton();
+    requestFullscreenSoon();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    updateMode();
+    updateViewportSize();
+    ensureFullscreenButton();
+    requestFullscreenSoon();
   });
   document.addEventListener("fullscreenchange", () => {
     updateMode();
@@ -185,6 +224,8 @@
     registerServiceWorker();
     bindAutoFullscreenGesture();
     ensureFullscreenButton();
+    requestFullscreenSoon();
+    setTimeout(requestFullscreenSoon, 450);
     setTimeout(showInstallHint, 900);
   });
 })();
