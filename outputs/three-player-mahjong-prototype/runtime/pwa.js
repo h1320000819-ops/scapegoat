@@ -4,13 +4,15 @@
     window.navigator.standalone === true;
   const isFullscreen = () =>
     Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+  const isPseudoFullscreen = () =>
+    document.documentElement.dataset.fullscreenFallback === "on";
   const isLandscape = () =>
     window.matchMedia?.("(orientation: landscape)")?.matches ||
     window.innerWidth > window.innerHeight;
   const fullscreenTarget = () =>
-    document.querySelector(".app-shell") ||
+    document.documentElement ||
     document.body ||
-    document.documentElement;
+    document.querySelector(".app-shell");
   const canFullscreen = () => {
     const element = fullscreenTarget();
     return Boolean(element.requestFullscreen || element.webkitRequestFullscreen);
@@ -19,8 +21,9 @@
   const updateMode = () => {
     document.documentElement.dataset.pwa = isStandalone() ? "standalone" : "browser";
     document.body.dataset.pwa = isStandalone() ? "standalone" : "browser";
-    document.documentElement.dataset.fullscreen = isFullscreen() ? "on" : "off";
-    document.body.dataset.fullscreen = isFullscreen() ? "on" : "off";
+    const fullscreenMode = isFullscreen() || isPseudoFullscreen();
+    document.documentElement.dataset.fullscreen = fullscreenMode ? "on" : "off";
+    document.body.dataset.fullscreen = fullscreenMode ? "on" : "off";
   };
   const updateViewportSize = () => {
     const height = window.visualViewport?.height || window.innerHeight;
@@ -52,8 +55,9 @@
       .pwa-install-hint div{align-items:center;display:flex;flex-wrap:wrap;gap:8px}
       .pwa-install-hint button{background:#ffd15c;border:1px solid #9f6b00;border-radius:8px;color:#1f1704;font:inherit;font-weight:900;min-height:34px;padding:6px 10px}
       .pwa-install-hint .secondary{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24);color:#f7fff9}
-      .pwa-fullscreen-button{align-items:center;background:rgba(255,209,92,.95);border:1px solid rgba(55,38,0,.48);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.35);color:#1f1704;display:none;font:inherit;font-size:12px;font-weight:900;gap:6px;min-height:34px;padding:6px 10px;position:fixed;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));z-index:10001}
+      .pwa-fullscreen-button{align-items:center;background:rgba(255,209,92,.95);border:1px solid rgba(55,38,0,.48);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.35);color:#1f1704;display:none;font:inherit;font-size:12px;font-weight:900;gap:6px;min-height:34px;padding:6px 10px;position:fixed;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));touch-action:manipulation;z-index:10001}
       body[data-pwa="browser"][data-fullscreen="off"] .pwa-fullscreen-button{display:flex}
+      .pwa-fullscreen-toast{background:rgba(10,28,24,.96);border:1px solid rgba(255,209,92,.72);border-radius:8px;color:#f7fff9;font-size:12px;font-weight:800;left:50%;max-width:min(86vw,460px);padding:8px 10px;position:fixed;text-align:center;top:max(50px,calc(env(safe-area-inset-top) + 42px));transform:translateX(-50%);z-index:10002}
       @media (min-width: 921px), (orientation: portrait){.pwa-fullscreen-button{display:none!important}}
     `;
     document.head.append(style);
@@ -63,7 +67,7 @@
     isLandscape() &&
     !isStandalone() &&
     !isFullscreen() &&
-    canFullscreen();
+    !isPseudoFullscreen();
 
   const hideBrowserChrome = () => {
     if (!isMobile()) return;
@@ -75,19 +79,54 @@
     }, 50);
   };
 
-  const requestFullscreen = async () => {
+  const showFullscreenToast = (message) => {
+    ensureHintStyles();
+    document.querySelector(".pwa-fullscreen-toast")?.remove();
+    const toast = document.createElement("div");
+    toast.className = "pwa-fullscreen-toast";
+    toast.textContent = message;
+    document.body.append(toast);
+    setTimeout(() => toast.remove(), 3200);
+  };
+
+  const enablePseudoFullscreen = () => {
+    if (!isMobile() || !isLandscape()) return false;
+    document.documentElement.dataset.fullscreenFallback = "on";
+    document.body.dataset.fullscreenFallback = "on";
+    updateMode();
+    updateViewportSize();
+    hideBrowserChrome();
+    return true;
+  };
+
+  const requestFullscreen = async ({ fromButton = false } = {}) => {
     if (!shouldOfferFullscreen()) return false;
     const element = fullscreenTarget();
     try {
       if (element.requestFullscreen) await element.requestFullscreen({ navigationUI: "hide" });
       else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen();
+      else {
+        const fallbackOk = enablePseudoFullscreen();
+        if (fromButton && isiOS()) {
+          showFullscreenToast("iPhoneではホーム画面に追加すると完全な全画面で遊べます。");
+          showInstallHint();
+        }
+        return fallbackOk;
+      }
       await screen.orientation?.lock?.("landscape").catch(() => null);
       updateMode();
       updateViewportSize();
       return true;
     } catch (error) {
       console.warn("[PWA] fullscreen request failed", error);
-      return false;
+      const fallbackOk = enablePseudoFullscreen();
+      if (fromButton) {
+        showFullscreenToast(fallbackOk
+          ? "ブラウザの全画面化は制限されました。表示領域だけ拡大しました。"
+          : "ホーム画面に追加すると全画面で遊べます。");
+        if (isiOS() || !canFullscreen()) showInstallHint();
+      }
+      return fallbackOk;
     }
   };
 
@@ -104,7 +143,16 @@
       button.type = "button";
       button.className = "pwa-fullscreen-button";
       button.textContent = "\u5168\u753b\u9762";
-      button.addEventListener("click", () => requestFullscreen());
+      button.dataset.pwaFullscreen = "";
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }, { passive: false });
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestFullscreen({ fromButton: true }).then(() => ensureFullscreenButton());
+      });
       document.body.append(button);
     }
     button.hidden = !shouldOfferFullscreen();
@@ -113,7 +161,7 @@
   const bindAutoFullscreenGesture = () => {
     const onFirstInteraction = (event) => {
       if (!shouldOfferFullscreen()) return;
-      if (event.target?.closest?.("input,select,textarea,[data-pwa-dismiss],[data-pwa-install]")) return;
+      if (event.target?.closest?.("input,select,textarea,[data-pwa-dismiss],[data-pwa-install],[data-pwa-fullscreen]")) return;
       requestFullscreenSoon();
     };
     document.addEventListener("pointerdown", onFirstInteraction, { capture: true });
@@ -189,6 +237,10 @@
   });
   window.addEventListener("orientationchange", () => {
     setTimeout(() => {
+      if (!isLandscape()) {
+        delete document.documentElement.dataset.fullscreenFallback;
+        delete document.body.dataset.fullscreenFallback;
+      }
       updateViewportSize();
       updateMode();
       ensureFullscreenButton();

@@ -2294,14 +2294,33 @@ button:hover {
   }
 
   .seat-bottom .exposed-row {
+    gap: 2px;
     right: clamp(42px, 18vw, 126px);
     transform-origin: bottom right;
+  }
+
+  .seat-bottom .meld-area .exposed-tiles,
+  .seat-bottom .nuki-dora-area .exposed-tiles,
+  .seat-top .meld-area .exposed-tiles,
+  .seat-top .nuki-dora-area .exposed-tiles {
+    gap: 1px;
+  }
+
+  .seat-bottom .meld-set,
+  .seat-top .meld-set {
+    gap: 1px;
+    margin-right: 1px;
+  }
+
+  .seat-bottom .meld-tiles,
+  .seat-top .meld-tiles {
+    gap: 1px;
   }
 
   .seat-right .exposed-row {
     align-items: flex-start;
     flex-direction: row;
-    gap: 6px;
+    gap: 2px;
     right: 6px;
     top: 6px;
     transform: none;
@@ -2317,7 +2336,7 @@ button:hover {
 
   .seat-right .meld-set {
     gap: 1px;
-    margin-right: 2px;
+    margin-right: 0;
     min-height: 28px;
     transform: rotate(90deg);
     transform-origin: top left;
@@ -2331,12 +2350,14 @@ button:hover {
     align-items: flex-start;
     flex-direction: row;
     flex-wrap: nowrap;
+    gap: 1px;
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
     align-items: flex-start;
     flex-direction: row;
     flex-wrap: nowrap;
+    gap: 1px;
     justify-content: flex-start;
   }
 

@@ -1893,9 +1893,7 @@ const formatRoundLabel = (state) => {
     const index = Number(round.hanchanRoundIndex ?? 0);
     base = TSUMO_LOSSLESS_ROUNDS[index] || base || "東1局";
   } else {
-    const wind = round.roundWind === "south" ? "南" : round.roundWind === "west" ? "西" : round.roundWind === "north" ? "北" : "東";
-    const handNumber = Math.max(1, Number(round.handNumber ?? 1));
-    base = `${wind}${handNumber}局`;
+    base = "東場";
   }
   return `${base}${honba > 0 ? `（${honba}本場）` : ""}`;
 };
@@ -2005,7 +2003,41 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
   Boolean(sync?.tableId && gameState?.phase === "gameEnded" && didLocalPlayerDeclareLastHand(gameState, sync));
-const calculateRake = (winnerGain, rakePercent) => Math.max(0, winnerGain) * ((rakePercent ?? 0) / 100);
+const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
+const roundToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const rounded = Math.round((numeric + Math.sign(numeric) * Number.EPSILON) * 10) / 10;
+  return normalizeSignedZero(Number(rounded.toFixed(1)));
+};
+const floorToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const floored = Math.floor((numeric + 1e-9) * 10) / 10;
+  return normalizeSignedZero(Number(floored.toFixed(1)));
+};
+const ceilToTenth = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  const ceiled = Math.ceil((numeric - 1e-9) * 10) / 10;
+  return normalizeSignedZero(Number(ceiled.toFixed(1)));
+};
+const roundPlayerPointDeltaInClubFavor = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return numeric >= 0 ? floorToTenth(numeric) : ceilToTenth(numeric);
+};
+const roundClubPointCreditInClubFavor = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return 0;
+  return numeric >= 0 ? ceilToTenth(numeric) : floorToTenth(numeric);
+};
+const calculateRake = (winnerGain, rakePercent) => {
+  const gain = Math.max(0, Number(winnerGain || 0));
+  const percent = Math.max(0, Number(rakePercent || 0));
+  if (!gain || !percent) return 0;
+  return roundClubPointCreditInClubFavor(gain * (percent / 100));
+};
 const createPlayerClocks = (players, initialMs = INITIAL_TIME_MS) => Object.fromEntries(players.map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
 const getClockRemainingMs = (state, playerId) => {
   const clock = state.playerClocks?.[playerId];
@@ -2727,7 +2759,7 @@ class RuleEngine {
     const countedYakumanBonus = totalHan >= 14 && !hasRealYakuman ? 20 : 0;
     const realYakumanBonus = hasRealYakuman ? 40 : 0;
     const uraDoraBonus = (input.uraDoraCount ?? 0) * 5;
-    const honbaBonus = (input.honba ?? 0) * 5;
+    const honbaBonus = Number(input.honba ?? state.round?.honba ?? state.honba ?? 0) * 5;
     const ippatsuBonus = input.isIppatsu ? 5 : 0;
     const baibaMultiplier = input.baibaMultiplier ?? getVisibleBaibaMultiplierDetails(state, { pochiColor: input.pochiColor || null }).multiplier;
     const blueTileBonus = blueTileCount * 20;
@@ -2937,28 +2969,30 @@ const applyWinPayments = (gameState, winnerId, winType, scoreResult, loserId) =>
     payments[loserId] = -totalPoints;
     delete scoreResult.paymentPerPlayer;
   }
-  const rakePoints = calculateRake(payments[winnerId] ?? 0, gameState.settings?.rakePercent ?? 0);
+  const originalWinnerGain = roundToTenth(payments[winnerId] ?? 0);
+  const rakePoints = calculateRake(originalWinnerGain, gameState.settings?.rakePercent ?? 0);
   if (rakePoints > 0) {
-    payments[winnerId] -= rakePoints;
+    payments[winnerId] = roundPlayerPointDeltaInClubFavor(originalWinnerGain - rakePoints);
     if (activeTable?.clubId) {
       const club = clubRepository.getClub(activeTable.clubId);
       if (club) {
-        club.rakeBalance = (club.rakeBalance ?? 0) + rakePoints;
+        club.rakeBalance = roundToTenth(Number(club.rakeBalance ?? 0) + rakePoints);
         clubRepository.saveClub(club);
       }
     } else {
-      gameState.rakePool = (gameState.rakePool ?? 0) + rakePoints;
+      gameState.rakePool = roundToTenth(Number(gameState.rakePool ?? 0) + rakePoints);
     }
   }
+  for (const playerId of Object.keys(payments)) payments[playerId] = roundToTenth(payments[playerId]);
   scoreResult.payments = payments;
   scoreResult.rakePoints = rakePoints;
   scoreResult.rakeAmount = rakePoints;
   scoreResult.rakePercent = gameState.settings?.rakePercent ?? 0;
   scoreResult.rakePayerId = winnerId;
-  scoreResult.originalWinnerGain = (payments[winnerId] ?? 0) + rakePoints;
+  scoreResult.originalWinnerGain = originalWinnerGain;
   scoreResult.winnerGain = payments[winnerId] ?? 0;
   scoreResult.paymentDeltas = Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta }));
-  for (const player of gameState.players) player.score += payments[player.id] ?? 0;
+  for (const player of gameState.players) player.score = roundToTenth(Number(player.score || 0) + Number(payments[player.id] ?? 0));
   gameState.log.unshift(`点数移動 ${scoreResult.paymentDeltas.map((p) => `${p.playerId}:${p.delta >= 0 ? "+" : ""}${p.delta}`).join(" ")}${rakePoints ? ` レーキ:${rakePoints}` : ""}`);
   return gameState;
 };
@@ -6840,12 +6874,8 @@ class GameView {
     const doraNuki = Number(score.dora?.nuki ?? 0);
     const doraVisible = Number(score.dora?.visible ?? (doraNormal + doraColored + doraNuki));
     const uraCount = winnerRiichi ? Math.floor(Number(bonus.uraDora ?? 0) / 5) : 0;
-    const goldCount = Math.floor(Number(bonus.goldTile ?? 0) / 5);
-    const rocketCount = Math.floor(Number(bonus.blueTile ?? 0) / 20);
     if (doraVisible > 0) yakuRows.push(`<li>ドラ${doraVisible}</li>`);
     if (uraCount > 0) yakuRows.push(`<li>裏${uraCount}</li>`);
-    if (goldCount > 0) yakuRows.push(`<li>金${goldCount}（ターコイズと金を含む）</li>`);
-    if (rocketCount > 0) yakuRows.push(`<li>ロケット${rocketCount}（青牌の枚数）</li>`);
     yakuRows.push(`<li>${score.limitType ?? "通常"} ${score.basePoints ?? 0}点</li>`);
     const baibaMultiplier = Number(score.baibaMultiplier ?? 1);
     const pochiMultiplier = Number(score.pointMultiplier ?? 1);
