@@ -101,10 +101,59 @@
   const selectedClubId = () => state.activeClubId || (has("clubSelect") ? $("clubSelect").value : "") || "";
   const selectedTableId = () => normalizeRemoteTableId(state.activeTableId || (has("tableSelect") ? $("tableSelect").value : "") || new URLSearchParams(location.search).get("tableId") || "");
   const selectedMembership = () => state.memberships.find((row) => row.clubs && row.clubs.club_id === selectedClubId());
+  const membershipForClub = (clubId) => state.memberships.find((row) => row.clubs && row.clubs.club_id === clubId);
   const isAdmin = () => selectedMembership()?.role === "admin";
   const isSuperClubCreator = () => state.user?.id === SUPER_CLUB_CREATOR_USER_ID || String(state.user?.email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL;
   const canViewSuperRakeShare = () => isAdmin() || isSuperClubCreator();
   const canCreateClub = () => Boolean(state.clubCreationStatus?.can_create || state.clubCreationStatus?.canCreate || isSuperClubCreator());
+  const formatPointShort = (value) => {
+    const number = Math.round(Number(value || 0) * 10) / 10;
+    return Number.isInteger(number) ? String(number) : number.toFixed(1);
+  };
+  const requiredSeatPointBalance = (table) => {
+    const rate = Math.max(0, Number(table?.point_rate || 1));
+    return (table?.rule_id || "anmika-rocket") === TSUMO_LOSSLESS_3MA_RULE_ID ? 150 * rate : 1000 * rate;
+  };
+  const tableById = (tableId) => state.tables.find((item) => item?.table_id === tableId) || null;
+  const loadTableForSeatCheck = async (tableId) => {
+    const known = tableById(tableId);
+    if (known) return known;
+    const rows = await rest(
+      "/tables?select=table_id,club_id,rule_id,point_rate&table_id=eq." + encodeURIComponent(tableId) + "&limit=1"
+    );
+    return Array.isArray(rows) ? rows[0] || null : null;
+  };
+  const loadMyPointBalanceForClub = async (clubId) => {
+    const user = requireUser();
+    try {
+      const rows = await rest(
+        "/club_members?select=point_balance&club_id=eq." + encodeURIComponent(clubId) +
+          "&user_id=eq." + encodeURIComponent(user.id) +
+          "&limit=1"
+      );
+      if (Array.isArray(rows) && rows[0]) {
+        const balance = Number(rows[0].point_balance || 0);
+        state.memberships = state.memberships.map((row) =>
+          row.clubs?.club_id === clubId ? { ...row, point_balance: balance } : row
+        );
+        return balance;
+      }
+    } catch (error) {
+      log("着席前のポイント残高確認に失敗したため、画面上の残高で判定します。", rawErrorText(error));
+    }
+    return Number(membershipForClub(clubId)?.point_balance || 0);
+  };
+  const ensureEnoughClubPointsForSeat = async (tableId) => {
+    const table = await loadTableForSeatCheck(tableId);
+    const clubId = table?.club_id || selectedClubId();
+    if (!table || !clubId) throw new Error("着席に必要な卓情報を取得できませんでした。更新してからもう一度お試しください。");
+    const required = requiredSeatPointBalance(table);
+    const balance = await loadMyPointBalanceForClub(clubId);
+    if (balance + 1e-9 < required) {
+      const ruleLabel = RULE_LABELS[table.rule_id || "anmika-rocket"] || "この卓";
+      throw new Error(`残高が足りません。${ruleLabel}に着席するには ${formatPointShort(required)} pt 必要です。現在の残高: ${formatPointShort(balance)} pt`);
+    }
+  };
   const escapeHtml = (value) =>
     String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -1918,7 +1967,10 @@
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
     markAutoOpenedTable(table.table_id);
-    startLocalDebugMahjong(table.table_id, seats, onlineGameState);
+    startLocalDebugMahjong(table.table_id, seats, onlineGameState, {
+      autoReloadAfterLaunch: true,
+      launchReloadKey: `${table.table_id}:${onlineGameState.game_id || ""}:auto-open`,
+    });
   };
   const getOrCreateTableRecord = (tableId, seats = null) => {
     let table = state.tables.find((item) => item?.table_id === tableId);
@@ -2340,6 +2392,7 @@
   const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
     tableId = requireTableId(tableId, "着席");
     setActiveTableId(tableId);
+    await ensureEnoughClubPointsForSeat(tableId);
     try {
       await clearRemoteUserSeatsExcept(tableId, null).catch((error) => log("着席前の既存席解除に失敗しました。", rawErrorText(error)));
       try {
@@ -2744,7 +2797,7 @@
     if (window.location.protocol === "file:") return "http://127.0.0.1:8787";
     return window.location.origin;
   };
-  const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null) => {
+  const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null, launchOptions = {}) => {
     if (isLaunchInProgress(tableId)) return;
     const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId)
       .map((seat) => ({ ...seat, is_last_hand_declared: false, isLastHandDeclared: false }));
@@ -2833,6 +2886,8 @@
       returnUrl: buildOnlineDebugReturnUrl(),
       lastServerState: null,
       lastSyncedAt: 0,
+      autoReloadAfterLaunch: Boolean(launchOptions.autoReloadAfterLaunch),
+      launchReloadKey: launchOptions.launchReloadKey || "",
     };
     localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
     window.name = JSON.stringify({

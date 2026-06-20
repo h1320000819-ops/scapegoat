@@ -1168,6 +1168,7 @@ button:hover {
 }
 
 .replay-hand-selector select {
+  appearance: auto;
   background: rgba(18, 32, 36, 0.92);
   border: 1px solid rgba(255, 209, 92, 0.45);
   border-radius: 7px;
@@ -1175,6 +1176,7 @@ button:hover {
   cursor: pointer;
   font-weight: 800;
   max-width: 180px;
+  min-width: 104px;
   padding: 5px 24px 5px 8px;
 }
 

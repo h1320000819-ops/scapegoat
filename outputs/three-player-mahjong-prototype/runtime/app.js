@@ -202,6 +202,31 @@ const hydrateDebugLaunchFromWindowName = () => {
   }
 };
 hydrateDebugLaunchFromWindowName();
+const maybeReloadAfterAutoLaunch = () => {
+  try {
+    const sync = safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
+    if (!sync?.autoReloadAfterLaunch) return;
+    const reloadKey = String(sync.launchReloadKey || `${sync.tableId || ""}:${sync.gameId || ""}:auto-launch`);
+    const sessionKey = `anmikaRocket.autoLaunchReloaded:${reloadKey}`;
+    if (sessionStorage.getItem(sessionKey) === "1") {
+      const nextSync = { ...sync, autoReloadAfterLaunch: false };
+      safeWriteJson(APP_STORAGE_KEYS.onlineSync, nextSync);
+      return;
+    }
+    sessionStorage.setItem(sessionKey, "1");
+    const nextSync = { ...sync, autoReloadAfterLaunch: false };
+    safeWriteJson(APP_STORAGE_KEYS.onlineSync, nextSync);
+    console.log("[DebugLaunch] 自動開始後の初回再読み込みを実行します", {
+      tableId: sync.tableId,
+      gameId: sync.gameId,
+      reloadKey,
+    });
+    setTimeout(() => globalThis.location?.reload?.(), 120);
+  } catch (error) {
+    console.warn("[DebugLaunch] 自動開始後の再読み込み予約に失敗しました", error);
+  }
+};
+maybeReloadAfterAutoLaunch();
 const getPendingOnlineDebugLaunchTableId = () => {
   const tableId = getTableIdFromHash();
   if (isOnlineDebugLocalTableId(tableId)) return tableId;
@@ -6042,7 +6067,6 @@ class GameView {
       });
     };
     this.root.querySelectorAll("[data-replay-step]").forEach((b) => bindReplayHoldStep(b, () => Number(b.dataset.replayStep || 0)));
-    this.root.querySelectorAll("[data-replay-index]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayIndex(Number(b.dataset.replayIndex))));
     this.root.querySelectorAll("[data-replay-hand-select]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayIndex(Number(select.value || 0))));
     this.root.querySelectorAll("[data-replay-viewer]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayViewer(select.value)));
     this.root.querySelectorAll("[data-replay-reveal-hands]").forEach((input) => input.addEventListener("change", () => this.handlers.onReplayRevealHands(input.checked)));
@@ -6468,8 +6492,8 @@ class GameView {
       const active = index >= marker.index && index < nextIndex;
       return `<option value="${marker.index}" ${active ? "selected" : ""}>${escapeHtml(marker.label)}</option>`;
     }).join("");
-    const handButtons = handMarkers.length > 1
-      ? `<label class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span><select data-replay-hand-select>${handSelectOptions}</select></label>`
+    const handSelect = handMarkers.length > 1
+      ? `<label class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span><select data-replay-hand-select size="1" aria-label="局を選択">${handSelectOptions}</select></label>`
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
@@ -6481,7 +6505,7 @@ class GameView {
         <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
         <strong>${index + 1} / ${snapshots.length}</strong>
         <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
-        ${handButtons}
+        ${handSelect}
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
