@@ -17,7 +17,7 @@ export function calculateCustomScore(input: ScoreCalculationInput): ScoreResult 
   const coloredDoraCount = countColoredDora(input.winningTiles);
   const hasRealYakuman = input.yaku.some((yaku) => yaku.isYakuman);
   const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((total, yaku) => total + yaku.han, 0);
-  const doraHan = hasRealYakuman ? 0 : normalDoraCount + coloredDoraCount + nukiDoraCount;
+  const doraHan = hasRealYakuman ? 0 : normalDoraCount + coloredDoraCount + nukiDoraCount + uraDoraCount;
   const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
   const isCountedYakuman = input.isCountedYakuman ?? (!hasRealYakuman && totalHan >= 14);
   const isDealer = input.winnerId === input.dealerPlayerId;

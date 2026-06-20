@@ -11,7 +11,7 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/public/icons/anmika-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/public/icons/anmika-icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=20260620-delete-club-super-a" />
+    <link rel="stylesheet" href="styles.css?v=20260621-fix-mojibake-a" />
     <title>アンミカロケット</title>
     <style>
       .online-debug-page {
@@ -121,7 +121,7 @@
       <section id="game-root" class="game-root" aria-live="polite">
         <section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
           <h2>読み込み中...</h2>
-          <p>麻雀卓を準備しています。しばらく変わらない場合はロビーに戻ってください。</p>
+          <p>対局画面を準備しています。しばらく待っても変わらない場合はロビーに戻ってください。</p>
           <button type="button" onclick="location.href='online-debug/index.html'">ロビーへ戻る</button>
         </section>
       </section>
@@ -137,7 +137,7 @@
         : `${location.origin}/online-debug/index.html${returnClubId ? `?returnClubId=${encodeURIComponent(returnClubId)}` : ""}`;
       const safeMessage = String(message || "unknown error").replace(/[<>&]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[ch]));
       root.innerHTML = `<section style="margin:80px auto;max-width:720px;color:#f6f8f7;background:rgba(10,20,28,.94);padding:20px;border-radius:12px;font-family:'Noto Sans JP','Yu Gothic','Meiryo',sans-serif;">
-        <h2>麻雀画面を開けませんでした</h2>
+        <h2>対局画面を開けませんでした</h2>
         <p>原因: ${safeMessage}</p>
         <button type="button" onclick="location.href='${returnUrl}'">新しいロビーへ戻る</button>
         <button type="button" onclick="location.reload()">再読み込み</button>
@@ -190,7 +190,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260620-delete-club-super-a";
+    const assetVersion = "20260621-fix-mojibake-a";
     loadScript(`${assetBase}runtime/pwa.js?v=${assetVersion}`).catch(() => {});
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();

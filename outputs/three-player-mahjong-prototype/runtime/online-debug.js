@@ -659,6 +659,11 @@
     if (!config.url || !config.anonKey) throw new Error("Supabase設定が不足しています。runtime/supabase-public-config.js を確認してください。");
   };
   const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
+  const isSafeHeaderName = (value) => /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(String(value ?? ""));
+  const isByteStringFetchError = (error) => {
+    const raw = rawErrorText(error);
+    return raw.includes("ByteString") || raw.includes("greater than 255") || raw.includes("Cannot convert argument");
+  };
   const isLikelyJwt = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
   const clearStoredSession = () => {
     state.accessToken = "";
@@ -677,6 +682,8 @@
   const invalidateBrokenSession = (reason = "broken auth header") => {
     console.warn("[Auth] session cleared", { reason });
     clearStoredSession();
+    if (has("currentUser")) $("currentUser").textContent = "未ログイン";
+    clearError();
   };
   const isValidAccessToken = (value) => !value || (isByteStringHeaderValue(value) && isLikelyJwt(value));
   const isValidRefreshToken = (value) => !value || isByteStringHeaderValue(value);
@@ -698,6 +705,10 @@
     return true;
   };
   const assertHeaderValue = (name, value) => {
+    if (!isSafeHeaderName(name)) {
+      console.warn("[Headers] unsafe header name blocked", { name });
+      throw new Error("通信ヘッダーが壊れています。ページを更新してもう一度試してください。");
+    }
     const text = String(value ?? "");
     if (!isByteStringHeaderValue(text)) {
       console.warn("[Headers] non ByteString header blocked", { name, length: text.length });
@@ -737,7 +748,17 @@
     requireConfig();
     const url = config.url.replace(/\/$/, "") + path;
     const headers = buildSafeHeaders(options.headers, { auth: options.auth !== false });
-    const response = await fetch(url, { ...options, headers });
+    let response;
+    try {
+      response = await fetch(url, { ...options, headers });
+    } catch (error) {
+      if (isByteStringFetchError(error)) {
+        invalidateBrokenSession("fetch rejected non ByteString header");
+        render();
+        throw new Error("ログイン情報または通信ヘッダーが壊れていたため、ログイン状態をクリアしました。もう一度ログインしてください。");
+      }
+      throw error;
+    }
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
@@ -3381,6 +3402,89 @@
       body.innerHTML = `<p class="muted">ポイント履歴テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
     }
   };
+  const statPayload = (row) => row?.stat_payload || row?.statPayload || {};
+  const statNumber = (value) => {
+    const numeric = Number(value || 0);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  const statPercent = (value, total) => total > 0 ? `${(statNumber(value) / total * 100).toFixed(1)}%` : "-";
+  const statSigned = (value, unit = "") => {
+    const numeric = roundToTenth(value);
+    const text = Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+    return `${numeric >= 0 ? "+" : ""}${text}${unit}`;
+  };
+  const statRowHtml = (label, value) => `<div class="table-seat-line"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`;
+  const fetchMyReplayStats = async () => {
+    const user = requireUser();
+    try {
+      return await rest(`/player_replay_stats?select=*&user_id=eq.${encodeURIComponent(user.id)}&is_cpu=eq.false&order=created_at.asc&limit=5000`);
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (raw.includes("player_replay_stats") || raw.includes("schema cache") || raw.includes("Could not find the table")) {
+        throw new Error("スタッツ集計テーブルが未作成です。supabase/patch_player_replay_stats.sql を実行してください。");
+      }
+      throw error;
+    }
+  };
+  const aggregateHandStats = (rows) => rows.reduce((stats, row) => {
+    const payload = statPayload(row);
+    const handCount = Math.max(0, statNumber(row.hand_count || 1));
+    stats.hands += handCount;
+    stats.scoreDelta += statNumber(row.score_delta);
+    stats.wins += statNumber(row.win_count);
+    stats.dealIns += statNumber(payload.dealInCount ?? payload.deal_in_count ?? 0);
+    stats.callHands += statNumber(payload.handWithCallCount ?? payload.hand_with_call_count ?? (statNumber(row.call_count) > 0 ? 1 : 0));
+    stats.riichiHands += statNumber(payload.handWithRiichiCount ?? payload.hand_with_riichi_count ?? (statNumber(row.riichi_count) > 0 ? 1 : 0));
+    return stats;
+  }, { hands: 0, scoreDelta: 0, wins: 0, dealIns: 0, callHands: 0, riichiHands: 0 });
+  const renderStatsPage = async (body) => {
+    try {
+      const rows = await fetchMyReplayStats();
+      const anmikaRows = rows.filter((row) => row.rule_id !== TSUMO_LOSSLESS_3MA_RULE_ID && row.scope !== "hanchan");
+      const anmika = aggregateHandStats(anmikaRows);
+      const allRedHanchans = rows.filter((row) => row.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID && row.scope === "hanchan");
+      const allRedHandRows = rows.filter((row) => row.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID && row.scope !== "hanchan");
+      const allRedHands = aggregateHandStats(allRedHandRows.length ? allRedHandRows : allRedHanchans);
+      const allRedHalfCount = allRedHanchans.length;
+      const rankCounts = { 1: 0, 2: 0, 3: 0 };
+      let tobiCount = 0;
+      let allRedScoreDelta = 0;
+      allRedHanchans.forEach((row) => {
+        const payload = statPayload(row);
+        const rank = Number(payload.hanchanRank || payload.rank || 0);
+        if (rankCounts[rank] !== undefined) rankCounts[rank] += 1;
+        if (payload.isTobi === true || payload.isTobi === "true" || statNumber(row.final_score) <= 0) tobiCount += 1;
+        allRedScoreDelta += statNumber(row.final_score) - 35000;
+      });
+      body.innerHTML = `
+        <section class="card">
+          <h4>アンミカロケット</h4>
+          ${statRowHtml("総局数（局）", `${anmika.hands}局`)}
+          ${statRowHtml("平均収支（点）", anmika.hands ? statSigned(anmika.scoreDelta / anmika.hands, "点") : "-")}
+          ${statRowHtml("和了率（％）", statPercent(anmika.wins, anmika.hands))}
+          ${statRowHtml("放銃率（％）", statPercent(anmika.dealIns, anmika.hands))}
+          ${statRowHtml("副露率（％）", statPercent(anmika.callHands, anmika.hands))}
+          ${statRowHtml("リーチ率（％）", statPercent(anmika.riichiHands, anmika.hands))}
+        </section>
+        <section class="card">
+          <h4>全赤三麻</h4>
+          ${statRowHtml("半荘数（半荘）", `${allRedHalfCount}半荘`)}
+          ${statRowHtml("1着率（％）", statPercent(rankCounts[1], allRedHalfCount))}
+          ${statRowHtml("2着率（％）", statPercent(rankCounts[2], allRedHalfCount))}
+          ${statRowHtml("3着率（％）", statPercent(rankCounts[3], allRedHalfCount))}
+          ${statRowHtml("飛び率（％）", statPercent(tobiCount, allRedHalfCount))}
+          ${statRowHtml("平均収支（pt）", allRedHalfCount ? statSigned((allRedScoreDelta / allRedHalfCount) / 1000, "pt") : "-")}
+          ${statRowHtml("和了率（％）", statPercent(allRedHands.wins, allRedHands.hands))}
+          ${statRowHtml("放銃率（％）", statPercent(allRedHands.dealIns, allRedHands.hands))}
+          ${statRowHtml("副露率（％）", statPercent(allRedHands.callHands, allRedHands.hands))}
+          ${statRowHtml("リーチ率（％）", statPercent(allRedHands.riichiHands, allRedHands.hands))}
+        </section>
+        <p class="muted">スタッツは保存済み牌譜から集計します。古い牌譜では放銃率や副露局数など一部が未記録の場合があります。</p>
+      `;
+    } catch (error) {
+      body.innerHTML = `<p class="muted">スタッツの取得に失敗しました。</p><pre>${getErrorText(error)}</pre>`;
+    }
+  };
   const renderDeletePointLogsPage = async (body) => {
     if (!isSuperClubCreator()) {
       body.innerHTML = `<p class="muted">このログを見られるのは特権アカウントだけです。</p>`;
@@ -3454,6 +3558,86 @@
     if (window.location.protocol === "file:") return `../replay.html#/replay/${encoded}`;
     return `${window.location.origin}/replay/${encoded}`;
   };
+  const makeReplayWallPlaceholders = (prefix, count) =>
+    Array.from({ length: Math.max(0, Number(count || 0)) }, (_, index) => ({ id: `${prefix}-${index}`, hidden: true }));
+  const pickReplaySnapshotsForCache = (snapshots = [], maxSnapshots = 80) => {
+    const list = asArray(snapshots).filter(Boolean);
+    if (maxSnapshots <= 0) return [];
+    if (list.length <= maxSnapshots) return list;
+    if (maxSnapshots === 1) return [list[0]];
+    const picked = [];
+    const lastIndex = list.length - 1;
+    for (let index = 0; index < maxSnapshots; index += 1) {
+      picked.push(list[Math.round((lastIndex * index) / (maxSnapshots - 1))]);
+    }
+    return picked;
+  };
+  const compactReplaySnapshotForCache = (snapshot) => {
+    if (!snapshot) return snapshot;
+    return {
+      ...snapshot,
+      liveWall: makeReplayWallPlaceholders("live-wall", snapshot.liveWall?.length ?? 0),
+      rinshanWall: makeReplayWallPlaceholders("rinshan-wall", snapshot.rinshanWall?.length ?? 0),
+      pendingAction: null,
+      handLog: snapshot.handLog ? { ...snapshot.handLog, events: [] } : snapshot.handLog,
+      replaySnapshots: undefined,
+    };
+  };
+  const compactReplayForViewerCache = (replay, maxSnapshots = 80) => {
+    const snapshots = pickReplaySnapshotsForCache(replay.snapshots?.length ? replay.snapshots : [replay.initialState].filter(Boolean), maxSnapshots)
+      .map(compactReplaySnapshotForCache);
+    const initialState = compactReplaySnapshotForCache(replay.initialState || snapshots[0]);
+    return {
+      ...replay,
+      initialState,
+      snapshots,
+      events: maxSnapshots < 10 ? asArray(replay.events).slice(-Math.max(0, maxSnapshots)) : asArray(replay.events),
+      simpleReplay: replay.simpleReplay || {
+        format: "anmika-simple-replay-v1",
+        initialState,
+        events: asArray(replay.events),
+        result: replay.initialState?.handLog?.result || null,
+      },
+    };
+  };
+  const saveReplayForViewerCache = (replay) => {
+    const key = "anmikaRocket.replays";
+    const replayId = replay.replayId || replay.summary?.replayId;
+    const snapshotLimits = [160, 120, 80, 40, 20, 8, 2, 1, 0];
+    const current = (() => {
+      try { return asArray(JSON.parse(localStorage.getItem(key) || "[]")); } catch { return []; }
+    })();
+    const oldSummaries = current
+      .filter((item) => (item.replayId || item.summary?.replayId) !== replayId)
+      .map((item) => ({
+        replayId: item.replayId || item.summary?.replayId,
+        summary: item.summary || {},
+        initialState: null,
+        events: [],
+        snapshots: [],
+      }))
+      .filter((item) => item.replayId);
+    for (const snapshotLimit of snapshotLimits) {
+      const compactReplay = compactReplayForViewerCache(replay, snapshotLimit);
+      const candidates = [
+        [compactReplay, ...oldSummaries.slice(0, 20)],
+        [compactReplay, ...oldSummaries.slice(0, 5)],
+        [compactReplay],
+      ];
+      for (const candidate of candidates) {
+        try {
+          localStorage.setItem(key, JSON.stringify(candidate));
+          return compactReplay;
+        } catch (error) {
+          if (!String(error?.name || error?.message || error).includes("Quota")) continue;
+        }
+      }
+    }
+    try { localStorage.removeItem(key); } catch {}
+    const minimalReplay = compactReplayForViewerCache({ ...replay, snapshots: [] }, 0);
+    localStorage.setItem(key, JSON.stringify([minimalReplay]));
+    return minimalReplay;
+  };
   const cacheReplayForViewer = async (replayId) => {
     if (!replayId) throw new Error("牌譜IDがありません。");
     let rows;
@@ -3497,17 +3681,7 @@
         result: row.initial_state?.handLog?.result || null,
       } : row.summary?.simpleReplay || null,
     };
-    const key = "anmikaRocket.replays";
-    let current = [];
-    try {
-      current = JSON.parse(localStorage.getItem(key) || "[]");
-    } catch {
-      current = [];
-    }
-    const byId = new Map(asArray(current).map((item) => [item.replayId || item.summary?.replayId, item]).filter(([value]) => value));
-    byId.set(id, replay);
-    localStorage.setItem(key, JSON.stringify([...byId.values()].slice(0, 100)));
-    return replay;
+    return saveReplayForViewerCache(replay);
   };
   const renderReplayListPage = async (body) => {
     try {
@@ -3568,6 +3742,26 @@
       body.innerHTML = `<p class="muted">牌譜一覧の取得に失敗しました。</p><pre>${getErrorText(error)}</pre><p class="muted">Supabase SQL Editorで supabase/patch_my_replays_rpc.sql を実行してください。</p>`;
     }
   };
+  const clubManagementNavHtml = (activePage) => `
+    <div class="primary-actions">
+      <button type="button" class="${activePage === "joinRequests" ? "" : "secondary"}" ${activePage === "joinRequests" ? "disabled" : 'data-management-page="joinRequests"'}>加入申請一覧</button>
+      <button type="button" class="${activePage === "members" ? "" : "secondary"}" ${activePage === "members" ? "disabled" : 'data-management-page="members"'}>メンバー管理</button>
+      <button type="button" class="${activePage === "clubSettings" ? "" : "secondary"}" ${activePage === "clubSettings" ? "disabled" : 'data-management-page="clubSettings"'}>クラブ設定</button>
+      ${isSuperClubCreator() ? `<button type="button" class="danger" data-delete-club-management>クラブ削除</button>` : ""}
+    </div>
+  `;
+  const bindClubManagementNav = (root, clubId) => {
+    root.querySelectorAll("[data-management-page]").forEach((button) => {
+      button.addEventListener("click", () => openSettingsPage(button.dataset.managementPage).catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    });
+    root.querySelector("[data-delete-club-management]")?.addEventListener("click", async () => {
+      try {
+        await deleteClub(clubId);
+      } catch (error) {
+        showError("クラブ削除に失敗しました", error);
+      }
+    });
+  };
   const renderJoinRequestsPage = async (body) => {
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
@@ -3577,23 +3771,17 @@
     }
     const rows = await loadAdminJoinRequests(clubId);
     const managementHeader = `
-      <div class="primary-actions">
-        <button type="button" disabled>加入申請一覧</button>
-        <button type="button" class="secondary" id="openClubMembersButton">メンバー管理</button>
-        <button type="button" class="secondary" id="openClubSettingsButton">クラブ設定</button>
-      </div>
+      ${clubManagementNavHtml("joinRequests")}
       <h4>加入申請一覧</h4>
       <p class="muted">現在のclubId: ${clubId}<br>取得した申請数: <span id="joinRequestCountDebug">${rows.length}</span></p>
     `;
     if (!rows.length) {
       body.innerHTML = `${managementHeader}<p class="muted">現在、加入申請はありません。</p>`;
-      document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
-      document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+      bindClubManagementNav(body, clubId);
       return;
     }
     body.innerHTML = `${managementHeader}<div id="joinRequestRows" class="point-user-list"></div>`;
-    document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
-    document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    bindClubManagementNav(body, clubId);
     const container = document.getElementById("joinRequestRows");
     rows.forEach((request) => {
       const name = request.users?.display_name || request.user_id;
@@ -3657,17 +3845,12 @@
       return;
     }
     body.innerHTML = `
-      <div class="primary-actions">
-        <button type="button" class="secondary" id="openJoinRequestsButton">加入申請一覧</button>
-        <button type="button" disabled>メンバー管理</button>
-        <button type="button" class="secondary" id="openClubSettingsButton">クラブ設定</button>
-      </div>
+      ${clubManagementNavHtml("members")}
       <h4>メンバー一覧</h4>
       <p class="muted">現在のclubId: ${clubId}<br>メンバー数: ${members.length}</p>
       <div id="clubMemberRows" class="point-user-list"></div>
     `;
-    document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
-    document.getElementById("openClubSettingsButton")?.addEventListener("click", () => openSettingsPage("clubSettings").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    bindClubManagementNav(body, clubId);
     const container = document.getElementById("clubMemberRows");
     if (!members.length) {
       container.innerHTML = `<p class="muted">メンバーはいません。</p>`;
@@ -3749,11 +3932,7 @@
       `
       : `<p class="muted">特権アカウントへのレーキ配分率: ${formatPoint(superRakeSharePercent)}%</p>`;
     body.innerHTML = `
-      <div class="primary-actions">
-        <button type="button" class="secondary" id="openJoinRequestsButton">加入申請一覧</button>
-        <button type="button" class="secondary" id="openClubMembersButton">メンバー管理</button>
-        <button type="button" disabled>クラブ設定</button>
-      </div>
+      ${clubManagementNavHtml("clubSettings")}
       <h4>クラブ設定</h4>
       <div class="row">
         ${clubIcon ? `<img src="${escapeHtml(clubIcon)}" alt="クラブアイコン" style="width:72px;height:72px;object-fit:cover;border-radius:12px;border:1px solid rgba(255,255,255,.35);" />` : `<span class="muted">クラブアイコン未設定</span>`}
@@ -3779,8 +3958,7 @@
         ${isSuperClubCreator() ? `<button type="button" id="deleteClubButton" class="danger">クラブ削除</button>` : `<p class="muted">このアカウントではクラブ削除できません。</p>`}
       </section>
     `;
-    document.getElementById("openJoinRequestsButton")?.addEventListener("click", () => openSettingsPage("joinRequests").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
-    document.getElementById("openClubMembersButton")?.addEventListener("click", () => openSettingsPage("members").catch((error) => showError(JA_MESSAGES.actionFailed, error)));
+    bindClubManagementNav(body, clubId);
     document.getElementById("saveClubNameButton")?.addEventListener("click", async () => {
       try {
         await updateClubName(clubId, document.getElementById("clubSettingsNameInput")?.value || "");
@@ -3928,6 +4106,12 @@
     if (page === "history") {
       title.textContent = "ポイント収支";
       await renderPointHistoryPage(body);
+      return;
+    }
+    if (page === "stats") {
+      title.textContent = "スタッツ";
+      body.innerHTML = `<p class="muted">スタッツを集計中...</p>`;
+      await renderStatsPage(body);
       return;
     }
     if (page === "deletePointLogs") {

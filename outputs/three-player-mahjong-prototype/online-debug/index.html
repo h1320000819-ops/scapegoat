@@ -205,30 +205,26 @@
       }
     </style>
   </head>
-  <body data-screen="auth" data-role="member">
+    <body data-screen="auth" data-role="member">
     <main>
       <div class="top">
         <div>
           <h1>ロビー</h1>
           <p id="configStatus">確認中...</p>
           <p id="lanHint" class="warn"></p>
-          <div class="link-panel">
-            <div><strong>PC用URL:</strong> <span id="pcDebugUrl">確認中...</span></div>
-            <div><strong>スマホ用URL:</strong> <span id="mobileDebugUrl">確認中...</span></div>
-            <button id="copyMobileUrlButton" type="button">スマホ用URLをコピー</button>
-          </div>
         </div>
         <div class="signed-in-only">
           <p>現在のユーザー: <strong id="currentUser">未ログイン</strong></p>
           <div class="club-header-actions">
             <button id="globalBackButton" type="button" class="secondary">戻る</button>
-            <button id="settingsToggleButton" class="gear-button" type="button" aria-label="設定">?</button>
+            <button id="settingsToggleButton" class="gear-button" type="button" aria-label="settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg></button>
             <div id="settingsDrawer" class="settings-menu drawer">
               <button type="button" data-settings-page="account">アカウント設定</button>
               <button type="button" data-settings-page="joinRequests">加入申請</button>
               <button type="button" data-settings-page="clubSettings">クラブ設定</button>
               <button type="button" data-settings-page="points">クラブポイント</button>
               <button type="button" data-settings-page="history">ポイント収支</button>
+              <button type="button" data-settings-page="stats">スタッツ</button>
               <button type="button" data-settings-page="deletePointLogs" class="super-only">削除ログ</button>
               <button type="button" data-settings-page="replays">牌譜一覧</button>
             </div>
@@ -279,7 +275,7 @@
           </div>
           <div class="club-header-actions">
             <button id="backToClubsButton" type="button" class="secondary">クラブ選択へ戻る</button>
-            <button id="settingsGearButton" class="gear-button" type="button" aria-label="設定">?</button>
+            <button id="settingsGearButton" class="gear-button" type="button" aria-label="settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg></button>
           </div>
         </div>
 
@@ -299,9 +295,9 @@
             <select id="ruleId">
               <option value="anmika-rocket">アンミカロケット</option>
               <option value="tsumo-lossless-red-3ma">ツモ損なし全赤三麻</option>
-              <option value="normal-4ma" disabled>ノーマル四麻（未実装）</option>
-              <option value="normal-3ma" disabled>三人麻雀（未実装）</option>
-              <option value="jewel" disabled>ジュエル（未実装）</option>
+              <option value="normal-4ma" disabled>ノーマル四麻（準備中）</option>
+              <option value="normal-3ma" disabled>三人麻雀（準備中）</option>
+              <option value="jewel" disabled>ジュエル（準備中）</option>
             </select>
           </label>
           <div id="anmikaRuleCreateFields">
@@ -315,7 +311,7 @@
             </div>
             <label><input id="rocket19Enabled" type="checkbox" checked /> 1・9牌ロケット</label>
             <label><input id="baibaEnabled" type="checkbox" checked /> 倍場</label>
-            <label><input id="otokogiEnabled" type="checkbox" checked /> 男気ルール</label>
+            <label><input id="otokogiEnabled" type="checkbox" checked /> 漢気ルール</label>
             <label><input id="feverRiichiEnabled" type="checkbox" checked /> フィーバーリーチ</label>
             <label>ターコイズ5p
               <select id="turquoise5pCount">
@@ -339,8 +335,8 @@
           <button id="backFromTableRoomButton" type="button" class="secondary">戻る</button>
           <div class="row">
             <button id="copyTableUrlButton">卓URLコピー</button>
-            <button id="sitButton">座る</button>
-            <button id="leaveButton" class="secondary">立つ</button>
+            <button id="sitButton">着席</button>
+            <button id="leaveButton" class="secondary">離席</button>
             <button id="addCpuButton" class="admin-only">CPU追加</button>
             <button id="removeCpuButton" class="admin-only secondary">CPU削除</button>
             <button id="openOnlineGameButton" class="secondary">オンライン対局を開く</button>
@@ -348,13 +344,13 @@
           </div>
           <p id="tableUrl" class="muted"></p>
           <div id="seatRows" class="seat-list"></div>
-          <pre id="seatsOutput">席情報を読み込みます</pre>
+          <pre id="seatsOutput">座席情報を読み込みます</pre>
         </section>
 
         <section id="onlineGamePanel" class="modal-panel">
           <button id="backFromOnlineGameButton" type="button" class="secondary">戻る</button>
           <h3>オンライン対局</h3>
-          <label>牌 <input id="onlineTileLabel" placeholder="例: 3p / 東 / 白" /></label>
+          <label>牌 <input id="onlineTileLabel" placeholder="例: 3p / 東 / 華" /></label>
           <div class="online-action-buttons">
             <button type="button" data-online-action="draw">ツモ</button>
             <button type="button" data-online-action="discard">打牌</button>
@@ -397,17 +393,17 @@
           <button id="sendPointButton">送る</button>
           <button id="collectPointButton">回収</button>
         </div>
-        <button id="loadRakeButton">レーキ履歴</button>
+        <button id="loadRakeButton">レーキ確認</button>
         <pre id="rakeSummary">未取得</pre>
         <pre id="rakeHistory">未取得</pre>
         <pre id="debugSummaryLegacy">確認中...</pre>
-        <pre id="logOutput">ログはここに表示されます</pre>
+        <pre id="logOutput">ログはこちらに表示されます</pre>
       </section>
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/pwa.js?v=20260620-delete-club-super-a"></script>
-    <script src="../runtime/online-debug.js?v=20260620-delete-club-super-a"></script>
+    <script src="../runtime/pwa.js?v=20260621-fix-mojibake-a"></script>
+    <script src="../runtime/online-debug.js?v=20260621-fix-mojibake-a"></script>
   </body>
 </html>
 

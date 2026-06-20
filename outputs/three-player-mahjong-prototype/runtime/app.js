@@ -3,6 +3,9 @@ const INITIAL_TIME_MS = 20000;
 const RESULT_COUNTDOWN_SECONDS = 15;
 const ONLINE_LOADING_DISPLAY_DELAY_MS = 5000;
 const SOCKET_STARTUP_RESYNC_DELAYS_MS = [600, 1400, 2600, 4200, 6500];
+const SOCKET_EARLY_TURN_WATCH_TURNS = 12;
+const SOCKET_EARLY_TURN_WATCH_IDLE_MS = 2200;
+const SOCKET_EARLY_TURN_WATCH_RESYNC_MS = 2600;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -268,6 +271,27 @@ const copyTextToClipboard = async (text) => {
 };
 const loadOnlineSync = () => safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
 const saveOnlineSync = (sync) => sync ? safeWriteJson(APP_STORAGE_KEYS.onlineSync, sync) : safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
+const isLikelyJwtToken = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
+const clearBrokenSupabaseSession = (reason = "broken auth header") => {
+  console.warn("[OnlineSync] cleared broken Supabase session", { reason });
+  safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+  try {
+    localStorage.removeItem("anmikaAccessToken");
+    localStorage.removeItem("anmikaRefreshToken");
+  } catch {}
+};
+const buildSupabaseAuthHeaders = ({ anonKey = "", accessToken = "", json = false } = {}) => {
+  if (!isByteStringHeaderValue(anonKey) || !isByteStringHeaderValue(accessToken) || !isLikelyJwtToken(accessToken)) {
+    clearBrokenSupabaseSession("invalid Supabase auth header");
+    throw new Error("ログイン情報または通信ヘッダーが壊れていたため、ログイン状態をクリアしました。ロビーで再ログインしてください。");
+  }
+  return {
+    apikey: String(anonKey),
+    Authorization: `Bearer ${accessToken}`,
+    ...(json ? { "Content-Type": "application/json" } : {}),
+  };
+};
 const loadSocketDebugStatus = () => safeReadJson(APP_STORAGE_KEYS.socketDebug, {});
 const saveSocketDebugStatus = (patch = {}) => {
   const sync = loadOnlineSync() || {};
@@ -537,11 +561,7 @@ const submitOnlineGameAction = async (actionType, payload = {}, options = {}) =>
   if (!sync?.enabled || !sync.gameId || !sync.tableId || !sync.userId || !sync.supabaseUrl || !sync.anonKey || !sync.accessToken) return null;
   const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/submit_game_action`, {
     method: "POST",
-    headers: {
-      apikey: sync.anonKey,
-      Authorization: `Bearer ${sync.accessToken}`,
-      "Content-Type": "application/json",
-    },
+    headers: buildSupabaseAuthHeaders({ anonKey: sync.anonKey, accessToken: sync.accessToken, json: true }),
     body: JSON.stringify({
       p_game_id: sync.gameId,
       p_table_id: sync.tableId,
@@ -607,10 +627,7 @@ const refreshOnlineSyncFromServer = async () => {
     limit: "1",
   });
   const response = await fetch(`${sync.supabaseUrl}/rest/v1/game_states?${params}`, {
-    headers: {
-      apikey: sync.anonKey,
-      Authorization: `Bearer ${sync.accessToken}`,
-    },
+    headers: buildSupabaseAuthHeaders({ anonKey: sync.anonKey, accessToken: sync.accessToken }),
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : [];
@@ -657,9 +674,7 @@ const pushOnlineSyncState = async (gameState, reason = "state") => {
   const nextVersion = Math.max(Number(sync.version ?? 0) + 1, Number(gameState.version ?? 0));
   state.version = nextVersion;
   const headers = {
-    apikey: sync.anonKey,
-    Authorization: `Bearer ${sync.accessToken}`,
-    "Content-Type": "application/json",
+    ...buildSupabaseAuthHeaders({ anonKey: sync.anonKey, accessToken: sync.accessToken, json: true }),
   };
   const rpcResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/publish_game_state`, {
     method: "POST",
@@ -697,9 +712,7 @@ const pushOnlineSyncState = async (gameState, reason = "state") => {
 const leaveOnlineTableForSync = async (sync) => {
   if (!sync?.tableId || !sync?.supabaseUrl || !sync?.anonKey || !sync?.accessToken) return false;
   const headers = {
-    apikey: sync.anonKey,
-    Authorization: `Bearer ${sync.accessToken}`,
-    "Content-Type": "application/json",
+    ...buildSupabaseAuthHeaders({ anonKey: sync.anonKey, accessToken: sync.accessToken, json: true }),
   };
   const markTableWaiting = async () => {
     const rpcResponse = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/mark_table_waiting_if_no_active_game`, {
@@ -1084,13 +1097,11 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   if (replayId && !isUuidString(replayId)) return [];
   const baseUrl = supabaseUrl.replace(/\/$/, "");
   const headers = {
-    apikey: anonKey,
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
+    ...buildSupabaseAuthHeaders({ anonKey, accessToken, json: true }),
   };
   if (replayId) {
     const serverResponse = await fetch(`${globalThis.location?.origin || ""}/api/replay/${encodeURIComponent(replayId)}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: buildSupabaseAuthHeaders({ anonKey, accessToken }).Authorization },
       cache: "no-store",
     }).catch(() => null);
     if (serverResponse?.ok) {
@@ -1866,6 +1877,16 @@ const isTsumoLosslessDealerContinuation = (state, result) => {
   if (result.type === "exhaustiveDraw") return Array.isArray(result.tenpaiPlayerIds) && result.tenpaiPlayerIds.includes(dealerId);
   return false;
 };
+const getTsumoLosslessRoundIndex = (state) => Math.max(0, Math.min(TSUMO_LOSSLESS_ROUNDS.length - 1, Number(state?.round?.hanchanRoundIndex ?? 0)));
+const isTsumoLosslessAgariYameOpportunity = (state, result = state?.handLog?.result) =>
+  isTsumoLossless3maState(state) &&
+  getTsumoLosslessRoundIndex(state) >= TSUMO_LOSSLESS_ROUNDS.length - 1 &&
+  isTsumoLosslessDealerContinuation(state, result) &&
+  !(state?.players ?? []).some((player) => Number(player.score || 0) <= 0);
+const canLocalPlayerAgariYame = (state) => {
+  const localPlayerId = getLocalHumanPlayerId(state);
+  return Boolean(localPlayerId && localPlayerId === state?.round?.dealerPlayerId && isTsumoLosslessAgariYameOpportunity(state));
+};
 const getSeatRoleLabel = (state, playerId) => {
   const players = state?.players ?? [];
   const dealerIndex = players.findIndex((player) => player.id === state?.round?.dealerPlayerId);
@@ -1957,6 +1978,10 @@ const renderResultOkButton = (state) => {
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
   return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}">${isConfirmed ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+};
+const renderAgariYameButton = (state) => {
+  if (!canLocalPlayerAgariYame(state)) return "";
+  return `<button type="button" class="danger agari-yame-action" data-agari-yame data-result-id="${escapeHtml(getCurrentResultId(state))}">あがりやめ</button>`;
 };
 const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   const viewerIndex = Math.max(0, gameState.players.findIndex((player) => player.id === viewerPlayerId));
@@ -2567,9 +2592,10 @@ class RuleEngine {
     const blueTileCount = bonusSourceTiles.filter((tile) => tile.color === "blue" && !tile.isPochi).length;
     const goldTileCount = bonusSourceTiles.filter((tile) => tile.color === "gold").length;
     const nuki = input.nukiDoraCount ?? 0;
+    const uraDora = input.uraDoraCount ?? 0;
     const hasRealYakuman = input.yaku.some((yaku) => yaku.isYakuman);
     const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((sum, yaku) => sum + yaku.han, 0);
-    const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki;
+    const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki + uraDora;
     const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
     if (isTsumoLossless3maState(state)) {
       const isDealer = input.winnerId === input.dealerPlayerId;
@@ -2602,6 +2628,7 @@ class RuleEngine {
         normalDora > 0 ? { name: "ドラ", han: normalDora } : null,
         colored > 0 ? { name: "色付き牌ドラ", han: colored } : null,
         nuki > 0 ? { name: "抜きドラ", han: nuki } : null,
+        uraDora > 0 ? { name: "裏ドラ", han: uraDora } : null,
       ].filter(Boolean);
       return {
         yakuHan,
@@ -2627,7 +2654,7 @@ class RuleEngine {
         yaku: input.yaku,
         yakuList: input.yaku,
         doraDetails,
-        dora: { normal: normalDora, colored, nuki, ura: input.uraDoraCount ?? 0 },
+        dora: { normal: normalDora, colored, nuki, ura: uraDora },
         bonuses: { honba: honba * 1000, chipPending: false },
         tsumoPayments: input.winType === "tsumo" ? { childPay, dealerPay } : null,
       };
@@ -2935,6 +2962,10 @@ class GameController {
     this.onlineLoadingRevealTimer = null;
     this.isApplyingOnlineState = false;
     this.lastAppliedOnlinePublishedAt = 0;
+    this.lastOnlineStateAppliedAt = 0;
+    this.lastEarlyTurnWatchResyncAt = 0;
+    this.earlyTurnWatchInFlight = false;
+    this.lastEarlyTurnWatchKey = "";
     this.onlineInitialPublisher = false;
     this.socketInitialStateInFlight = false;
     this.socketStartupResyncTimers = [];
@@ -3056,6 +3087,7 @@ class GameController {
       return;
     }
     this.monitorDiscardRecover();
+    this.monitorEarlyTurnStall();
     const playerId = this.state.activeClockPlayerId;
     if (!playerId || this.state.screen !== "game" || this.state.handLog.result) return;
     if (isSocketAuthoritativeGame() && this.state.optimisticDiscardRequestId) return;
@@ -3128,6 +3160,31 @@ class GameController {
       this.onStateChanged(this.state);
     }
   }
+  monitorEarlyTurnStall() {
+    if (!isSocketAuthoritativeGame()) return;
+    if (this.state.screen !== "game" || this.state.handLog?.result) return;
+    if (this.state.optimisticDiscardRequestId) return;
+    const socket = globalThis.anmikaGameSocket;
+    if (!socket?.connected) return;
+    const phase = this.state.phase || "";
+    if (!["playing", "waitingForHumanDiscard", "waitingForRiichiDiscard", "waitingForAction"].includes(phase)) return;
+    const turnIndex = Number(this.state.turnIndex || 0);
+    if (turnIndex > SOCKET_EARLY_TURN_WATCH_TURNS) return;
+    const nowMs = Date.now();
+    const lastApplied = Number(this.lastOnlineStateAppliedAt || this.state.onlineMeta?.publishedAt || 0);
+    if (lastApplied && nowMs - lastApplied < SOCKET_EARLY_TURN_WATCH_IDLE_MS) return;
+    if (nowMs - Number(this.lastEarlyTurnWatchResyncAt || 0) < SOCKET_EARLY_TURN_WATCH_RESYNC_MS) return;
+    const current = getCurrentPlayer(this.state);
+    const viewerId = getLocalHumanPlayerId(this.state);
+    const watchKey = `${this.state.handLog?.handId || ""}:${turnIndex}:${this.state.currentPlayerIndex || 0}:${phase}:${current?.id || ""}`;
+    if (this.earlyTurnWatchInFlight && this.lastEarlyTurnWatchKey === watchKey) return;
+    this.earlyTurnWatchInFlight = true;
+    this.lastEarlyTurnWatchResyncAt = nowMs;
+    this.lastEarlyTurnWatchKey = watchKey;
+    this.resyncSocketGameState(`earlyTurnStall:${turnIndex}:${current?.id || "none"}:${viewerId || "none"}`).finally(() => {
+      this.earlyTurnWatchInFlight = false;
+    });
+  }
   tickResultCountdown() {
     if (!this.state.handLog.result) return;
     const resultId = getCurrentResultId(this.state);
@@ -3153,6 +3210,7 @@ class GameController {
       Date.now() - Number(this.state.resultOkSubmittedAt || 0) > 3500
     );
     const alreadyAutoHandled = this.state.resultAutoCloseHandledResultId === resultId;
+    if (isTsumoLosslessAgariYameOpportunity(this.state)) return;
     if (nextSeconds <= 0 && !alreadyAutoHandled && (isSocketAuthoritativeGame() || !this.state.resultAutoCloseHandled || canRetrySubmittedOk)) {
       if (canRetrySubmittedOk) {
         this.state.resultOkSubmitted = false;
@@ -3690,6 +3748,8 @@ class GameController {
     this.isApplyingOnlineState = true;
     this.state = { ...this.state, ...next };
     this.isApplyingOnlineState = false;
+    this.lastOnlineStateAppliedAt = Date.now();
+    this.lastEarlyTurnWatchKey = `${this.state.handLog?.handId || ""}:${this.state.turnIndex || 0}:${this.state.currentPlayerIndex || 0}:${this.state.phase || ""}:${getCurrentPlayer(this.state)?.id || ""}`;
     if (this.state.phase === "showingFlowerAnnouncement" && isSocketAuthoritativeGame()) {
       if (this.flowerAnnouncementWatchdog) clearTimeout(this.flowerAnnouncementWatchdog);
       const effectId = `${this.state.pendingServerEffect?.playerId || ""}:${this.state.pendingServerEffect?.tileId || ""}:${this.state.turnIndex || 0}`;
@@ -4647,6 +4707,37 @@ class GameController {
       saveOnlineSync(null);
       return;
     }
+    this.emit();
+  }
+  async handleAgariYame(options = {}) {
+    const result = this.state.handLog?.result;
+    if (!result || !canLocalPlayerAgariYame(this.state)) return;
+    if (options.resultId && result.resultId && options.resultId !== result.resultId) return;
+    if (this.state.resultOkSubmitted && Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 800) return;
+    this.state.resultOkSubmitted = true;
+    this.state.resultOkSubmittedAt = Date.now();
+    this.emit();
+    if (isSocketAuthoritativeGame()) {
+      const localPlayerId = getLocalHumanPlayerId(this.state);
+      try {
+        await submitOnlineGameAction("agariYame", { localPlayerId, resultId: result.resultId || "" }, { timeoutMs: 12000 });
+      } catch (error) {
+        this.state.resultOkSubmitted = false;
+        console.warn("[SocketGame] agari yame failed", error);
+        this.state.log.unshift(`あがりやめに失敗: ${error.message}`);
+        this.emit();
+        this.resyncSocketGameState("agariYameFailed").catch(() => {});
+      }
+      return;
+    }
+    this.saveReplayForCurrentHand();
+    this.state.agariYameDeclaredBy = getLocalHumanPlayerId(this.state);
+    this.state.agariYameResultId = result.resultId || "";
+    this.state.phase = "gameEnded";
+    this.state.pendingAction = null;
+    this.state.isWaitingForHumanAction = false;
+    this.state.activeClockPlayerId = null;
+    this.state.clockStartedAt = null;
     this.emit();
   }
   async leaveOnlineGameToLobby() {
@@ -5648,6 +5739,13 @@ class GameView {
     this.root.querySelectorAll("[data-result-ok]").forEach((b) => {
       b.addEventListener("click", handleResultOkPointer);
     });
+    this.root.querySelectorAll("[data-agari-yame]").forEach((b) => {
+      b.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.handlers.onAgariYame?.(event.currentTarget?.dataset?.resultId || "");
+      });
+    });
     this.root.onpointerdown = null;
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
     this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
@@ -6508,7 +6606,7 @@ class GameView {
       ${carryRiichiStickCount > 0 ? `<p>リーチ棒 x${carryRiichiStickCount} は次局へ持ち越し</p>` : ""}
       <h3>現在点数</h3>
       <ul>${state.players.map((player) => `<li>${player.name}: ${result.finalScores?.[player.id] ?? player.score}点</li>`).join("")}</ul>
-      ${renderResultOkButton(state)}
+      ${renderAgariYameButton(state)}${renderResultOkButton(state)}
     </section>`;
   }
   scoreBreakdown(score, state) {
@@ -6590,7 +6688,7 @@ class GameView {
           const currentChips = pointToChips(currentChipPayments[player.id]);
           return `<li>${player.name} ${signedChips(totalChips)}（${signedChips(currentChips)}）</li>`;
         }).join("")}</ul>
-        ${renderResultOkButton(state)}
+        ${renderAgariYameButton(state)}${renderResultOkButton(state)}
       </section>`;
     }
     const yakuRows = yakuList.map((yaku) => {
@@ -6659,7 +6757,7 @@ class GameView {
       ${chipLines}
       ${tobiLines}
       ${finalLines}
-      ${renderResultOkButton(state)}
+      ${renderAgariYameButton(state)}${renderResultOkButton(state)}
     </section>`;
   }
   score(score, state) {
@@ -6676,6 +6774,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onStart: () => { controller.getState().screen = "game"; controller.startGame(); },
   onDraw: () => controller.advanceUntilHumanAction(),
   onDiscard: (id) => controller.discardTile(id),
+  onAgariYame: (resultId = "") => controller.handleAgariYame({ resultId }),
   onForceDiscardResync: () => controller.resyncSocketGameState("manualDiscardResync"),
   onNuki: (id) => controller.performNukiDora(getCurrentPlayer(controller.getState()).id, id),
   onConfirmAction: (type) => controller.confirmPendingAction(type),

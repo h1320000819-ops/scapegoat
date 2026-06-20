@@ -1679,17 +1679,30 @@ const playerPaymentDeltaFromResult = (result, playerId) => {
 const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) => {
   const state = room?.state;
   const ruleId = state?.settings?.ruleId || state?.settings?.gameType || "anmika-rocket";
-  const handEvents = asArray(state?.handLog?.events);
+  const handEvents = scope === "hanchan"
+    ? replayEventsFromSnapshots(state?.hanchanReplaySnapshots?.length ? state.hanchanReplaySnapshots : state?.replaySnapshots)
+    : asArray(state?.handLog?.events);
   const socketEvents = asArray(room?.events);
+  const handMarkers = scope === "hanchan" ? handMarkersFromSnapshots(state?.hanchanReplaySnapshots || state?.replaySnapshots) : [];
+  const handCount = scope === "hanchan" ? Math.max(1, handMarkers.length) : 1;
+  const handKeyForEvent = (event) => event?.handId || event?.roundLabel || event?.turnIndex || "hand";
+  const finalSettlement = result?.settlement?.settlements || result?.finalResult?.settlement?.settlements || {};
+  const rankedPlayerIds = asArray(result?.settlement?.rankedPlayerIds || result?.finalResult?.settlement?.rankedPlayerIds);
   return asArray(state?.players).map((player) => {
     const playerId = String(player?.id || "");
     const isCpu = player?.type === "cpu" || playerId.startsWith("cpu");
     const riichiEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "riichi");
     const callEvents = handEvents.filter((event) => event?.playerId === playerId && ["pon", "kan", "nukiDora"].includes(event?.type));
     const winEvents = handEvents.filter((event) => event?.playerId === playerId && ["ron", "tsumo"].includes(event?.type));
+    const dealInEvents = handEvents.filter((event) => event?.type === "ron" && (event?.loserId === playerId || event?.fromPlayerId === playerId));
     const discardEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "discard");
     const drawEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "draw");
-    const scoreDelta = playerPaymentDeltaFromResult(result, playerId);
+    const handWithCallCount = new Set(callEvents.map(handKeyForEvent)).size || (asArray(player?.melds).length ? 1 : 0);
+    const handWithRiichiCount = new Set(riichiEvents.map(handKeyForEvent)).size || (player?.isRiichi ? 1 : 0);
+    const rank = rankedPlayerIds.length ? rankedPlayerIds.indexOf(playerId) + 1 : null;
+    const scoreDelta = scope === "hanchan" && Object.prototype.hasOwnProperty.call(finalSettlement, playerId)
+      ? Number(finalSettlement[playerId] || 0)
+      : playerPaymentDeltaFromResult(result, playerId);
     return {
       replay_id: replayId,
       club_id: table.club_id,
@@ -1701,7 +1714,7 @@ const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) 
       user_id: isUuid(playerId) ? playerId : null,
       display_name: player?.name || playerId,
       is_cpu: isCpu,
-      hand_count: scope === "hanchan" ? Math.max(1, handMarkersFromSnapshots(state?.hanchanReplaySnapshots || state?.replaySnapshots).length) : 1,
+      hand_count: handCount,
       win_count: result?.type === "win" && result?.winnerId === playerId ? 1 : winEvents.length,
       ron_win_count: result?.type === "win" && result?.winnerId === playerId && result?.winType === "ron" ? 1 : winEvents.filter((event) => event.type === "ron").length,
       tsumo_win_count: result?.type === "win" && result?.winnerId === playerId && result?.winType === "tsumo" ? 1 : winEvents.filter((event) => event.type === "tsumo").length,
@@ -1716,6 +1729,11 @@ const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) 
         winType: result?.winType || null,
         winnerId: result?.winnerId || null,
         loserId: result?.loserId || null,
+        dealInCount: result?.type === "win" && result?.winType === "ron" && result?.loserId === playerId ? 1 : dealInEvents.length,
+        handWithCallCount,
+        handWithRiichiCount,
+        hanchanRank: rank > 0 ? rank : null,
+        isTobi: scope === "hanchan" && Number(player?.score || 0) <= 0,
         meldCount: asArray(player?.melds).length,
         nukiDoraCount: asArray(player?.nukiDoraTiles).length,
         handEventCount: handEvents.filter((event) => event?.playerId === playerId).length,
@@ -1990,7 +2008,7 @@ const syncClubPointEffects = async (room) => {
   return room.clubPointSyncInFlight;
 };
 
-const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "declareLastHand"]);
+const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand"]);
 const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 const getCurrentResultId = (state) => state?.handLog?.result?.resultId || "";
@@ -2090,6 +2108,11 @@ const isTsumoLosslessDealerContinuation = (state, result) => {
   if (result.type === "exhaustiveDraw") return ensureArray(result.tenpaiPlayerIds).includes(dealerId);
   return false;
 };
+const isTsumoLosslessAgariYameOpportunity = (state, result = state?.handLog?.result) =>
+  isTsumoLossless3maState(state) &&
+  getTsumoLosslessRoundIndex(state) >= TSUMO_LOSSLESS_ROUNDS.length - 1 &&
+  isTsumoLosslessDealerContinuation(state, result) &&
+  !ensureArray(state.players).some((player) => Number(player.score || 0) <= 0);
 const shouldEndTsumoLosslessHanchanAfterResult = (state, result) => {
   if (!isTsumoLossless3maState(state)) return false;
   if (ensureArray(state.players).some((player) => Number(player.score || 0) <= 0)) return true;
@@ -2839,7 +2862,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
   const uraDora = hasYakuman || !player.isRiichi ? 0 : countServerIndicatorDora(state.uraDoraIndicators, winningTiles);
   const colored = hasYakuman ? 0 : winningTiles.filter((tileItem) => ["red", "blue", "gold", "turquoise"].includes(tileItem.color)).length;
   const nuki = hasYakuman ? 0 : ensureArray(player.nukiDoraTiles).length;
-  const doraHan = normalDora + colored + nuki;
+  const doraHan = normalDora + colored + nuki + uraDora;
   const totalHan = hasYakuman ? 14 : yakuHan + doraHan;
   const isTsumoLossless3ma = state.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
   if (isTsumoLossless3ma) {
@@ -3419,6 +3442,27 @@ const applyServerAction = (state, event) => {
 
   try {
 
+  if (action === "agariYame") {
+    const result = state.handLog?.result;
+    if (!result || !["handEnded", "exhaustiveDraw"].includes(state.phase)) return state;
+    if (payload.resultId && result.resultId && payload.resultId !== result.resultId) {
+      console.warn("[AgariYame] stale request ignored", {
+        tableId: state.tableId,
+        gameId: state.gameId,
+        playerId: player.id,
+        payloadResultId: payload.resultId,
+        currentResultId: result.resultId,
+      });
+      return state;
+    }
+    if (!isTsumoLosslessAgariYameOpportunity(state, result)) throw new Error("あがりやめできる局面ではありません");
+    if (player.id !== state.round?.dealerPlayerId) throw new Error("あがりやめできるのはオーラス親だけです");
+    state.agariYameDeclaredBy = player.id;
+    state.agariYameResultId = result.resultId || "";
+    appendHandEvent(state, { type: "agariYame", playerId: player.id, resultId: result.resultId || "", turnIndex: state.turnIndex ?? 0 });
+    return prepareTsumoLosslessGameEnd(state, "agariYame");
+  }
+
   if (action === "resultOk") {
     if (!state.handLog?.result && !["exhaustiveDraw", "handEnded"].includes(state.phase)) return state;
     if (state.phase === "gameEnded") return state;
@@ -3434,7 +3478,9 @@ const applyServerAction = (state, event) => {
       return state;
     }
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
-    const autoOkPlayerIds = requiredOkPlayerIds;
+    const agariYameOpportunity = isTsumoLosslessAgariYameOpportunity(state, state.handLog?.result);
+    const dealerId = state.round?.dealerPlayerId || "";
+    const autoOkPlayerIds = agariYameOpportunity && player.id !== dealerId ? [] : requiredOkPlayerIds;
     if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
     state.resultOkPlayerIds = [...new Set([
       ...(state.resultOkPlayerIds ?? []),
@@ -4489,6 +4535,7 @@ const applyAutoResultOk = (state) => {
   if (!resultId) return false;
   if (state.resultCountdownResultId !== resultId) return false;
   if (state.resultAutoCloseHandledResultId === resultId) return false;
+  if (isTsumoLosslessAgariYameOpportunity(state, state.handLog?.result)) return false;
   const startedAt = Number(state.resultCountdownStartedAt || 0);
   if (!startedAt || Date.now() - startedAt < RESULT_AUTO_OK_DELAY_MS) return false;
   state.resultAutoCloseHandledResultId = resultId;
@@ -4528,6 +4575,7 @@ const scheduleRoomResultTimeout = (room) => {
   if (!isWaitingForResultOk(room.state)) return;
   const timerResultId = getCurrentResultId(room.state);
   if (!timerResultId) return;
+  if (isTsumoLosslessAgariYameOpportunity(room.state, room.state.handLog?.result)) return;
   if (room.state.resultCountdownResultId !== timerResultId) {
     room.state.resultCountdownStartedAt = Date.now();
     room.state.resultCountdownResultId = timerResultId;
