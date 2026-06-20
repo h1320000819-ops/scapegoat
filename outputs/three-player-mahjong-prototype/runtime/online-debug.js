@@ -40,6 +40,7 @@
 
   const initialParams = new URLSearchParams(location.search);
   const initialReturnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "";
+  const initialSettingsPage = initialParams.get("settings") || "";
   const shouldOpenTableListOnBoot = Boolean(initialReturnClubId || initialParams.get("leftTableId"));
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -4359,12 +4360,16 @@
       const button = $("createClubButton");
       const status = state.clubCreationStatus;
       const allowed = canCreateClub();
+      const clubNameLabel = has("clubName") ? $("clubName").closest("label") : null;
+      button.style.display = allowed ? "" : "none";
+      if (clubNameLabel) clubNameLabel.style.display = allowed ? "" : "none";
       button.disabled = !allowed;
       button.title = allowed ? "" : "このアカウントにはクラブ作成権限がありません。";
       if (!has("clubCreationStatus")) {
         button.closest(".row")?.insertAdjacentHTML("afterend", '<p id="clubCreationStatus" class="muted"></p>');
       }
       if (has("clubCreationStatus")) {
+        $("clubCreationStatus").style.display = allowed || status?.is_super_creator || status?.has_permission ? "" : "none";
         const ownedCount = Number(status?.owned_club_count ?? state.clubs.filter((club) => club.owner_user_id === state.user?.id).length);
         $("clubCreationStatus").textContent = status?.is_super_creator || isSuperClubCreator()
           ? `クラブ作成: 特権アカウントのため複数作成できます（作成済み ${ownedCount}件）。`
@@ -4766,6 +4771,9 @@
         document.body.dataset.screen = "club-home";
         await loadSeats().catch((error) => showError(JA_MESSAGES.actionFailed, error));
         startPolling();
+      }
+      if (initialSettingsPage === "replays") {
+        await showSettingsPage("replays").catch((error) => showError(JA_MESSAGES.actionFailed, error));
       }
     }
     renderOnlineGamePanel();

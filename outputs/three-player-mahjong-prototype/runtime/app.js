@@ -6,6 +6,8 @@ const SOCKET_STARTUP_RESYNC_DELAYS_MS = [600, 1400, 2600, 4200, 6500];
 const SOCKET_EARLY_TURN_WATCH_TURNS = 12;
 const SOCKET_EARLY_TURN_WATCH_IDLE_MS = 2200;
 const SOCKET_EARLY_TURN_WATCH_RESYNC_MS = 2600;
+const SOCKET_STATE_STALL_IDLE_MS = 4500;
+const SOCKET_STATE_STALL_RESYNC_MS = 3200;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
@@ -499,6 +501,16 @@ const onlineDebugLobbyUrl = (clubId = "") => {
   const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
   if (globalThis.location?.protocol === "file:") return new URL(`online-debug/index.html${query}`, globalThis.location.href).href;
   return `${globalThis.location?.origin || ""}/online-debug/index.html${query}`;
+};
+const onlineDebugReplayListUrl = (clubId = "") => {
+  const base = onlineDebugLobbyUrl(clubId);
+  try {
+    const url = new URL(base, globalThis.location?.href || "http://localhost/");
+    url.searchParams.set("settings", "replays");
+    return url.href;
+  } catch {
+    return `${base}${base.includes("?") ? "&" : "?"}settings=replays`;
+  }
 };
 const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
@@ -1672,11 +1684,13 @@ const isBaibaTriggerTile = (tile) => Boolean(
     tile.color === "turquoise"
   )
 );
-const getVisibleBaibaMultiplierDetails = (state) => {
+const getVisibleBaibaMultiplierDetails = (state, options = {}) => {
   const enabled = Boolean(state?.settings?.ruleConfig?.baibaEnabled);
   const hasBaiba = enabled && (state.doraIndicators ?? []).some(isBaibaTriggerTile);
   const hasSpecialUra = enabled && Boolean(state.handLog?.result) && (state.uraDoraIndicators ?? []).some(isBaibaTriggerTile);
-  const pochiColor = state.handLog?.result?.scoreResult?.pochiColor || null;
+  const pochiColor = Object.prototype.hasOwnProperty.call(options, "pochiColor")
+    ? options.pochiColor
+    : state.handLog?.result?.scoreResult?.pochiColor || null;
   const hasRedOrBluePochi = enabled && (pochiColor === "red" || pochiColor === "blue");
   const conditionCount = Number(hasBaiba) + Number(hasSpecialUra) + Number(hasRedOrBluePochi);
   return {
@@ -2647,7 +2661,8 @@ class RuleEngine {
     const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((sum, yaku) => sum + yaku.han, 0);
     const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki + uraDora;
     const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
-    if (isTsumoLossless3maState(state)) {
+    const isAllRedScoreView = isTsumoLossless3maState(state) || Object.prototype.hasOwnProperty.call(score.bonuses ?? {}, "chipPending") || Boolean(score.tsumoPayments);
+    if (isAllRedScoreView) {
       const isDealer = input.winnerId === input.dealerPlayerId;
       const honba = Number(state.round?.honba ?? state.honba ?? 0);
       const payments = Object.fromEntries(input.playerIds.map((id) => [id, 0]));
@@ -2714,7 +2729,7 @@ class RuleEngine {
     const uraDoraBonus = (input.uraDoraCount ?? 0) * 5;
     const honbaBonus = (input.honba ?? 0) * 5;
     const ippatsuBonus = input.isIppatsu ? 5 : 0;
-    const baibaMultiplier = input.baibaMultiplier ?? getVisibleBaibaMultiplierDetails(state).multiplier;
+    const baibaMultiplier = input.baibaMultiplier ?? getVisibleBaibaMultiplierDetails(state, { pochiColor: input.pochiColor || null }).multiplier;
     const blueTileBonus = blueTileCount * 20;
     const bonusPoints = blueTileBonus + goldTileCount * 5 + uraDoraBonus + honbaBonus + ippatsuBonus + countedYakumanBonus + realYakumanBonus;
     const beforeBaibaPoints = basePoints + bonusPoints;
@@ -2947,7 +2962,7 @@ const applyWinPayments = (gameState, winnerId, winType, scoreResult, loserId) =>
   gameState.log.unshift(`点数移動 ${scoreResult.paymentDeltas.map((p) => `${p.playerId}:${p.delta >= 0 ? "+" : ""}${p.delta}`).join(" ")}${rakePoints ? ` レーキ:${rakePoints}` : ""}`);
   return gameState;
 };
-const pochiMultiplier = { red: -2, yellow: -1, green: 1, blue: 2 };
+const pochiMultiplier = { red: -1, yellow: -1, green: 1, blue: 1 };
 const isWhitePochiTile = (tile) => tile?.suit === "honor" && tile.kind === "white" && tile.isPochi && tile.pochiColor;
 const tileForPochiCandidate = (waitTile, pochiColor) => {
   if ((waitTile.suit === "pinzu" || waitTile.suit === "souzu") && waitTile.rank === 5) {
@@ -2981,10 +2996,17 @@ const resolvePochiWin = (gameState, player, pochiTile, ruleEngine) => {
       nukiDoraTiles: player.nukiDoraTiles,
       isRiichi: true,
       isIppatsu: player.ippatsu,
+      pochiColor: pochiTile.pochiColor,
     });
     const beforeMultiplierPoints = score.finalPoints ?? score.totalPoints;
     const pointMultiplier = pochiMultiplier[pochiTile.pochiColor] ?? 1;
     const afterMultiplierPoints = beforeMultiplierPoints * pointMultiplier;
+    const payments = Object.fromEntries(gameState.players.map((p) => [p.id, 0]));
+    for (const opponent of gameState.players) {
+      if (opponent.id !== player.id) payments[opponent.id] = -afterMultiplierPoints;
+    }
+    payments[player.id] = afterMultiplierPoints * (gameState.players.length - 1);
+    const paymentDeltas = gameState.players.map((p) => ({ playerId: p.id, delta: payments[p.id] ?? 0 }));
     const candidate = {
       pochiActivated: true,
       pochiColor: pochiTile.pochiColor,
@@ -2992,7 +3014,7 @@ const resolvePochiWin = (gameState, player, pochiTile, ruleEngine) => {
       pointMultiplier,
       beforeMultiplierPoints,
       afterMultiplierPoints,
-      scoreResult: { ...score, selectedWait, pochiActivated: true, pochiColor: pochiTile.pochiColor, pointMultiplier, beforeMultiplierPoints, afterMultiplierPoints, totalPoints: afterMultiplierPoints, finalPoints: afterMultiplierPoints },
+      scoreResult: { ...score, selectedWait, pochiActivated: true, pochiColor: pochiTile.pochiColor, pointMultiplier, beforeMultiplierPoints, afterMultiplierPoints, totalPoints: afterMultiplierPoints, finalPoints: afterMultiplierPoints, paymentPerPlayer: afterMultiplierPoints, payments, paymentDeltas, winnerGain: payments[player.id] ?? 0 },
     };
     if (!best || Math.abs(candidate.afterMultiplierPoints) > Math.abs(best.afterMultiplierPoints)) best = candidate;
   }
@@ -3021,6 +3043,8 @@ class GameController {
     this.lastEarlyTurnWatchResyncAt = 0;
     this.earlyTurnWatchInFlight = false;
     this.lastEarlyTurnWatchKey = "";
+    this.lastSocketStateStallResyncAt = 0;
+    this.socketStateStallInFlight = false;
     this.onlineInitialPublisher = false;
     this.socketInitialStateInFlight = false;
     this.socketStartupResyncTimers = [];
@@ -3140,10 +3164,12 @@ class GameController {
   tickClock() {
     if (this.state.handLog.result && this.state.phase !== "showingWinAnnouncement") {
       this.tickResultCountdown();
+      this.monitorSocketStateStall();
       return;
     }
     this.monitorDiscardRecover();
     this.monitorEarlyTurnStall();
+    this.monitorSocketStateStall();
     const playerId = this.state.activeClockPlayerId;
     if (!playerId || this.state.screen !== "game" || this.state.handLog.result) return;
     if (isSocketAuthoritativeGame() && this.state.optimisticDiscardRequestId) return;
@@ -3240,6 +3266,24 @@ class GameController {
     this.resyncSocketGameState(`earlyTurnStall:${turnIndex}:${current?.id || "none"}:${viewerId || "none"}`).finally(() => {
       this.earlyTurnWatchInFlight = false;
     });
+  }
+  monitorSocketStateStall() {
+    if (!isSocketAuthoritativeGame()) return;
+    if (this.state.screen !== "game") return;
+    const socket = globalThis.anmikaGameSocket;
+    if (!socket?.connected) return;
+    if (this.socketStateStallInFlight) return;
+    if (["auth", "onlineLoading"].includes(this.state.phase)) return;
+    const nowMs = Date.now();
+    const lastApplied = Number(this.lastOnlineStateAppliedAt || this.state.onlineMeta?.publishedAt || 0);
+    if (!lastApplied || nowMs - lastApplied < SOCKET_STATE_STALL_IDLE_MS) return;
+    if (nowMs - Number(this.lastSocketStateStallResyncAt || 0) < SOCKET_STATE_STALL_RESYNC_MS) return;
+    this.lastSocketStateStallResyncAt = nowMs;
+    this.socketStateStallInFlight = true;
+    this.resyncSocketGameState(`stateStall:${this.state.phase || ""}:${this.state.version ?? 0}:${this.state.turnIndex ?? 0}`)
+      .finally(() => {
+        this.socketStateStallInFlight = false;
+      });
   }
   tickResultCountdown() {
     if (!this.state.handLog.result) return;
@@ -3713,10 +3757,13 @@ class GameController {
     const next = JSON.parse(JSON.stringify(snapshot));
     if (this.state.optimisticDiscardRequestId) {
       const meta = next.onlineMeta || {};
+      const incomingVersion = Number(next.version || 0);
+      const currentVersion = Number(sync?.version || this.state.version || 0);
       const isOwnDiscardAck = ["discard", "riichi"].includes(meta.reason) &&
         meta.publishedBy === currentUserId &&
-        Number(next.version || 0) > Number(sync?.version || this.state.version || 0);
-      if (!isOwnDiscardAck) {
+        incomingVersion > currentVersion;
+      const isAuthoritativeProgress = incomingVersion > currentVersion;
+      if (!isOwnDiscardAck && !isAuthoritativeProgress) {
         console.warn("[DiscardAction] ignored stale state during optimistic discard", {
           requestId: this.state.optimisticDiscardRequestId,
           incomingVersion: next.version,
@@ -6349,7 +6396,7 @@ class GameView {
   }
   replayViewerScreen(state) {
     const replay = replayRepository.getReplay(state.selectedReplayId);
-    const fallbackBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || "");
+    const fallbackBackUrl = onlineDebugReplayListUrl(state.selectedClubId || state.activeClubId || "");
     if (!replay && state.replayLoading) {
       return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜を読み込み中です...</p></section>`;
     }
@@ -6392,7 +6439,7 @@ class GameView {
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
-    const replayBackUrl = onlineDebugLobbyUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
+    const replayBackUrl = onlineDebugReplayListUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>

@@ -2481,9 +2481,9 @@ const getServerBaibaMultiplierDetails = (state, { includeUra = false, pochiColor
 const calculateServerBaibaMultiplier = (state, options = {}) => getServerBaibaMultiplierDetails(state, options).multiplier;
 const serverPochiMultiplier = (tile) => {
   if (!isServerWhitePochiTile(tile)) return 1;
-  if (tile.pochiColor === "red") return -2;
+  if (tile.pochiColor === "red") return -1;
   if (tile.pochiColor === "yellow") return -1;
-  if (tile.pochiColor === "blue") return 2;
+  if (tile.pochiColor === "blue") return 1;
   return 1;
 };
 const serverTileCloneWithColor = (tile, color) => ({ ...tile, id: `${tile.id || tileKindKey(tile)}-${color}-pochi`, color, isPochi: false, pochiColor: undefined });
@@ -3613,14 +3613,15 @@ const applyServerAction = (state, event) => {
   if (action === "flower" || action === "nukiDora") {
     const actionTile = payload.action?.sourceTile || payload.action?.tile || payload.sourceTile || payload.tile;
     const tileId = payload.tileId || actionTile?.id;
-    const tile = tileId === player.drawnTile?.id ? player.drawnTile : removeTileById(player.hand, tileId);
+    const removedFromDrawn = tileId === player.drawnTile?.id;
+    const tile = removedFromDrawn ? player.drawnTile : removeTileById(player.hand, tileId);
     if (!tile || !isNukiDoraTileForState(state, tile)) throw new Error("抜きドラにできる牌がありません");
-    if (player.drawnTile?.id === tileId) player.drawnTile = null;
+    if (removedFromDrawn) player.drawnTile = null;
     player.nukiDoraTiles ??= [];
     player.nukiDoraTiles.push(tile);
     const replacementTile = ensureArray(state.rinshanWall)[0] || null;
     appendHandEvent(state, { type: "nukiDora", playerId: player.id, tile, replacementTile, turnIndex: state.turnIndex ?? 0 });
-    drawFromWall(state, player, "rinshanWall");
+    drawRinshanAfterFlower(state, player, removedFromDrawn);
     player.hand = sortHandTiles(player.hand);
     state.phase = "waitingForHumanDiscard";
     const nextFlower = findAutoFlowerTile(player);
@@ -5110,17 +5111,20 @@ io.on("connection", (socket) => {
     try {
       const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom(payload));
       const viewerId = payload.userId || socket.data.userId || null;
-      ack?.({ ok: true, ...publicRoomState(room, viewerId) });
       if (room.state) {
         if (applyDueRoomServerEffect(room)) {
           broadcastState(room);
         }
+        ack?.({ ok: true, ...publicRoomState(room, viewerId) });
         socket.emit("game:state", publicRoomState(room, viewerId));
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
       }
-      else socket.emit("game:needInitialState", { tableId: room.tableId, gameId: room.gameId });
+      else {
+        ack?.({ ok: true, ...publicRoomState(room, viewerId) });
+        socket.emit("game:needInitialState", { tableId: room.tableId, gameId: room.gameId });
+      }
     } catch (error) {
       ack?.({ ok: false, error: error.message });
     }
