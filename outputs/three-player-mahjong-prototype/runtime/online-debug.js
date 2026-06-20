@@ -665,6 +665,11 @@
     return raw.includes("ByteString") || raw.includes("greater than 255") || raw.includes("Cannot convert argument");
   };
   const isLikelyJwt = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
+  const removeStoredValue = (storage, key) => {
+    try {
+      storage?.removeItem?.(key);
+    } catch {}
+  };
   const clearStoredSession = () => {
     state.accessToken = "";
     state.refreshToken = "";
@@ -672,11 +677,14 @@
     state.clubs = [];
     state.memberships = [];
     state.tables = [];
-    localStorage.removeItem("anmikaAccessToken");
-    localStorage.removeItem("anmikaRefreshToken");
-    localStorage.removeItem("anmikaDebugUser");
-    sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
-    sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+    removeStoredValue(localStorage, "anmikaAccessToken");
+    removeStoredValue(localStorage, "anmikaRefreshToken");
+    removeStoredValue(localStorage, "anmikaDebugUser");
+    removeStoredValue(localStorage, "anmikaRocket.onlineSync");
+    removeStoredValue(localStorage, "anmikaRocket.socketDebug");
+    removeStoredValue(sessionStorage, "anmikaOnlineDebugActiveClubId");
+    removeStoredValue(sessionStorage, "anmikaOnlineDebugActiveTableId");
+    removeStoredValue(sessionStorage, "anmikaOnlineDebug.launchingTable");
     document.body.dataset.screen = "auth";
   };
   const invalidateBrokenSession = (reason = "broken auth header") => {
@@ -747,9 +755,9 @@
   const request = async (path, options = {}, retry = true) => {
     requireConfig();
     const url = config.url.replace(/\/$/, "") + path;
-    const headers = buildSafeHeaders(options.headers, { auth: options.auth !== false });
     let response;
     try {
+      const headers = buildSafeHeaders(options.headers, { auth: options.auth !== false });
       response = await fetch(url, { ...options, headers });
     } catch (error) {
       if (isByteStringFetchError(error)) {

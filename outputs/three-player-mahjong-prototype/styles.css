@@ -1154,11 +1154,11 @@ button:hover {
 
 .replay-hand-selector {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  display: inline-flex;
+  flex-wrap: nowrap;
   gap: 6px;
   justify-content: center;
-  max-width: min(92vw, 780px);
+  max-width: min(52vw, 260px);
 }
 
 .replay-hand-selector-label {
@@ -1167,19 +1167,15 @@ button:hover {
   font-weight: 800;
 }
 
-.replay-hand-selector button {
-  background: rgba(18, 32, 36, 0.86);
+.replay-hand-selector select {
+  background: rgba(18, 32, 36, 0.92);
   border: 1px solid rgba(255, 209, 92, 0.45);
-  border-radius: 999px;
+  border-radius: 7px;
   color: #fff4bf;
   cursor: pointer;
   font-weight: 800;
-  padding: 6px 10px;
-}
-
-.replay-hand-selector button.active {
-  background: #ffd15c;
-  color: #1c2529;
+  max-width: 180px;
+  padding: 5px 24px 5px 8px;
 }
 
 .replay-event-label {

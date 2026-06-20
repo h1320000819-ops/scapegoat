@@ -1615,9 +1615,12 @@ const handMarkersFromSnapshots = (snapshots) => {
     const handId = snapshot?.handLog?.handId;
     if (!handId || seen.has(handId)) return;
     seen.add(handId);
+    const honba = Number(snapshot?.round?.honba ?? snapshot?.honba ?? 0);
+    const baseLabel = snapshot?.handLog?.roundLabel || `局${markers.length + 1}`;
     markers.push({
       handId,
-      label: snapshot?.handLog?.roundLabel || `局${markers.length + 1}`,
+      label: `${baseLabel}${honba > 0 ? `${honba}本場` : ""}`,
+      honba,
       index,
     });
   });
@@ -3370,7 +3373,7 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   state.clockStartedAt = null;
   player.discardedTiles ??= [];
   player.discardedTiles.push({ tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
-  appendHandEvent(state, { type: "discard", playerId: player.id, tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
+  appendHandEvent(state, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
   if (player.isRiichi && player.ippatsu && !isRiichiDiscard) {
     player.ippatsu = false;
     player.ippatsuOwnDrawStarted = false;

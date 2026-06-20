@@ -269,18 +269,32 @@ const copyTextToClipboard = async (text) => {
     return false;
   }
 };
-const loadOnlineSync = () => safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
 const saveOnlineSync = (sync) => sync ? safeWriteJson(APP_STORAGE_KEYS.onlineSync, sync) : safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
 const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
 const isLikelyJwtToken = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
 const clearBrokenSupabaseSession = (reason = "broken auth header") => {
   console.warn("[OnlineSync] cleared broken Supabase session", { reason });
   safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+  safeRemoveStorage(APP_STORAGE_KEYS.socketDebug);
   try {
     localStorage.removeItem("anmikaAccessToken");
     localStorage.removeItem("anmikaRefreshToken");
+    localStorage.removeItem("anmikaDebugUser");
   } catch {}
 };
+const sanitizeOnlineSync = (sync) => {
+  if (!sync) return null;
+  if (sync.anonKey && !isByteStringHeaderValue(sync.anonKey)) {
+    clearBrokenSupabaseSession("invalid online sync anon key");
+    return null;
+  }
+  if (sync.accessToken && (!isByteStringHeaderValue(sync.accessToken) || !isLikelyJwtToken(sync.accessToken))) {
+    clearBrokenSupabaseSession("invalid online sync access token");
+    return null;
+  }
+  return sync;
+};
+const loadOnlineSync = () => sanitizeOnlineSync(safeReadJson(APP_STORAGE_KEYS.onlineSync, null));
 const buildSupabaseAuthHeaders = ({ anonKey = "", accessToken = "", json = false } = {}) => {
   if (!isByteStringHeaderValue(anonKey) || !isByteStringHeaderValue(accessToken) || !isLikelyJwtToken(accessToken)) {
     clearBrokenSupabaseSession("invalid Supabase auth header");
@@ -1273,12 +1287,15 @@ const replayPlayerForEvent = (state, event, key = "playerId") => {
   const seatIndex = Number(event?.[seatKey]);
   const bySeat = Number.isInteger(seatIndex) && seatIndex >= 0 ? state?.players?.[seatIndex] : null;
   if (direct && (!bySeat || bySeat.id === direct.id)) return direct;
-  if (!direct && bySeat) return bySeat;
+  if (!direct && bySeat) {
+    addReplayIntegrityWarning(state, { type: "playerIdMissingSeatFallback", eventType: event.type, key, playerId: directId || "", seatPlayerId: bySeat.id, seatIndex });
+    return bySeat;
+  }
   if (direct && bySeat && bySeat.id !== direct.id) {
-    state.replayIntegrityWarnings ??= [];
-    state.replayIntegrityWarnings.push({ type: "playerIdentityMismatch", eventType: event.type, playerId: direct.id, seatPlayerId: bySeat.id, seatIndex });
+    addReplayIntegrityWarning(state, { type: "playerIdentityMismatch", eventType: event.type, playerId: direct.id, seatPlayerId: bySeat.id, seatIndex });
     return direct;
   }
+  if (directId) addReplayIntegrityWarning(state, { type: "playerNotFoundForReplayEvent", eventType: event.type, key, playerId: directId });
   return direct || null;
 };
 const removeReplayTileById = (tiles, tileId) => {
@@ -1392,9 +1409,8 @@ const applySimpleReplayEvent = (state, event) => {
       if (!tile) {
         addReplayIntegrityWarning(state, { type: "discardTileMissingFromHand", playerId: player.id, eventTileId: event.tile?.id || "", handCount: player.hand?.length || 0, hasDrawnTile: Boolean(player.drawnTile) });
         tile = event.tile || null;
-        if (Array.isArray(player.hand) && player.hand.length) player.hand.pop();
-      }
-      if (player.drawnTile) {
+        player.drawnTile = null;
+      } else if (player.drawnTile) {
         player.hand.push(player.drawnTile);
         player.drawnTile = null;
         player.hand = sortHandTiles(player.hand);
@@ -1868,6 +1884,40 @@ const formatRoundLabel = (state) => {
     base = `${wind}${handNumber}局`;
   }
   return `${base}${honba > 0 ? `（${honba}本場）` : ""}`;
+};
+const formatReplayHandLabel = (snapshot, fallbackLabel = "", fallbackIndex = 0) => {
+  const round = snapshot?.round ?? {};
+  const honba = Number(round.honba ?? snapshot?.honba ?? 0);
+  let base = fallbackLabel || snapshot?.handLog?.roundLabel || "";
+  if (isTsumoLossless3maState(snapshot)) {
+    const index = Number(round.hanchanRoundIndex ?? fallbackIndex ?? 0);
+    base = TSUMO_LOSSLESS_ROUNDS[index] || base || `局${Number(fallbackIndex || 0) + 1}`;
+  }
+  return `${base}${honba > 0 && !/本場/.test(base) ? `${honba}本場` : ""}`;
+};
+const buildReplayHandMarkers = (replay, snapshots = []) => {
+  const summaryMarkers = replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
+  const seen = new Set();
+  const markers = [];
+  const pushMarker = (marker = {}, indexFallback = 0) => {
+    const index = Math.max(0, Number(marker.index ?? indexFallback ?? 0));
+    const snapshot = snapshots[index] ?? null;
+    const handId = marker.handId || snapshot?.handLog?.handId || `hand-${index}`;
+    if (seen.has(handId)) return;
+    seen.add(handId);
+    markers.push({
+      handId,
+      index,
+      label: formatReplayHandLabel(snapshot, marker.label, markers.length),
+    });
+  };
+  summaryMarkers.forEach(pushMarker);
+  if (!markers.length && replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
+    snapshots.forEach((snapshot, index) => {
+      if (snapshot?.handLog?.handId) pushMarker({ index, handId: snapshot.handLog.handId, label: snapshot.handLog.roundLabel || "" }, index);
+    });
+  }
+  return markers.sort((a, b) => a.index - b.index);
 };
 const isTsumoLosslessDealerContinuation = (state, result) => {
   if (!isTsumoLossless3maState(state)) return false;
@@ -4917,7 +4967,7 @@ class GameController {
     player.discardedTiles.push({ tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex });
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
-    appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
+    appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
     if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
       player.ippatsu = false;
       player.ippatsuOwnDrawStarted = false;
@@ -5564,7 +5614,11 @@ class GameController {
       this.emit();
     });
     if (this.beginFlowerAnnouncement(playerId, tileId, () => this.queueTsumoKanRiichiDiscard(playerId))) return;
-    performNukiDoraDetailed(this.state, playerId, tileId); appendReplaySnapshot(this.state); this.emit();
+    const player = this.getPlayer(playerId);
+    const result = performNukiDoraDetailed(this.state, playerId, tileId);
+    if (result) appendHandLogEvent(this.state.handLog, { type: "nukiDora", playerId, tile: result.nukiTile, replacementTile: result.replacementTile, turnIndex: this.state.turnIndex, isAfterRiichi: player?.isRiichi, ippatsuPreserved: true });
+    appendReplaySnapshot(this.state);
+    this.emit();
   }
   emit() {
     this.onStateChanged(this.state);
@@ -5701,6 +5755,9 @@ class GameView {
     draw?.addEventListener("click", this.handlers.onDraw);
   }
   render(state) {
+    if (globalThis.document) {
+      globalThis.document.title = state.screen === "replayViewer" ? "牌譜" : "アンミカロケット";
+    }
     if (state.screen !== "game") {
       this.root.innerHTML = this.appShell(state);
       this.bindAppControls();
@@ -5870,6 +5927,7 @@ class GameView {
     };
     this.root.querySelectorAll("[data-replay-step]").forEach((b) => bindReplayHoldStep(b, () => Number(b.dataset.replayStep || 0)));
     this.root.querySelectorAll("[data-replay-index]").forEach((b) => b.addEventListener("click", () => this.handlers.onReplayIndex(Number(b.dataset.replayIndex))));
+    this.root.querySelectorAll("[data-replay-hand-select]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayIndex(Number(select.value || 0))));
     this.root.querySelectorAll("[data-replay-viewer]").forEach((select) => select.addEventListener("change", () => this.handlers.onReplayViewer(select.value)));
     this.root.querySelectorAll("[data-replay-reveal-hands]").forEach((input) => input.addEventListener("change", () => this.handlers.onReplayRevealHands(input.checked)));
     this.root.querySelectorAll("[data-replay-screen]").forEach((screen) => {
@@ -6288,14 +6346,14 @@ class GameView {
     };
     const replayViewerId = getValidReplayViewerId(snapshot, state.replayViewerId, replay);
     const viewerOptions = (replay.summary?.players ?? displayState.players.map((player) => ({ playerId: player.id, name: player.name }))).map((player) => `<option value="${player.playerId}" ${replayViewerId === player.playerId ? "selected" : ""}>${player.name}</option>`).join("");
-    const handMarkers = replay.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
-    const handButtonItems = handMarkers.map((marker, markerIndex) => {
+    const handMarkers = buildReplayHandMarkers(replay, snapshots);
+    const handSelectOptions = handMarkers.map((marker, markerIndex) => {
       const nextIndex = handMarkers[markerIndex + 1]?.index ?? snapshots.length;
       const active = index >= marker.index && index < nextIndex;
-      return `<button type="button" data-replay-index="${marker.index}" ${active ? "class=\"active\"" : ""}>${escapeHtml(marker.label)}</button>`;
+      return `<option value="${marker.index}" ${active ? "selected" : ""}>${escapeHtml(marker.label)}</option>`;
     }).join("");
     const handButtons = handMarkers.length > 1
-      ? `<div class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span>${handButtonItems}</div>`
+      ? `<label class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span><select data-replay-hand-select>${handSelectOptions}</select></label>`
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);

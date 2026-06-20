@@ -11,7 +11,7 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/public/icons/anmika-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/public/icons/anmika-icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=20260621-delete-club-fk-a" />
+    <link rel="stylesheet" href="styles.css?v=20260621-auth-header-purge-a" />
     <title>アンミカロケット</title>
     <style>
       .online-debug-page {
@@ -156,6 +156,8 @@
 
     const hashTableMatch = location.hash.match(/^#\/table\/(.+)$/);
     const hashReplayMatch = location.hash.match(/^#\/replay\/(.+)$/);
+    const isReplayRoute = Boolean(hashReplayMatch) || location.pathname.startsWith("/replay/");
+    if (isReplayRoute) document.title = "牌譜";
     const hashTableId = hashTableMatch ? decodeURIComponent(hashTableMatch[1]) : "";
     const pathTableId = location.pathname.startsWith("/table/") ? decodeURIComponent(location.pathname.split("/table/")[1] || "") : "";
     const isLocalDebugGameRoute = hashTableId.startsWith("online-debug-") || pathTableId.startsWith("online-debug-");
@@ -181,7 +183,7 @@
       location.replace(nextUrl);
       return;
     }
-    if (!isLocalDebugGameRoute && !hashTableMatch && !hashReplayMatch && !location.pathname.startsWith("/replay/")) {
+    if (!isLocalDebugGameRoute && !hashTableMatch && !isReplayRoute) {
       const nextUrl = location.protocol === "file:"
         ? new URL("online-debug/index.html", location.href).href
         : `${location.origin}/online-debug/index.html`;
@@ -190,7 +192,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260621-delete-club-fk-a";
+    const assetVersion = "20260621-replay-integrity-a";
     loadScript(`${assetBase}runtime/pwa.js?v=${assetVersion}`).catch(() => {});
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
