@@ -70,6 +70,7 @@
     clubPollTimer: 0,
     lobbyRefreshInFlight: false,
     lobbyRefreshPending: false,
+    tablePostRefreshInFlight: false,
   };
 
   const $ = (id) => {
@@ -2130,7 +2131,30 @@
       table_waiting_list: byTable.get(table.table_id) || [],
     }));
   };
-  const loadTables = async () => {
+  const runTablePostRefresh = async (reason = "loadTables") => {
+    if (state.tablePostRefreshInFlight) return;
+    state.tablePostRefreshInFlight = true;
+    try {
+      await loadWaitingForTables().catch((error) => log("ウェイティング一覧の取得に失敗しました。", rawErrorText(error)));
+      enforceOneVisibleSeatForCurrentUser();
+      render();
+      window.setTimeout(() => {
+        reconcileTablePlayingStatuses()
+          .then(() => {
+            render();
+            return maybeAutoStartTables();
+          })
+          .catch((error) => log(`卓状態の後追い更新に失敗しました。(${reason})`, rawErrorText(error)))
+          .finally(() => {
+            state.tablePostRefreshInFlight = false;
+          });
+      }, 0);
+    } catch (error) {
+      state.tablePostRefreshInFlight = false;
+      log(`卓一覧の後追い更新に失敗しました。(${reason})`, rawErrorText(error));
+    }
+  };
+  const loadTables = async ({ withPostRefresh = true } = {}) => {
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     try {
@@ -2140,11 +2164,9 @@
       if (!raw.includes("shared_list_tables_for_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
       state.tables = await rest("/tables?select=*,table_seats(*),table_waiting_list(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
     }
-    await loadWaitingForTables().catch((error) => log("ウェイティング一覧の取得に失敗しました。", rawErrorText(error)));
     enforceOneVisibleSeatForCurrentUser();
-    await reconcileTablePlayingStatuses();
-    await maybeAutoStartTables();
     render();
+    if (withPostRefresh) runTablePostRefresh("loadTables");
   };
   const createTable = async () => {
     const clubId = selectedClubId();
@@ -4308,12 +4330,10 @@
     try {
       await loadTables();
       const tableId = selectedTableId();
-      if (tableId) {
+      if (tableId && state.onlineGameOpened) {
         await loadSeats().catch((error) => log(`席の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
-        if (state.onlineGameOpened) {
-          await loadActiveGameState(tableId).catch((error) => log(`対局状態の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
-          renderOnlineGamePanel();
-        }
+        await loadActiveGameState(tableId).catch((error) => log(`対局状態の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
+        renderOnlineGamePanel();
       }
     } finally {
       state.lobbyRefreshInFlight = false;
