@@ -1843,6 +1843,10 @@
     try {
       const result = await rest("/rpc/delete_club_for_admin", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
       if (result && result.ok === false) throw new Error(result.message || "クラブ削除に失敗しました。");
+      const remaining = await rest("/clubs?select=club_id&club_id=eq." + encodeURIComponent(clubId) + "&limit=1").catch(() => []);
+      if (Array.isArray(remaining) && remaining.some((row) => row?.club_id === clubId)) {
+        throw new Error("削除RPC実行後もクラブ行が残っています。supabase/patch_delete_club_for_admin.sql をSupabase SQL Editorで再実行してください。");
+      }
     } catch (error) {
       const raw = rawErrorText(error);
       if (isMissingRpcError(error, "delete_club_for_admin")) {
@@ -1850,6 +1854,7 @@
       }
       throw new Error(toJapaneseError(raw));
     }
+    markClubLeft(clubId);
     state.activeClubId = "";
     sessionStorage.removeItem("anmikaOnlineDebugActiveClubId");
     state.memberships = state.memberships.filter((row) => row.clubs?.club_id !== clubId);

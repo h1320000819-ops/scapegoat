@@ -75,6 +75,7 @@ declare
   v_member_total numeric(14, 1) := 0;
   v_club_reserve numeric(14, 1) := 0;
   v_snapshot_count integer := 0;
+  v_ref record;
 begin
   if auth.uid() is null then
     raise exception 'login required';
@@ -175,26 +176,255 @@ begin
     )
   );
 
-  delete from public.table_waiting_list
-  where table_id in (select table_id from public.tables where club_id = p_club_id);
+  -- Keep historical replay/stat rows usable, but detach them from the club/tables/games
+  -- so old or missing ON DELETE SET NULL constraints cannot block actual club deletion.
+  if to_regclass('public.player_replay_stats') is not null then
+    execute '
+      update public.player_replay_stats
+      set club_id = null,
+          table_id = null
+      where club_id = $1
+         or table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'player_replay_stats'
+        and column_name = 'game_id'
+    ) then
+      execute '
+        update public.player_replay_stats
+        set game_id = null
+        where game_id in (
+          select g.game_id
+          from public.games g
+          join public.tables t on t.table_id = g.table_id
+          where t.club_id = $1
+        )
+      ' using p_club_id;
+    end if;
+  end if;
 
-  delete from public.table_seats
-  where table_id in (select table_id from public.tables where club_id = p_club_id);
+  if to_regclass('public.replays') is not null then
+    execute '
+      update public.replays
+      set club_id = null,
+          table_id = null
+      where club_id = $1
+         or table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+    if exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'replays'
+        and column_name = 'game_id'
+    ) then
+      execute '
+        update public.replays
+        set game_id = null
+        where game_id in (
+          select g.game_id
+          from public.games g
+          join public.tables t on t.table_id = g.table_id
+          where t.club_id = $1
+        )
+      ' using p_club_id;
+    end if;
+  end if;
 
-  delete from public.game_events
-  where table_id in (select table_id from public.tables where club_id = p_club_id);
+  -- Delete club-bound financial rows before removing members/tables. These rows are
+  -- historical inside the deleted club and otherwise commonly block old schemas.
+  if to_regclass('public.club_rake_logs') is not null then
+    execute 'delete from public.club_rake_logs where club_id = $1' using p_club_id;
+  end if;
 
-  delete from public.game_states
-  where table_id in (select table_id from public.tables where club_id = p_club_id);
+  if to_regclass('public.club_points') is not null then
+    execute 'delete from public.club_points where club_id = $1' using p_club_id;
+  end if;
 
-  delete from public.games
-  where table_id in (select table_id from public.tables where club_id = p_club_id);
+  if to_regclass('public.club_super_rake_shares') is not null then
+    execute 'delete from public.club_super_rake_shares where club_id = $1' using p_club_id;
+  end if;
 
-  delete from public.tables
-  where club_id = p_club_id;
+  -- Last line of defense: find every public FK that points at games/tables/clubs
+  -- and clear/delete matching child rows before deleting the parent rows. This keeps
+  -- the RPC working even when the live DB has older or extra tables not listed above.
+  if to_regclass('public.games') is not null and to_regclass('public.tables') is not null then
+    for v_ref in
+      select
+        con.conrelid::regclass as ref_table,
+        att.attname as ref_col,
+        att.attnotnull as ref_col_not_null
+      from pg_constraint con
+      join unnest(con.conkey) with ordinality ck(attnum, ord) on true
+      join unnest(con.confkey) with ordinality fk(attnum, ord) on fk.ord = ck.ord
+      join pg_attribute att on att.attrelid = con.conrelid and att.attnum = ck.attnum
+      join pg_attribute fatt on fatt.attrelid = con.confrelid and fatt.attnum = fk.attnum
+      join pg_class cls on cls.oid = con.conrelid
+      join pg_namespace ns on ns.oid = cls.relnamespace
+      where con.contype = 'f'
+        and ns.nspname = 'public'
+        and con.confrelid = 'public.games'::regclass
+        and fatt.attname = 'game_id'
+    loop
+      if v_ref.ref_col_not_null then
+        execute format(
+          'delete from %s where %I in (
+             select g.game_id
+             from public.games g
+             join public.tables t on t.table_id = g.table_id
+             where t.club_id = $1
+           )',
+          v_ref.ref_table,
+          v_ref.ref_col
+        ) using p_club_id;
+      else
+        execute format(
+          'update %s set %I = null where %I in (
+             select g.game_id
+             from public.games g
+             join public.tables t on t.table_id = g.table_id
+             where t.club_id = $1
+           )',
+          v_ref.ref_table,
+          v_ref.ref_col,
+          v_ref.ref_col
+        ) using p_club_id;
+      end if;
+    end loop;
+  end if;
+
+  if to_regclass('public.tables') is not null then
+    for v_ref in
+      select
+        con.conrelid::regclass as ref_table,
+        att.attname as ref_col,
+        att.attnotnull as ref_col_not_null
+      from pg_constraint con
+      join unnest(con.conkey) with ordinality ck(attnum, ord) on true
+      join unnest(con.confkey) with ordinality fk(attnum, ord) on fk.ord = ck.ord
+      join pg_attribute att on att.attrelid = con.conrelid and att.attnum = ck.attnum
+      join pg_attribute fatt on fatt.attrelid = con.confrelid and fatt.attnum = fk.attnum
+      join pg_class cls on cls.oid = con.conrelid
+      join pg_namespace ns on ns.oid = cls.relnamespace
+      where con.contype = 'f'
+        and ns.nspname = 'public'
+        and con.confrelid = 'public.tables'::regclass
+        and fatt.attname = 'table_id'
+    loop
+      if v_ref.ref_col_not_null then
+        execute format(
+          'delete from %s where %I in (select table_id from public.tables where club_id = $1)',
+          v_ref.ref_table,
+          v_ref.ref_col
+        ) using p_club_id;
+      else
+        execute format(
+          'update %s set %I = null where %I in (select table_id from public.tables where club_id = $1)',
+          v_ref.ref_table,
+          v_ref.ref_col,
+          v_ref.ref_col
+        ) using p_club_id;
+      end if;
+    end loop;
+  end if;
+
+  for v_ref in
+    select
+      con.conrelid::regclass as ref_table,
+      att.attname as ref_col,
+      att.attnotnull as ref_col_not_null
+    from pg_constraint con
+    join unnest(con.conkey) with ordinality ck(attnum, ord) on true
+    join unnest(con.confkey) with ordinality fk(attnum, ord) on fk.ord = ck.ord
+    join pg_attribute att on att.attrelid = con.conrelid and att.attnum = ck.attnum
+    join pg_attribute fatt on fatt.attrelid = con.confrelid and fatt.attnum = fk.attnum
+    join pg_class cls on cls.oid = con.conrelid
+    join pg_namespace ns on ns.oid = cls.relnamespace
+    where con.contype = 'f'
+      and ns.nspname = 'public'
+      and con.confrelid = 'public.clubs'::regclass
+      and fatt.attname = 'club_id'
+      and con.conrelid <> 'public.club_delete_point_logs'::regclass
+  loop
+    if v_ref.ref_col_not_null then
+      execute format(
+        'delete from %s where %I = $1',
+        v_ref.ref_table,
+        v_ref.ref_col
+      ) using p_club_id;
+    else
+      execute format(
+        'update %s set %I = null where %I = $1',
+        v_ref.ref_table,
+        v_ref.ref_col,
+        v_ref.ref_col
+      ) using p_club_id;
+    end if;
+  end loop;
+
+  if to_regclass('public.player_connections') is not null then
+    execute '
+      delete from public.player_connections
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.table_waiting_list') is not null then
+    execute '
+      delete from public.table_waiting_list
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.table_seats') is not null then
+    execute '
+      delete from public.table_seats
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.game_events') is not null then
+    execute '
+      delete from public.game_events
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.game_states') is not null then
+    execute '
+      delete from public.game_states
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.games') is not null then
+    execute '
+      delete from public.games
+      where table_id in (select table_id from public.tables where club_id = $1)
+    ' using p_club_id;
+  end if;
+
+  if to_regclass('public.tables') is not null then
+    execute 'delete from public.tables where club_id = $1' using p_club_id;
+  end if;
+
+  if to_regclass('public.club_join_requests') is not null then
+    execute 'delete from public.club_join_requests where club_id = $1' using p_club_id;
+  end if;
+
+  if to_regclass('public.club_members') is not null then
+    execute 'delete from public.club_members where club_id = $1' using p_club_id;
+  end if;
 
   delete from public.clubs
   where club_id = p_club_id;
+
+  if exists (select 1 from public.clubs where club_id = p_club_id) then
+    raise exception 'club delete failed: club row still exists';
+  end if;
 
   return jsonb_build_object(
     'ok', true,

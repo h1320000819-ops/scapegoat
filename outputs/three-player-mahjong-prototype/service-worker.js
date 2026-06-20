@@ -1,13 +1,13 @@
-﻿const CACHE_NAME = "anmika-pwa-20260621-fix-mojibake-a";
+﻿const CACHE_NAME = "anmika-pwa-20260621-delete-club-fk-a";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260621-fix-mojibake-a",
-  "/runtime/app.js?v=20260621-fix-mojibake-a",
-  "/runtime/online-debug.js?v=20260621-fix-mojibake-a",
-  "/runtime/pwa.js?v=20260621-fix-mojibake-a",
+  "/styles.css?v=20260621-delete-club-fk-a",
+  "/runtime/app.js?v=20260621-delete-club-fk-a",
+  "/runtime/online-debug.js?v=20260621-delete-club-fk-a",
+  "/runtime/pwa.js?v=20260621-delete-club-fk-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg"
