@@ -17,13 +17,10 @@
   const SUPER_CLUB_CREATOR_USER_ID = "3cda7884-9464-4b26-b7a2-bd79cc5ab65f";
   const SUPER_CLUB_CREATOR_EMAIL = "h1320000819@gamil.com";
   const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
-  const TSUMO_LOSSLESS_3MA_LABEL = "ツモ損なし全赤三麻";
+  const TSUMO_LOSSLESS_3MA_LABEL = "全赤三麻";
   const RULE_LABELS = {
     "anmika-rocket": "アンミカロケット",
     [TSUMO_LOSSLESS_3MA_RULE_ID]: TSUMO_LOSSLESS_3MA_LABEL,
-    "normal-4ma": "ノーマル四麻",
-    "normal-3ma": "ノーマル三麻",
-    jewel: "ジュエル",
   };
   const DEBUG_RENDER_MS = 5000;
   const GAME_SERVER_PROBE_MS = 120000;
@@ -2154,7 +2151,7 @@
     if (!isAdmin()) throw new Error("卓作成権限がありません。クラブ管理者のみ卓を作成できます。");
     ensureTsumoLossless3maCreateUi();
     const ruleId = selectedCreateRuleId();
-    const defaultName = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻卓" : "アンミカロケット卓";
+    const defaultName = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "全赤三麻卓" : "アンミカロケット卓";
     const tableName = $("tableName").value.trim() || `${defaultName} ${String(state.tables.length + 1).padStart(3, "0")}`;
     const rpcBody = {
         p_club_id: clubId,
@@ -2174,7 +2171,7 @@
       const raw = rawErrorText(error);
       if (!raw.includes("create_table_with_seats") && !raw.includes("schema cache") && !raw.includes("p_rule_config")) throw error;
       if (ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
-        throw new Error("ツモ損なし全赤三麻の卓設定保存に必要なDB関数が未更新です。Supabase SQL Editorで patch_tsumo_lossless_3ma_rule.sql を実行してください。");
+        throw new Error("全赤三麻の卓設定保存に必要なDB関数が未更新です。Supabase SQL Editorで patch_tsumo_lossless_3ma_rule.sql を実行してください。");
       }
       created = await rest("/rpc/create_table_with_seats", {
         method: "POST",
@@ -3014,14 +3011,13 @@
       const option = document.createElement("option");
       option.value = TSUMO_LOSSLESS_3MA_RULE_ID;
       option.textContent = TSUMO_LOSSLESS_3MA_LABEL;
-      const normal3ma = [...ruleSelect.options].find((item) => item.value === "normal-3ma");
-      ruleSelect.insertBefore(option, normal3ma || null);
+      ruleSelect.append(option);
     }
     const settingsHost = has("tsumoLossless3maFields") ? $("tsumoLossless3maFields") : null;
     if (!has("tsumoLossless3maSettings") && settingsHost) {
       settingsHost.innerHTML = `
         <section id="tsumoLossless3maSettings" hidden>
-          <h4>ツモ損なし全赤三麻 詳細ルール</h4>
+          <h4>全赤三麻 詳細ルール</h4>
           <div class="row">
             <label>5p・5sの内訳
               <select id="threeMaFiveComposition">
@@ -3427,10 +3423,12 @@
     return `${numeric >= 0 ? "+" : ""}${text}${unit}`;
   };
   const statRowHtml = (label, value) => `<div class="table-seat-line"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`;
-  const fetchMyReplayStats = async () => {
+  const fetchMyReplayStats = async (clubId = selectedClubId()) => {
     const user = requireUser();
+    if (!clubId) throw new Error("スタッツを見るクラブを選択してください。");
+    const clubFilter = `&club_id=eq.${encodeURIComponent(clubId)}`;
     try {
-      return await rest(`/player_replay_stats?select=*&user_id=eq.${encodeURIComponent(user.id)}&is_cpu=eq.false&order=created_at.asc&limit=5000`);
+      return await rest(`/player_replay_stats?select=*&user_id=eq.${encodeURIComponent(user.id)}&is_cpu=eq.false${clubFilter}&order=created_at.asc&limit=5000`);
     } catch (error) {
       const raw = rawErrorText(error);
       if (raw.includes("player_replay_stats") || raw.includes("schema cache") || raw.includes("Could not find the table")) {
@@ -3452,7 +3450,9 @@
   }, { hands: 0, scoreDelta: 0, wins: 0, dealIns: 0, callHands: 0, riichiHands: 0 });
   const renderStatsPage = async (body) => {
     try {
-      const rows = await fetchMyReplayStats();
+      const clubId = selectedClubId();
+      const selectedClub = state.clubs.find((club) => club.club_id === clubId) || selectedMembership()?.clubs || null;
+      const rows = await fetchMyReplayStats(clubId);
       const anmikaRows = rows.filter((row) => row.rule_id !== TSUMO_LOSSLESS_3MA_RULE_ID && row.scope !== "hanchan");
       const anmika = aggregateHandStats(anmikaRows);
       const allRedHanchans = rows.filter((row) => row.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID && row.scope === "hanchan");
@@ -3470,6 +3470,7 @@
         allRedScoreDelta += statNumber(row.final_score) - 35000;
       });
       body.innerHTML = `
+        <p class="muted">現在のクラブ: ${escapeHtml(selectedClub?.name || selectedClub?.club_code || clubId)}</p>
         <section class="card">
           <h4>アンミカロケット</h4>
           ${statRowHtml("総局数（局）", `${anmika.hands}局`)}
@@ -3546,7 +3547,7 @@
   };
   const replayRuleName = (summary = {}) => {
     const ruleId = summary.ruleId || summary.rule_id || summary.gameType || "";
-    if (ruleId === "tsumo-lossless-3ma") return "ツモ損なし全赤三麻";
+    if (ruleId === "tsumo-lossless-3ma") return "全赤三麻";
     if (ruleId === "anmika-rocket") return "アンミカロケット";
     return summary.ruleName || summary.rule_name || ruleId || "ルール不明";
   };

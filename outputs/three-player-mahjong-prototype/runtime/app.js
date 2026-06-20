@@ -62,10 +62,7 @@ const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
 };
 const GAME_RULE_DEFINITIONS = [
   { id: "anmika-rocket", name: "アンミカロケット", implemented: true },
-  { id: TSUMO_LOSSLESS_3MA_RULE_ID, name: "ツモ損なし全赤三麻", implemented: true },
-  { id: "normal-4ma", name: "ノーマル四麻", implemented: false },
-  { id: "normal-3ma", name: "三人麻雀", implemented: false },
-  { id: "jewel", name: "ジュエル", implemented: false },
+  { id: TSUMO_LOSSLESS_3MA_RULE_ID, name: "全赤三麻", implemented: true },
 ];
 const normalizeAnmikaRocketRuleConfig = (config = {}) => ({
   ...DEFAULT_ANMIKA_ROCKET_RULE_CONFIG,
@@ -86,6 +83,9 @@ const normalizeRuleConfigForRule = (ruleId = "anmika-rocket", config = {}) =>
   ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
 const isTsumoLossless3maState = (state) =>
   state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+const isNorthNukiTile = (state, tile) =>
+  isTsumoLossless3maState(state) && Boolean(state?.settings?.ruleConfig?.northNukiDoraEnabled) && tile?.suit === "honor" && tile?.kind === "north";
+const isNukiDoraTileForState = (state, tile) => isFlowerTile(tile) || isNorthNukiTile(state, tile);
 const createDefaultTableSettings = () => ({
   ruleId: "anmika-rocket",
   gameType: "anmika-rocket",
@@ -1051,7 +1051,7 @@ const clubRepository = {
     return clubRepository.saveClub(club);
   },
 };
-const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻" : "アンミカロケット";
+const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "全赤三麻" : "アンミカロケット";
 const replayResultSummaryFromState = (state, result) => {
   if (!result) return "結果なし";
   const playerName = (playerId) => state?.players?.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
@@ -2674,10 +2674,9 @@ class RuleEngine {
         payments[input.winnerId] = basePoints;
         if (input.discarderId) payments[input.discarderId] = -basePoints;
       }
+      const visibleDora = normalDora + colored + nuki;
       const doraDetails = [
-        normalDora > 0 ? { name: "ドラ", han: normalDora } : null,
-        colored > 0 ? { name: "色付き牌ドラ", han: colored } : null,
-        nuki > 0 ? { name: "抜きドラ", han: nuki } : null,
+        visibleDora > 0 ? { name: "ドラ", han: visibleDora } : null,
         uraDora > 0 ? { name: "裏ドラ", han: uraDora } : null,
       ].filter(Boolean);
       return {
@@ -2704,7 +2703,7 @@ class RuleEngine {
         yaku: input.yaku,
         yakuList: input.yaku,
         doraDetails,
-        dora: { normal: normalDora, colored, nuki, ura: uraDora },
+        dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora },
         bonuses: { honba: honba * 1000, chipPending: false },
         tsumoPayments: input.winType === "tsumo" ? { childPay, dealerPay } : null,
       };
@@ -2728,25 +2727,31 @@ class RuleEngine {
       payments[input.winnerId] = totalPoints;
       payments[input.discarderId] = -totalPoints;
     }
+    const visibleDora = normalDora + colored + nuki;
     const doraDetails = [
-      normalDora > 0 ? { name: "ドラ", han: normalDora } : null,
-      colored > 0 ? { name: "色付き牌ドラ", han: colored } : null,
-      nuki > 0 ? { name: "抜きドラ", han: nuki } : null,
+      visibleDora > 0 ? { name: "ドラ", han: visibleDora } : null,
+      (input.uraDoraCount ?? 0) > 0 ? { name: "裏ドラ", han: input.uraDoraCount ?? 0 } : null,
     ].filter(Boolean);
-    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, ura: input.uraDoraCount ?? 0 }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
+    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: input.uraDoraCount ?? 0 }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
   }
 }
 
 const canNukiDora = (state, playerId) => {
   const player = state.players.find((p) => p.id === playerId);
-  return Boolean(player && getCurrentPlayer(state).id === playerId && (player.hand.some(isFlowerTile) || (player.drawnTile && isFlowerTile(player.drawnTile))));
+  return Boolean(player && getCurrentPlayer(state).id === playerId && (player.hand.some((tile) => isNukiDoraTileForState(state, tile)) || (player.drawnTile && isNukiDoraTileForState(state, player.drawnTile))));
+};
+const findManualNorthNukiTile = (state, playerId) => {
+  const player = state?.players?.find((p) => p.id === playerId);
+  if (!player || getCurrentPlayer(state)?.id !== playerId || !state?.settings?.ruleConfig?.northNukiDoraEnabled) return null;
+  if (isNorthNukiTile(state, player.drawnTile)) return player.drawnTile;
+  return player.hand?.find((tile) => isNorthNukiTile(state, tile)) || null;
 };
 const performNukiDoraDetailed = (state, playerId, tileId) => {
   if (!canNukiDora(state, playerId)) return null;
   const player = state.players.find((p) => p.id === playerId);
-  const fromDrawn = player.drawnTile?.id === tileId && isFlowerTile(player.drawnTile);
+  const fromDrawn = player.drawnTile?.id === tileId && isNukiDoraTileForState(state, player.drawnTile);
   const tile = fromDrawn ? player.drawnTile : player.hand.find((t) => t.id === tileId);
-  if (!tile) return null;
+  if (!tile || !isNukiDoraTileForState(state, tile)) return null;
   if (fromDrawn) player.drawnTile = null;
   else player.hand = player.hand.filter((t) => t.id !== tileId);
   player.nukiDoraTiles.push(tile);
@@ -3021,6 +3026,7 @@ class GameController {
     this.socketStartupResyncTimers = [];
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
+    this.replayAutoListTimer = null;
     this.lastDisplayedResultKey = "";
     this.lastDisplayedAnnouncementKey = "";
     this.announcementClearTimer = null;
@@ -3350,6 +3356,10 @@ class GameController {
     this.emit();
   }
   navigate(screen) {
+    if (this.replayAutoListTimer) {
+      clearTimeout(this.replayAutoListTimer);
+      this.replayAutoListTimer = null;
+    }
     this.refreshStoredData();
     if (!this.state.currentUser && screen !== "auth" && screen !== "replayViewer") screen = "auth";
     this.state.screen = screen;
@@ -4308,6 +4318,10 @@ class GameController {
     this.state.replaySummaries = replayRepository.listReplays();
   }
   openReplay(replayId, { updateHash = true } = {}) {
+    if (this.replayAutoListTimer) {
+      clearTimeout(this.replayAutoListTimer);
+      this.replayAutoListTimer = null;
+    }
     this.refreshStoredData();
     const replay = replayRepository.getReplay(replayId);
     if (!replay) {
@@ -4354,8 +4368,23 @@ class GameController {
   stepReplay(delta) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
     const max = Math.max(0, getReplaySnapshots(replay).length - 1);
-    this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
+    const previousIndex = this.state.replayIndex;
+    const nextIndex = Math.max(0, Math.min(max, previousIndex + delta));
+    if (delta > 0 && previousIndex >= max) {
+      this.navigate("replayList");
+      return;
+    }
+    this.state.replayIndex = nextIndex;
     this.emit();
+    if (delta > 0 && previousIndex < max && nextIndex >= max) {
+      const replayId = this.state.selectedReplayId;
+      if (this.replayAutoListTimer) clearTimeout(this.replayAutoListTimer);
+      this.replayAutoListTimer = setTimeout(() => {
+        if (this.state.screen === "replayViewer" && this.state.selectedReplayId === replayId && this.state.replayIndex >= max) {
+          this.navigate("replayList");
+        }
+      }, 900);
+    }
   }
   setReplayIndex(index) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
@@ -5642,6 +5671,12 @@ const renderActionPrompt = (pending, state = null) => {
   const skipButton = isRiichiChoicePending(pending) ? "" : `<button type="button" data-skip-action>スキップ</button>`;
   return `<section class="action-prompt mobile-action-prompt"><div class="actions">${options}${skipButton}</div></section>`;
 };
+const renderNorthNukiButton = (state, viewerPlayerId) => {
+  if (state?.pendingAction || !["waitingForHumanDiscard", "waitingForRiichiDiscard", "playing"].includes(state?.phase || "")) return "";
+  const north = findManualNorthNukiTile(state, viewerPlayerId);
+  if (!north) return "";
+  return `<section class="action-prompt mobile-action-prompt north-nuki-prompt"><div class="actions"><button type="button" data-nuki-tile-id="${escapeHtml(north.id)}">北</button></div></section>`;
+};
 const renderHandLog = (state) => {
   const name = (id) => state.players.find((p) => p.id === id)?.name ?? id;
   const text = (event) => replayEventText(event, state, name);
@@ -6432,6 +6467,7 @@ class GameView {
       ${state.isReplayView ? "" : `<section class="bottom-actions">
         ${state.cpuThinkingMessage ? `<div class="thinking">${state.cpuThinkingMessage}</div>` : ""}
         ${renderActionPrompt(state.pendingAction, state)}
+        ${renderNorthNukiButton(state, viewer.id)}
         ${state.discardDebugMessage ? `<div class="discard-debug-message">${escapeHtml(state.discardDebugMessage)}${state.discardRecoveryVisible ? ` <button type="button" data-force-discard-resync>再同期</button>` : ""}</div>` : ""}
       </section>`}
       ${state.phase === "idle" ? this.startOverlay() : ""}
@@ -6704,11 +6740,10 @@ class GameView {
       const doraNormal = Number(score.dora?.normal ?? 0);
       const doraColored = Number(score.dora?.colored ?? 0);
       const doraNuki = Number(score.dora?.nuki ?? 0);
+      const doraVisible = Number(score.dora?.visible ?? (doraNormal + doraColored + doraNuki));
       const doraUra = winnerRiichi ? Number(score.dora?.ura ?? 0) : 0;
-      if (doraNormal > 0) yakuRowsForAllRed.push(`<li>ドラ ${doraNormal}翻</li>`);
-      if (doraColored > 0) yakuRowsForAllRed.push(`<li>赤・色ドラ ${doraColored}翻</li>`);
-      if (doraNuki > 0) yakuRowsForAllRed.push(`<li>抜きドラ ${doraNuki}翻</li>`);
-      if (doraUra > 0) yakuRowsForAllRed.push(`<li>裏ドラ ${doraUra}翻</li>`);
+      if (doraVisible > 0) yakuRowsForAllRed.push(`<li>ドラ${doraVisible}</li>`);
+      if (doraUra > 0) yakuRowsForAllRed.push(`<li>裏ドラ${doraUra}</li>`);
       const chipSettlement = result?.chipSettlement || score.chipSettlement;
       const tobiPrize = result?.tobiPrize || score.tobiPrize;
       const settledChipPoint = chipSettlement?.chipPoint ?? tobiPrize?.chipPoint ?? null;
@@ -6756,12 +6791,11 @@ class GameView {
     const doraNormal = Number(score.dora?.normal ?? 0);
     const doraColored = Number(score.dora?.colored ?? 0);
     const doraNuki = Number(score.dora?.nuki ?? 0);
+    const doraVisible = Number(score.dora?.visible ?? (doraNormal + doraColored + doraNuki));
     const uraCount = winnerRiichi ? Math.floor(Number(bonus.uraDora ?? 0) / 5) : 0;
     const goldCount = Math.floor(Number(bonus.goldTile ?? 0) / 5);
     const rocketCount = Math.floor(Number(bonus.blueTile ?? 0) / 20);
-    if (doraNormal > 0) yakuRows.push(`<li>ドラ${doraNormal}</li>`);
-    if (doraColored > 0) yakuRows.push(`<li>ドラ${doraColored}（赤ドラのみ表示）</li>`);
-    if (doraNuki > 0) yakuRows.push(`<li>抜きドラ${doraNuki}</li>`);
+    if (doraVisible > 0) yakuRows.push(`<li>ドラ${doraVisible}</li>`);
     if (uraCount > 0) yakuRows.push(`<li>裏${uraCount}</li>`);
     if (goldCount > 0) yakuRows.push(`<li>金${goldCount}（ターコイズと金を含む）</li>`);
     if (rocketCount > 0) yakuRows.push(`<li>ロケット${rocketCount}（青牌の枚数）</li>`);

@@ -1646,7 +1646,7 @@ const replayEventsFromSnapshots = (snapshots) => {
   }
   return events.filter(Boolean).map(compactReplayEvent);
 };
-const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "ツモ損なし全赤三麻" : "アンミカロケット";
+const replayRuleName = (ruleId) => ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? "全赤三麻" : "アンミカロケット";
 const replayResultSummary = (state, result) => {
   if (!result) return "結果なし";
   const playerName = (playerId) => asArray(state?.players).find((player) => player.id === playerId)?.name || playerId || "";
@@ -2895,6 +2895,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
       payments[player.id] = basePoints;
       if (loserId) payments[loserId] = -basePoints;
     }
+    const visibleDora = normalDora + colored + nuki;
     return {
       yakuHan,
       doraHan,
@@ -2909,12 +2910,10 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
       yaku,
       yakuList: yaku,
       doraDetails: [
-        normalDora ? { name: "ドラ", han: normalDora } : null,
-        colored ? { name: "色付き牌ドラ", han: colored } : null,
-        nuki ? { name: "抜きドラ", han: nuki } : null,
+        visibleDora ? { name: "ドラ", han: visibleDora } : null,
         uraDora ? { name: "裏ドラ", han: uraDora } : null,
       ].filter(Boolean),
-      dora: { normal: normalDora, colored, nuki, ura: uraDora },
+      dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora },
       bonuses: { honba: honba * 1000, chipPending: false },
       chipSettlement: null,
       baibaMultiplier: 1,
@@ -2955,6 +2954,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     payments[player.id] = totalPoints;
     if (loserId) payments[loserId] = -totalPoints;
   }
+  const visibleDora = normalDora + colored + nuki;
   return {
     yakuHan,
     doraHan,
@@ -2969,12 +2969,10 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     yaku,
     yakuList: yaku,
     doraDetails: [
-      normalDora ? { name: "ドラ", han: normalDora } : null,
-      colored ? { name: "色付き牌ドラ", han: colored } : null,
-      nuki ? { name: "抜きドラ", han: nuki } : null,
+      visibleDora ? { name: "ドラ", han: visibleDora } : null,
       uraDora ? { name: "裏ドラ", han: uraDora } : null,
     ].filter(Boolean),
-    dora: { normal: normalDora, colored, nuki, ura: uraDora },
+    dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora },
     bonuses: {
       blueTile: blueTileBonus,
       rocket: blueTileBonus,
