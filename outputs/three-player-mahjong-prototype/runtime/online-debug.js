@@ -952,7 +952,7 @@
     renderDebug("GameState同期済み");
     return state.activeGameState;
   };
-  const newSocketGameId = (tableId) => `socket-game-${tableId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const newSocketGameId = (tableId) => `socket-game-${tableId}`;
   const deactivateTableActiveGameState = async (tableId, reason = "新規対局開始") => {
     tableId = normalizeRemoteTableId(tableId);
     if (!tableId || !state.accessToken) return;
@@ -1938,7 +1938,7 @@
     if (!state.user?.id) return false;
     return seats.some((seat) => seat.user_id === state.user.id);
   };
-  const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true } = {}) => {
+  const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true, onlineGameState: preferredOnlineGameState = null } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return;
     if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
@@ -1960,15 +1960,12 @@
     if (!isCurrentUserSeatedAt(seats)) return;
     if (state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
-    const active = await loadActiveGameState(table.table_id).catch(() => null);
-    const onlineGameState = active?.game_id
-      ? { game_id: active.game_id, version: active.version ?? 0, resetRoom: false }
-      : { game_id: newSocketGameId(table.table_id), version: 0, resetRoom: true };
+    const onlineGameState = preferredOnlineGameState || { game_id: newSocketGameId(table.table_id), version: 0, resetRoom: false };
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
     markAutoOpenedTable(table.table_id);
     startLocalDebugMahjong(table.table_id, seats, onlineGameState, {
-      autoReloadAfterLaunch: true,
+      autoReloadAfterLaunch: false,
       launchReloadKey: `${table.table_id}:${onlineGameState.game_id || ""}:auto-open`,
     });
   };
@@ -2036,7 +2033,7 @@
         body: JSON.stringify({ status: "playing" }),
       }).catch((error) => log("自動開始時の卓ステータス更新はスキップしました。", rawErrorText(error)));
       log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
-      await openPlayingTableIfNeeded(table, seats, { navigate: true });
+      await openPlayingTableIfNeeded(table, seats, { navigate: true, onlineGameState });
       return onlineGameState;
     } catch (error) {
       markAutoStartFailedTable(tableId);
@@ -2887,7 +2884,7 @@
       lastServerState: null,
       lastSyncedAt: 0,
       autoReloadAfterLaunch: Boolean(launchOptions.autoReloadAfterLaunch),
-      launchReloadKey: launchOptions.launchReloadKey || "",
+      launchReloadKey: launchOptions.launchReloadKey || `${tableId}:${gameId}:launch`,
     };
     localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
     window.name = JSON.stringify({
@@ -2964,7 +2961,7 @@
     clearLaunchingTable();
     const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
     const endedState = Boolean(lastState?.phase === "gameEnded" || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
-    const gameId = endedState ? newSocketGameId(tableId) : (state.activeGameState?.game_id || `socket-game-${tableId}`);
+    const gameId = newSocketGameId(tableId);
     if (endedState) await deactivateTableActiveGameState(tableId, "終了済み対局への再参加前").catch(() => {});
     startLocalDebugMahjong(tableId, rows, { game_id: gameId, version: 0, resetRoom: endedState });
   };

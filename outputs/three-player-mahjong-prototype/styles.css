@@ -1175,9 +1175,17 @@ button:hover {
   color: #fff4bf;
   cursor: pointer;
   font-weight: 800;
+  height: 28px;
+  line-height: 1.2;
   max-width: 180px;
   min-width: 104px;
+  overflow: hidden;
   padding: 5px 24px 5px 8px;
+  white-space: nowrap;
+}
+
+.replay-hand-select-menu option {
+  color: #10241e;
 }
 
 .replay-event-label {

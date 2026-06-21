@@ -206,22 +206,11 @@ const maybeReloadAfterAutoLaunch = () => {
   try {
     const sync = safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
     if (!sync?.autoReloadAfterLaunch) return;
-    const reloadKey = String(sync.launchReloadKey || `${sync.tableId || ""}:${sync.gameId || ""}:auto-launch`);
-    const sessionKey = `anmikaRocket.autoLaunchReloaded:${reloadKey}`;
-    if (sessionStorage.getItem(sessionKey) === "1") {
-      const nextSync = { ...sync, autoReloadAfterLaunch: false };
-      safeWriteJson(APP_STORAGE_KEYS.onlineSync, nextSync);
-      return;
-    }
-    sessionStorage.setItem(sessionKey, "1");
-    const nextSync = { ...sync, autoReloadAfterLaunch: false };
-    safeWriteJson(APP_STORAGE_KEYS.onlineSync, nextSync);
-    console.log("[DebugLaunch] 自動開始後の初回再読み込みを実行します", {
+    safeWriteJson(APP_STORAGE_KEYS.onlineSync, { ...sync, autoReloadAfterLaunch: false });
+    console.log("[DebugLaunch] 古い自動再読み込みフラグを解除しました", {
       tableId: sync.tableId,
       gameId: sync.gameId,
-      reloadKey,
     });
-    setTimeout(() => globalThis.location?.reload?.(), 120);
   } catch (error) {
     console.warn("[DebugLaunch] 自動開始後の再読み込み予約に失敗しました", error);
   }
@@ -3470,7 +3459,9 @@ class GameController {
       this.refreshReplaysFromSupabase().catch((error) => console.warn("[Replay] Supabase牌譜の取得に失敗しました", error));
     }
     if (screen !== "replayViewer" && (globalThis.location?.hash?.startsWith("#/replay/") || /\/replay\/[^/]+$/.test(globalThis.location?.pathname ?? ""))) {
-      const target = globalThis.location?.protocol === "file:" ? globalThis.location.pathname : "/";
+      const target = screen === "replayList"
+        ? onlineDebugReplayListUrl(this.state.selectedClubId || this.state.activeClubId || "")
+        : globalThis.location?.protocol === "file:" ? globalThis.location.pathname : "/";
       try { globalThis.history?.replaceState?.(null, "", target); } catch {}
     }
     if (screen !== "game") this.state.phase = this.state.phase === "playing" ? this.state.phase : this.state.phase;
@@ -3979,6 +3970,36 @@ class GameController {
     else if (humanPlayer && this.state.activeClockPlayerId === humanPlayer.id) this.stopClockForPlayer(humanPlayer.id, false);
     if (!this.shouldKeepSocketStartupResync(this.state)) this.clearSocketStartupResyncTimers();
     this.onStateChanged(this.state);
+    this.maybeReloadAfterInitialOnlineState("applyOnlineStateSnapshot");
+    return true;
+  }
+  maybeReloadAfterInitialOnlineState(reason = "initialOnlineState") {
+    const sync = loadOnlineSync();
+    if (!sync?.autoReloadAfterLaunch || sync.transport !== "socketio" || !sync.tableId || !sync.gameId) return false;
+    if (this.postLaunchReloadTimer) return true;
+    if (this.state.screen !== "game" || this.state.phase === "onlineLoading") return false;
+    if (!Array.isArray(this.state.players) || this.state.players.length < 3) return false;
+    const reloadKey = String(sync.launchReloadKey || `${sync.tableId}:${sync.gameId}:post-initial-state`);
+    const sessionKey = `anmikaRocket.postInitialStateReloaded:${reloadKey}`;
+    if (sessionStorage.getItem(sessionKey) === "1") {
+      saveOnlineSync({ ...sync, autoReloadAfterLaunch: false });
+      return false;
+    }
+    sessionStorage.setItem(sessionKey, "1");
+    saveOnlineSync({ ...sync, autoReloadAfterLaunch: false, postInitialReloadedAt: Date.now(), postInitialReloadReason: reason });
+    console.log("[DebugLaunch] 初期局面同期後に一度だけ再読み込みします", {
+      reason,
+      tableId: sync.tableId,
+      gameId: sync.gameId,
+      reloadKey,
+      phase: this.state.phase,
+      version: this.state.version,
+      turnIndex: this.state.turnIndex,
+    });
+    this.postLaunchReloadTimer = setTimeout(() => {
+      this.postLaunchReloadTimer = null;
+      globalThis.location?.reload?.();
+    }, 650);
     return true;
   }
   async connectSocketGameServer() {
@@ -6493,7 +6514,7 @@ class GameView {
       return `<option value="${marker.index}" ${active ? "selected" : ""}>${escapeHtml(marker.label)}</option>`;
     }).join("");
     const handSelect = handMarkers.length > 1
-      ? `<label class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span><select data-replay-hand-select size="1" aria-label="局を選択">${handSelectOptions}</select></label>`
+      ? `<label class="replay-hand-selector" data-replay-control><span class="replay-hand-selector-label">局</span><select class="replay-hand-select-menu" data-replay-hand-select aria-label="局を選択">${handSelectOptions}</select></label>`
       : "";
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
