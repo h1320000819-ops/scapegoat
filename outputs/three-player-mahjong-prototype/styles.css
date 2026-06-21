@@ -7,8 +7,8 @@
   --discard-gap: 5px;
   --center-info-width: 220px;
   --center-info-height: 148px;
-  --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 16px);
-  --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 31px);
+  --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7 + 16px);
+  --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2 + 31px);
   --river-center-gap: 4px;
   --center-y-offset: 6px;
 }
@@ -673,7 +673,8 @@ button:hover {
   padding: 4px;
   position: absolute;
   transform-origin: center center;
-  width: var(--river-width);
+  min-width: var(--river-width);
+  width: max-content;
   z-index: 7;
 }
 
@@ -696,15 +697,22 @@ button:hover {
 }
 
 .discard-grid {
-  display: grid;
+  align-items: center;
+  display: flex;
+  flex-direction: column;
   gap: var(--discard-gap);
-  grid-auto-flow: row;
-  grid-template-columns: repeat(6, var(--discard-tile-width));
-  grid-template-rows: repeat(4, var(--discard-tile-height));
+  min-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
+  min-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5);
+  overflow: visible;
+}
+
+.discard-row {
+  display: flex;
+  gap: var(--discard-gap);
+  height: var(--discard-tile-height);
   justify-content: center;
-  align-content: center;
-  min-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3);
-  overflow: hidden;
+  min-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5);
+  white-space: nowrap;
 }
 
 .discard .tile,
@@ -2036,8 +2044,8 @@ button:hover {
     --discard-tile-height: 22px;
     --discard-tile-width: 15px;
     --river-center-gap: 2px;
-    --river-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3 + 4px);
-    --river-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5 + 4px);
+    --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2 + 4px);
+    --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7 + 4px);
     height: var(--anmika-viewport-height, 100dvh);
     min-height: 0;
     overflow: hidden;
@@ -2251,13 +2259,13 @@ button:hover {
     border-radius: 5px;
     height: var(--river-height);
     padding: 2px;
-    width: var(--river-width);
+    min-width: var(--river-width);
+    width: max-content;
   }
 
   .discard-grid {
-    grid-template-columns: repeat(6, var(--discard-tile-width));
-    grid-template-rows: repeat(4, var(--discard-tile-height));
-    min-height: calc(var(--discard-tile-height) * 4 + var(--discard-gap) * 3);
+    min-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
+    min-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5);
   }
 
   .discard .tile,
@@ -2347,7 +2355,7 @@ button:hover {
   .seat-right .meld-set {
     gap: 1px;
     margin-right: 0;
-    min-height: 28px;
+    min-height: 44px;
     transform: rotate(90deg);
     transform-origin: top left;
   }
@@ -2358,9 +2366,9 @@ button:hover {
 
   .seat-right .meld-area .exposed-tiles {
     align-items: flex-start;
-    flex-direction: row;
+    flex-direction: column;
     flex-wrap: nowrap;
-    gap: 1px;
+    gap: 0;
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {

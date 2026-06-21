@@ -526,6 +526,11 @@ const onlineDebugReplayListUrl = (clubId = "") => {
     return `${base}${base.includes("?") ? "&" : "?"}settings=replays`;
   }
 };
+const goToOnlineDebugLobby = (clubId = "", replace = false) => {
+  const target = onlineDebugLobbyUrl(clubId);
+  if (replace) globalThis.location?.replace?.(target);
+  else if (globalThis.location) globalThis.location.href = target;
+};
 const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
   const base = value.includes("/online-debug") ? value : onlineDebugLobbyUrl(clubId);
@@ -3459,9 +3464,7 @@ class GameController {
       this.refreshReplaysFromSupabase().catch((error) => console.warn("[Replay] Supabase牌譜の取得に失敗しました", error));
     }
     if (screen !== "replayViewer" && (globalThis.location?.hash?.startsWith("#/replay/") || /\/replay\/[^/]+$/.test(globalThis.location?.pathname ?? ""))) {
-      const target = screen === "replayList"
-        ? onlineDebugReplayListUrl(this.state.selectedClubId || this.state.activeClubId || "")
-        : globalThis.location?.protocol === "file:" ? globalThis.location.pathname : "/";
+      const target = onlineDebugReplayListUrl(this.state.selectedClubId || this.state.activeClubId || "");
       try { globalThis.history?.replaceState?.(null, "", target); } catch {}
     }
     if (screen !== "game") this.state.phase = this.state.phase === "playing" ? this.state.phase : this.state.phase;
@@ -6477,15 +6480,15 @@ class GameView {
     const replay = replayRepository.getReplay(state.selectedReplayId);
     const fallbackBackUrl = onlineDebugReplayListUrl(state.selectedClubId || state.activeClubId || "");
     if (!replay && state.replayLoading) {
-      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜を読み込み中です...</p></section>`;
+      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">牌譜一覧へ戻る</a><p>牌譜を読み込み中です...</p></section>`;
     }
     if (!replay) {
-      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p>${state.replayLoadError ? `<p>${escapeHtml(state.replayLoadError)}</p>` : ""}</section>`;
+      return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">牌譜一覧へ戻る</a><p>牌譜が見つかりません。</p>${state.replayLoadError ? `<p>${escapeHtml(state.replayLoadError)}</p>` : ""}</section>`;
     }
     const snapshots = getReplaySnapshots(replay);
     const index = Math.max(0, Math.min(state.replayIndex, snapshots.length - 1));
     const snapshot = getCurrentReplaySnapshot(replay, index);
-    if (!snapshot) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">ロビーへ戻る</a><p>牌譜が見つかりません。</p></section>`;
+    if (!snapshot) return `<section class="lobby-panel replay-missing-panel"><a class="button-link" href="${fallbackBackUrl}">牌譜一覧へ戻る</a><p>牌譜が見つかりません。</p></section>`;
     const displayState = {
       ...snapshot,
       screen: "game",
@@ -6522,7 +6525,7 @@ class GameView {
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
-        <a class="button-link" href="${replayBackUrl}">ロビーへ戻る</a>
+        <a class="button-link" href="${replayBackUrl}">牌譜一覧へ戻る</a>
         <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
         <strong>${index + 1} / ${snapshots.length}</strong>
         <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
@@ -6738,8 +6741,10 @@ class GameView {
     const seatView = player.player ? player : null;
     const playerName = seatView?.playerName ?? player.name;
     const discards = seatView?.discards ?? player.discardedTiles;
+    const discardRows = [discards.slice(0, 6), discards.slice(6, 12), discards.slice(12)];
+    const renderDiscard = (discard) => `<span class="discard ${discard.discardType === "tsumogiri" ? "tsumogiri" : "tedashi"} ${discard.isRiichiDiscard ? "riichi-discard" : ""}">${renderTileView({ tile: discard.tile, isTsumogiri: discard.discardType === "tsumogiri" })}</span>`;
     return `<section class="discard-area discard-${seat}" aria-label="${playerName}の捨て牌">
-      <div class="discard-grid">${discards.map((discard) => `<span class="discard ${discard.discardType === "tsumogiri" ? "tsumogiri" : "tedashi"} ${discard.isRiichiDiscard ? "riichi-discard" : ""}">${renderTileView({ tile: discard.tile, isTsumogiri: discard.discardType === "tsumogiri" })}</span>`).join("")}</div>
+      <div class="discard-grid">${discardRows.map((row) => `<div class="discard-row">${row.map(renderDiscard).join("")}</div>`).join("")}</div>
     </section>`;
   }
   exposedAreaClean(player) {
@@ -7069,7 +7074,7 @@ try {
   } else if (pendingOnlineDebugLaunchTableId) {
     renderStartupFallback("対局開始用の卓データが見つかりません。卓一覧に戻って、もう一度3人着席から開始してください。");
   } else if (!routeFromHash()) {
-    view.render(controller.getState());
+    goToOnlineDebugLobby(localStorage.getItem("anmikaOnlineDebug.returnClubId") || "", true);
   }
 } catch (error) {
   console.error("[Startup] 麻雀画面の起動に失敗しました", error);
@@ -7077,8 +7082,7 @@ try {
 }
 window.addEventListener("hashchange", () => {
   if (!routeFromHash()) {
-    controller.getState().screen = "home";
-    controller.emit();
+    goToOnlineDebugLobby(controller.getState().selectedClubId || controller.getState().activeClubId || "", true);
   }
 });
 window.addEventListener("popstate", () => routeFromHash());

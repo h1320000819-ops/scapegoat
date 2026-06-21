@@ -3515,12 +3515,21 @@
   const aggregateHandStats = (rows) => rows.reduce((stats, row) => {
     const payload = statPayload(row);
     const handCount = Math.max(0, statNumber(row.hand_count || 1));
+    const savedCallHands = payload.handWithCallCount ?? payload.hand_with_call_count;
+    const fallbackCallHands = Math.max(0, statNumber(row.call_count) - statNumber(payload.nukiDoraCount ?? payload.nuki_dora_count ?? 0));
+    const callHands = savedCallHands === undefined || savedCallHands === null
+      ? (fallbackCallHands > 0 ? Math.min(fallbackCallHands, handCount) : 0)
+      : Math.min(Math.max(0, statNumber(savedCallHands)), handCount);
+    const savedRiichiHands = payload.handWithRiichiCount ?? payload.hand_with_riichi_count;
+    const riichiHands = savedRiichiHands === undefined || savedRiichiHands === null
+      ? (statNumber(row.riichi_count) > 0 ? Math.min(statNumber(row.riichi_count), handCount) : 0)
+      : Math.min(Math.max(0, statNumber(savedRiichiHands)), handCount);
     stats.hands += handCount;
     stats.scoreDelta += statNumber(row.score_delta);
     stats.wins += statNumber(row.win_count);
     stats.dealIns += statNumber(payload.dealInCount ?? payload.deal_in_count ?? 0);
-    stats.callHands += statNumber(payload.handWithCallCount ?? payload.hand_with_call_count ?? (statNumber(row.call_count) > 0 ? 1 : 0));
-    stats.riichiHands += statNumber(payload.handWithRiichiCount ?? payload.hand_with_riichi_count ?? (statNumber(row.riichi_count) > 0 ? 1 : 0));
+    stats.callHands += callHands;
+    stats.riichiHands += riichiHands;
     return stats;
   }, { hands: 0, scoreDelta: 0, wins: 0, dealIns: 0, callHands: 0, riichiHands: 0 });
   const renderStatsPage = async (body) => {

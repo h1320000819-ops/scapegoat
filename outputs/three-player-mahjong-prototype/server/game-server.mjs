@@ -1679,6 +1679,24 @@ const playerPaymentDeltaFromResult = (result, playerId) => {
   }
   return Number(payments?.[playerId] || 0);
 };
+const isReplayCallStatEvent = (event) => {
+  if (event?.type === "pon") return true;
+  if (event?.type !== "kan") return false;
+  return event?.kanType !== "ankan";
+};
+const countHandsWithEventForPlayer = (events, playerId, predicate) => {
+  const handKeys = new Set();
+  let currentHandKey = "hand";
+  for (const event of asArray(events)) {
+    if (event?.type === "handStart") {
+      currentHandKey = event.handId || event.roundLabel || `hand-${handKeys.size + 1}`;
+      continue;
+    }
+    if (event?.handId) currentHandKey = event.handId;
+    if (event?.playerId === playerId && predicate(event)) handKeys.add(currentHandKey);
+  }
+  return handKeys.size;
+};
 const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) => {
   const state = room?.state;
   const ruleId = state?.settings?.ruleId || state?.settings?.gameType || "anmika-rocket";
@@ -1688,20 +1706,19 @@ const buildPlayerStatRowsForReplay = ({ room, replayId, table, scope, result }) 
   const socketEvents = asArray(room?.events);
   const handMarkers = scope === "hanchan" ? handMarkersFromSnapshots(state?.hanchanReplaySnapshots || state?.replaySnapshots) : [];
   const handCount = scope === "hanchan" ? Math.max(1, handMarkers.length) : 1;
-  const handKeyForEvent = (event) => event?.handId || event?.roundLabel || event?.turnIndex || "hand";
   const finalSettlement = result?.settlement?.settlements || result?.finalResult?.settlement?.settlements || {};
   const rankedPlayerIds = asArray(result?.settlement?.rankedPlayerIds || result?.finalResult?.settlement?.rankedPlayerIds);
   return asArray(state?.players).map((player) => {
     const playerId = String(player?.id || "");
     const isCpu = player?.type === "cpu" || playerId.startsWith("cpu");
     const riichiEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "riichi");
-    const callEvents = handEvents.filter((event) => event?.playerId === playerId && ["pon", "kan", "nukiDora"].includes(event?.type));
+    const callEvents = handEvents.filter((event) => event?.playerId === playerId && isReplayCallStatEvent(event));
     const winEvents = handEvents.filter((event) => event?.playerId === playerId && ["ron", "tsumo"].includes(event?.type));
     const dealInEvents = handEvents.filter((event) => event?.type === "ron" && (event?.loserId === playerId || event?.fromPlayerId === playerId));
     const discardEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "discard");
     const drawEvents = handEvents.filter((event) => event?.playerId === playerId && event?.type === "draw");
-    const handWithCallCount = new Set(callEvents.map(handKeyForEvent)).size || (asArray(player?.melds).length ? 1 : 0);
-    const handWithRiichiCount = new Set(riichiEvents.map(handKeyForEvent)).size || (player?.isRiichi ? 1 : 0);
+    const handWithCallCount = Math.min(handCount, countHandsWithEventForPlayer(handEvents, playerId, isReplayCallStatEvent) || (asArray(player?.melds).some((meld) => meld?.type !== "ankan") ? 1 : 0));
+    const handWithRiichiCount = Math.min(handCount, countHandsWithEventForPlayer(handEvents, playerId, (event) => event?.type === "riichi") || (player?.isRiichi ? 1 : 0));
     const rank = rankedPlayerIds.length ? rankedPlayerIds.indexOf(playerId) + 1 : null;
     const scoreDelta = scope === "hanchan" && Object.prototype.hasOwnProperty.call(finalSettlement, playerId)
       ? Number(finalSettlement[playerId] || 0)
