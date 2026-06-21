@@ -305,6 +305,12 @@
     state.recentlyLeftTableId = "";
     state.recentlyLeftAt = 0;
   };
+  const clearRecentlyLeftTable = (tableId = "") => {
+    if (!state.recentlyLeftTableId) return;
+    if (tableId && String(state.recentlyLeftTableId) !== String(tableId)) return;
+    state.recentlyLeftTableId = "";
+    state.recentlyLeftAt = 0;
+  };
   const emptySeatRows = (tableId) =>
     [0, 1, 2].map((seatIndex) => ({
       table_id: tableId,
@@ -933,7 +939,7 @@
     const rows = await rest(`/game_states?select=*&table_id=eq.${encodeURIComponent(tableId)}&is_active=eq.true&order=updated_at.desc&limit=1`);
     state.activeGameState = rows[0] || null;
     const activeState = state.activeGameState?.state || null;
-    const activeEnded = Boolean(activeState?.phase === "gameEnded" || activeState?.finalResult || activeState?.handLog?.result?.finalResult);
+    const activeEnded = Boolean(activeState?.phase === "gameEnded" || (activeState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(activeState?.phase)) || activeState?.finalResult || activeState?.handLog?.result?.finalResult);
     if (state.activeGameState && activeEnded) {
       await deactivateTableActiveGameState(tableId, "終了済みGameStateを無効化").catch((error) => log("終了済みGameStateの無効化に失敗しました。", rawErrorText(error)));
       state.activeGameState = null;
@@ -1938,14 +1944,15 @@
     if (!state.user?.id) return false;
     return seats.some((seat) => seat.user_id === state.user.id);
   };
-  const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true, onlineGameState: preferredOnlineGameState = null } = {}) => {
+  const openPlayingTableIfNeeded = async (table, seatRows = null, { navigate = true, onlineGameState: preferredOnlineGameState = null, forceOpen = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return;
     if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
-    if (isLaunchInProgress(table.table_id)) return;
-    if (wasAutoOpenedRecently(table.table_id)) return;
-    clearRecentlyLeftTableIfExpired();
-    if (isRecentlyLeftTable(table.table_id)) {
+    if (!forceOpen && isLaunchInProgress(table.table_id)) return;
+    if (!forceOpen && wasAutoOpenedRecently(table.table_id)) return;
+    if (forceOpen) clearRecentlyLeftTable(table.table_id);
+    else clearRecentlyLeftTableIfExpired();
+    if (!forceOpen && isRecentlyLeftTable(table.table_id)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
       clearLocalUserSeatsForTable(table.table_id);
       state.autoOpenedPlayingTableIds.delete(table.table_id);
@@ -1958,7 +1965,7 @@
     }
     const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
     if (!isCurrentUserSeatedAt(seats)) return;
-    if (state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
+    if (!forceOpen && state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
     const onlineGameState = preferredOnlineGameState || { game_id: newSocketGameId(table.table_id), version: 0, resetRoom: false };
     state.autoOpenedPlayingTableIds.add(table.table_id);
@@ -1985,15 +1992,16 @@
     }
     return table;
   };
-  const tryAutoStartTableFromSeats = async (tableId, seatRows = null) => {
+  const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
     tableId = requireTableId(tableId, "自動対局開始");
-    if (isLaunchInProgress(tableId)) return null;
-    if (wasAutoOpenedRecently(tableId)) return null;
-    if (wasAutoStartFailedRecently(tableId)) return null;
+    if (!forceNewGame && isLaunchInProgress(tableId)) return null;
+    if (!forceNewGame && wasAutoOpenedRecently(tableId)) return null;
+    if (!forceNewGame && wasAutoStartFailedRecently(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
-    clearRecentlyLeftTableIfExpired();
-    if (isRecentlyLeftTable(tableId)) {
+    if (forceNewGame) clearRecentlyLeftTable(tableId);
+    else clearRecentlyLeftTableIfExpired();
+    if (!forceNewGame && isRecentlyLeftTable(tableId)) {
       console.log("[LastHand] recently left table: suppress auto-start", tableId);
       clearLocalUserSeatsForTable(tableId);
       state.autoOpenedPlayingTableIds.delete(tableId);
@@ -2013,8 +2021,10 @@
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
       table.table_seats = seats;
-      await openPlayingTableIfNeeded(table, seats, { navigate: true });
-      return state.activeGameState;
+      if (!forceNewGame) {
+        await openPlayingTableIfNeeded(table, seats, { navigate: true });
+        return state.activeGameState;
+      }
     }
 
     if (state.autoStartingTableIds.has(tableId)) return null;
@@ -2033,7 +2043,7 @@
         body: JSON.stringify({ status: "playing" }),
       }).catch((error) => log("自動開始時の卓ステータス更新はスキップしました。", rawErrorText(error)));
       log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
-      await openPlayingTableIfNeeded(table, seats, { navigate: true, onlineGameState });
+      await openPlayingTableIfNeeded(table, seats, { navigate: true, onlineGameState, forceOpen: forceNewGame });
       return onlineGameState;
     } catch (error) {
       markAutoStartFailedTable(tableId);
@@ -2389,6 +2399,10 @@
   const sit = async (tableId = selectedTableId(), seatIndex = undefined) => {
     tableId = requireTableId(tableId, "着席");
     setActiveTableId(tableId);
+    clearRecentlyLeftTable(tableId);
+    state.autoOpenedPlayingTableIds.delete(tableId);
+    clearAutoOpenedTable(tableId);
+    clearLaunchingTable();
     await ensureEnoughClubPointsForSeat(tableId);
     try {
       await clearRemoteUserSeatsExcept(tableId, null).catch((error) => log("着席前の既存席解除に失敗しました。", rawErrorText(error)));
@@ -2409,7 +2423,7 @@
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
       const rows = await loadSeats();
-      await tryAutoStartTableFromSeats(tableId, rows).catch((error) => log("着席後の自動開始確認に失敗しました。", rawErrorText(error)));
+      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((error) => log("着席後の自動開始確認に失敗しました。", rawErrorText(error)));
       const ownSeat = rows.find((seat) => seat.user_id === state.user?.id);
       if (ownSeat) {
         await clearRemoteUserSeatsExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
@@ -2438,6 +2452,7 @@
       enforceOneVisibleSeatForCurrentUser(tableId, target.seat_index);
       renderSeatRows(rows, tableId);
       await loadTables().catch(() => render());
+      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((startError) => log("ローカル着席後の自動開始確認に失敗しました。", rawErrorText(startError)));
     }
   };
   const leave = async (tableId = selectedTableId()) => {
@@ -2960,7 +2975,7 @@
     await waitForGameServerReady();
     clearLaunchingTable();
     const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
-    const endedState = Boolean(lastState?.phase === "gameEnded" || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
+    const endedState = Boolean(lastState?.phase === "gameEnded" || (lastState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(lastState?.phase)) || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
     const gameId = newSocketGameId(tableId);
     if (endedState) await deactivateTableActiveGameState(tableId, "終了済み対局への再参加前").catch(() => {});
     startLocalDebugMahjong(tableId, rows, { game_id: gameId, version: 0, resetRoom: endedState });

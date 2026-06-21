@@ -4544,6 +4544,7 @@ const clearRoomLastHandForUser = (room, userId) => {
 const isWaitingForResultOk = (state) => Boolean(state?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(state.phase));
 const isEndedRoomState = (state) => Boolean(
   state?.phase === "gameEnded" ||
+  (state?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(state?.phase)) ||
   state?.finalResult ||
   state?.handLog?.result?.finalResult ||
   state?.handLog?.result?.type === "gameEnded"
