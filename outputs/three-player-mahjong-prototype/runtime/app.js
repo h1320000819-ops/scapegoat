@@ -354,6 +354,7 @@ const saveSocketDebugStatus = (patch = {}) => {
   return next;
 };
 const ONLINE_DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
+const ONLINE_DEBUG_RECENTLY_LEFT_TABLE_KEY = "anmikaOnlineDebug.recentlyLeftTable";
 const DEFAULT_GAME_SERVER_PORT = 8787;
 const defaultGameServerUrl = () => {
   if (globalThis.location?.protocol === "file:") return `http://127.0.0.1:${DEFAULT_GAME_SERVER_PORT}`;
@@ -536,6 +537,9 @@ const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "")
   const base = value.includes("/online-debug") ? value : onlineDebugLobbyUrl(clubId);
   leftTableId = sourceTableIdFromLocalDebugId(leftTableId);
   if (!leftTableId) return base;
+  try {
+    sessionStorage.setItem(ONLINE_DEBUG_RECENTLY_LEFT_TABLE_KEY, JSON.stringify({ tableId: leftTableId, leftAt: Date.now() }));
+  } catch {}
   try {
     const url = new URL(base, globalThis.location?.href || "http://localhost/");
     if (clubId && !url.searchParams.get("returnClubId")) url.searchParams.set("returnClubId", clubId);

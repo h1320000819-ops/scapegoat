@@ -30,6 +30,7 @@
   const DEBUG_LAUNCHING_TABLE_KEY = "anmikaOnlineDebug.launchingTable";
   const DEBUG_AUTO_OPENED_TABLES_KEY = "anmikaOnlineDebug.autoOpenedTables";
   const DEBUG_AUTO_START_FAILED_TABLES_KEY = "anmikaOnlineDebug.autoStartFailedTables";
+  const DEBUG_RECENTLY_LEFT_TABLE_KEY = "anmikaOnlineDebug.recentlyLeftTable";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
@@ -39,6 +40,9 @@
   const GAME_AUTO_REFRESH_MS = 2500;
 
   const initialParams = new URLSearchParams(location.search);
+  const initialRecentlyLeft = (() => {
+    try { return JSON.parse(sessionStorage.getItem(DEBUG_RECENTLY_LEFT_TABLE_KEY) || "null") || {}; } catch { return {}; }
+  })();
   const initialReturnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "";
   const initialSettingsPage = initialParams.get("settings") || "";
   const shouldOpenTableListOnBoot = Boolean(initialReturnClubId || initialParams.get("leftTableId"));
@@ -62,8 +66,8 @@
     gameServerProbe: { status: "未確認", lastError: "", checkedAt: "" },
     activeClubId: initialReturnClubId,
     activeTableId: initialParams.get("tableId") || sessionStorage.getItem("anmikaOnlineDebugActiveTableId") || "",
-    recentlyLeftTableId: initialParams.get("leftTableId") || "",
-    recentlyLeftAt: Number(initialParams.get("leftAt") || 0),
+    recentlyLeftTableId: initialParams.get("leftTableId") || initialRecentlyLeft.tableId || "",
+    recentlyLeftAt: Number(initialParams.get("leftAt") || initialRecentlyLeft.leftAt || 0),
     searchedClub: null,
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
@@ -304,12 +308,32 @@
     if (isRecentlyLeftTable(state.recentlyLeftTableId)) return;
     state.recentlyLeftTableId = "";
     state.recentlyLeftAt = 0;
+    sessionStorage.removeItem(DEBUG_RECENTLY_LEFT_TABLE_KEY);
   };
   const clearRecentlyLeftTable = (tableId = "") => {
     if (!state.recentlyLeftTableId) return;
     if (tableId && String(state.recentlyLeftTableId) !== String(tableId)) return;
     state.recentlyLeftTableId = "";
     state.recentlyLeftAt = 0;
+    sessionStorage.removeItem(DEBUG_RECENTLY_LEFT_TABLE_KEY);
+  };
+  const markRecentlyLeftTable = (tableId, leftAt = Date.now()) => {
+    tableId = normalizeRemoteTableId(tableId);
+    if (!tableId) return;
+    state.recentlyLeftTableId = tableId;
+    state.recentlyLeftAt = Number(leftAt || Date.now());
+    try {
+      sessionStorage.setItem(DEBUG_RECENTLY_LEFT_TABLE_KEY, JSON.stringify({ tableId, leftAt: state.recentlyLeftAt }));
+    } catch {}
+  };
+  const maskRecentlyLeftTable = (table) => {
+    if (!table?.table_id || !isRecentlyLeftTable(table.table_id)) return table;
+    const tableSeats = Array.isArray(table.table_seats)
+      ? table.table_seats.map((seat) => seat?.user_id === state.user?.id
+        ? { ...seat, user_id: null, player_type: "empty", display_name: null, is_last_hand_declared: false }
+        : { ...seat, is_last_hand_declared: false })
+      : table.table_seats;
+    return { ...table, status: "waiting", table_seats: tableSeats };
   };
   const emptySeatRows = (tableId) =>
     [0, 1, 2].map((seatIndex) => ({
@@ -849,8 +873,12 @@
     }
     state.recentlyLeftTableId = tableId;
     console.log("[LastHand] settle recently left table", { tableId, userId: state.user.id });
+    markRecentlyLeftTable(tableId, state.recentlyLeftAt || Date.now());
     clearLocalUserSeatsForTable(tableId, state.user.id);
     state.autoOpenedPlayingTableIds.delete(tableId);
+    clearAutoOpenedTable(tableId);
+    clearAutoStartFailedTable(tableId);
+    clearLaunchingTable();
     state.autoStartingTableIds.delete(tableId);
     state.onlineGameOpened = false;
     state.activeGameState = null;
@@ -2058,8 +2086,10 @@
     if (!ENABLE_AUTO_TABLE_START) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
+    clearRecentlyLeftTableIfExpired();
     for (const table of state.tables || []) {
       if (!table?.table_id || table.status === "ended") continue;
+      if (isRecentlyLeftTable(table.table_id)) continue;
       const seats = visibleTableSeats(table);
       if (filledSeatCount(seats) < 3) continue;
       await tryAutoStartTableFromSeats(table.table_id, seats).catch((error) => log("対局画面の自動表示に失敗しました。", rawErrorText(error)));
@@ -2073,8 +2103,10 @@
     state.autoStartRenderScheduled = true;
     window.setTimeout(async () => {
       state.autoStartRenderScheduled = false;
+      clearRecentlyLeftTableIfExpired();
       for (const table of state.tables || []) {
         if (!table?.table_id || table.status === "ended") continue;
+        if (isRecentlyLeftTable(table.table_id)) continue;
         const seats = visibleTableSeats(table);
         if (filledSeatCount(seats) < 3) continue;
         console.log("[AutoStart] visible table filled", { tableId: table.table_id, seats });
@@ -2154,8 +2186,13 @@
     }
   };
   const reconcileTablePlayingStatuses = async () => {
+    clearRecentlyLeftTableIfExpired();
     for (const table of state.tables || []) {
       if (!table?.table_id || table.status === "ended") continue;
+      if (isRecentlyLeftTable(table.table_id)) {
+        state.tables = state.tables.map((item) => item.table_id === table.table_id ? maskRecentlyLeftTable(item) : item);
+        continue;
+      }
       await syncTablePlayingStatus(table.table_id).catch((error) =>
         log("卓状態の自動同期に失敗しました。", rawErrorText(error))
       );
@@ -2223,6 +2260,8 @@
       if (!raw.includes("shared_list_tables_for_club") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
       state.tables = await rest("/tables?select=*,table_seats(*),table_waiting_list(*)&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
     }
+    clearRecentlyLeftTableIfExpired();
+    state.tables = state.tables.map(maskRecentlyLeftTable);
     enforceOneVisibleSeatForCurrentUser();
     render();
     if (withPostRefresh) runTablePostRefresh("loadTables");
