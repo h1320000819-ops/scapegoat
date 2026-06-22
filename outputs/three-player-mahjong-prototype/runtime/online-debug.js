@@ -2238,6 +2238,14 @@
       await tryAutoStartTableFromSeats(table.table_id, seats).catch((error) => log("対局画面の自動表示に失敗しました。", rawErrorText(error)));
     }
   };
+  const queueAutoStartCheckForTable = (tableId, seats = null, reason = "auto", options = {}) => {
+    if (!ENABLE_AUTO_TABLE_START || !tableId) return;
+    window.setTimeout(() => {
+      tryAutoStartTableFromSeats(tableId, seats, options).catch((error) => {
+        log(`${reason}後の自動対局開始確認に失敗しました。`, rawErrorText(error));
+      });
+    }, 0);
+  };
   const scheduleAutoStartFromVisibleTables = () => {
     if (!ENABLE_AUTO_TABLE_START) return;
     if (isAutoStartBlocked()) return;
@@ -2518,6 +2526,7 @@
       const normalizedFromDb = normalizeSeats(rows, tableId);
       renderSeatRows(normalizedFromDb, tableId);
       saveLocalSeats(tableId, normalizedFromDb);
+      queueAutoStartCheckForTable(tableId, normalizedFromDb, "席取得");
       renderDebug();
       return normalizedFromDb;
     } catch (error) {
@@ -2671,7 +2680,7 @@
       }
       await loadTables();
       const rows = await loadSeats();
-      await tryAutoStartTableFromSeats(tableId, rows).catch((error) => log("CPU追加後の自動開始確認に失敗しました。", rawErrorText(error)));
+      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((error) => log("CPU追加後の自動開始確認に失敗しました。", rawErrorText(error)));
       return;
     } catch (error) {
       log("DBのCPU追加に失敗したため、ローカルデバッグCPUを追加しました。", rawErrorText(error));
@@ -2684,6 +2693,7 @@
       target.display_name = `CPU${cpuNumber}`;
       saveLocalSeats(tableId, rows);
       renderSeatRows(rows, tableId);
+      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((startError) => log("ローカルCPU追加後の自動開始確認に失敗しました。", rawErrorText(startError)));
       render();
     }
   };
