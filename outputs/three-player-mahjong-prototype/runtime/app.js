@@ -4982,7 +4982,8 @@ class GameController {
     const sync = loadOnlineSync();
     const activeTableId = this.state.activeTableId || sync?.localTableId || sync?.tableId || "";
     const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
-    const returnUrl = onlineLoadingReturnUrl();
+    const clubId = localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "";
+    const returnUrl = normalizeOnlineDebugReturnUrl(sync?.returnUrl || onlineDebugLobbyUrl(clubId), clubId, sync?.tableId || activeTableId);
     this.clearSocketStartupResyncTimers();
     this.stopAllClocks();
     this.state.pendingAction = null;
@@ -6658,13 +6659,14 @@ class GameView {
   }
   settingsPanel(state) {
     const rake = state.settings?.rakePercent ?? 0;
-    const showDebugLeave = isTsumoLossless3maState(state) && (state.activeTableId || loadOnlineSync()?.tableId);
+    const sync = loadOnlineSync();
+    const showDebugLeave = Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     return `<aside class="settings-panel">
       <h2>設定</h2>
       <label class="setting-row"><span>レーキ: ${rake}%</span><input type="range" min="0" max="20" step="0.5" value="${rake}" data-rake-percent /></label>
       <label class="setting-row"><span>初期持ち時間</span><input type="number" min="1" max="120" step="1" value="${Math.round((state.settings?.initialClockMs ?? INITIAL_TIME_MS) / 1000)}" data-clock-seconds /> 秒</label>
       <p>累積レーキ: ${state.rakePool ?? 0}点</p>
-      ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>デバッグ退席</button>` : ""}
+      ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
   }
   finalResult(state) {
@@ -6701,6 +6703,7 @@ class GameView {
     });
     if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
     return `<section class="score-result result-modal"><h2>最終結果</h2>
+      ${isSocketAuthoritativeGame() ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
       <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${Number(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
@@ -6823,7 +6826,10 @@ class GameView {
     const result = state.handLog.result;
     if (!result) return "";
     const content = result.type === "exhaustiveDraw" ? this.exhaustiveDrawResult(state, result) : this.scoreBreakdown(result.scoreResult, state);
-    return `<div class="result-backdrop">${content}</div>`;
+    const forceLeave = isSocketAuthoritativeGame()
+      ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>`
+      : "";
+    return `<div class="result-backdrop">${forceLeave}${content}</div>`;
   }
   paymentRows(state, payments) {
     const paymentMap = Array.isArray(payments) ? Object.fromEntries(payments.map((payment) => [payment.playerId, payment.delta])) : payments ?? {};

@@ -970,6 +970,107 @@
     });
     document.body.dataset.screen = "club-home";
   };
+  const forceLeaveTable = async (tableId = selectedTableId(), reason = "デバッグ強制退席") => {
+    tableId = requireTableId(normalizeRemoteTableId(tableId || state.activeTableId || state.recentlyLeftTableId), reason);
+    const userId = requireUser().id;
+    log(`${reason}を実行します。`, { tableId, userId });
+    markRecentlyLeftTable(tableId);
+    clearLocalUserSeatsForTable(tableId, userId);
+    state.autoOpenedPlayingTableIds.delete(tableId);
+    state.autoStartingTableIds.delete(tableId);
+    clearAutoOpenedTable(tableId);
+    clearAutoStartFailedTable(tableId);
+    clearLaunchingTable();
+    state.onlineGameOpened = false;
+    state.activeGameState = null;
+    state.activeGameEvents = [];
+    if (state.activeTableId === tableId) {
+      state.activeTableId = "";
+      sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+    }
+    if (has("onlineGamePanel")) $("onlineGamePanel").classList.remove("open");
+    document.body.dataset.screen = "club-home";
+    renderOnlineGamePanel();
+    render();
+    await rest("/table_waiting_list?user_id=eq." + encodeURIComponent(userId), {
+      method: "DELETE",
+    }).catch((error) => log("強制退席: ウェイティング解除に失敗しました。", rawErrorText(error)));
+    await rest("/rpc/leave_table_after_last_hand", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId }),
+    }).catch((error) => {
+      const raw = rawErrorText(error);
+      if (!raw.includes("leave_table_after_last_hand") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("強制退席: RPC退席に失敗しました。直接退席へ切り替えます。", raw);
+      }
+    });
+    await rest("/rpc/leave_table", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId }),
+    }).catch((error) => {
+      const raw = rawErrorText(error);
+      if (!raw.includes("leave_table") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("強制退席: 通常退席RPCに失敗しました。直接退席へ切り替えます。", raw);
+      }
+    });
+    const ownSeatRows = await rest(
+      "/table_seats?select=table_id,seat_index&table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(userId)
+    ).catch(() => []);
+    for (const seat of Array.isArray(ownSeatRows) ? ownSeatRows : []) {
+      if (seat?.seat_index === null || seat?.seat_index === undefined) continue;
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&seat_index=eq." + encodeURIComponent(String(seat.seat_index)),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            user_id: null,
+            player_type: "empty",
+            display_name: null,
+            is_last_hand_declared: false,
+          }),
+        }
+      ).catch((error) => log("強制退席: 座席番号指定の退席に失敗しました。", rawErrorText(error)));
+    }
+    await rest(
+      "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(userId),
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        }),
+      }
+    ).catch((error) => log("強制退席: ユーザー指定の退席に失敗しました。", rawErrorText(error)));
+    await rest("/game_states?table_id=eq." + encodeURIComponent(tableId) + "&is_active=eq.true", {
+      method: "PATCH",
+      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
+    }).catch((error) => log("強制退席: 古いGameStateの停止に失敗しました。", rawErrorText(error)));
+    await rest("/games?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.playing", {
+      method: "PATCH",
+      body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
+    }).catch((error) => log("強制退席: 古い対局行の終了に失敗しました。", rawErrorText(error)));
+    await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+      method: "PATCH",
+      body: JSON.stringify({ status: "waiting" }),
+    }).catch((error) => log("強制退席: 卓状態のwaiting化に失敗しました。", rawErrorText(error)));
+    await rest("/rpc/resolve_last_hand_and_waiting_queue", {
+      method: "POST",
+      body: JSON.stringify({ p_table_id: tableId }),
+    }).catch((error) => {
+      const raw = rawErrorText(error);
+      if (!raw.includes("resolve_last_hand_and_waiting_queue") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) {
+        log("強制退席: ウェイティング処理に失敗しました。", raw);
+      }
+    });
+    state.tables = state.tables.map((item) => item.table_id === tableId
+      ? maskRecentlyLeftTable({ ...item, status: "waiting" })
+      : item
+    );
+    render();
+    await loadTables().catch((error) => log("強制退席後の卓一覧更新に失敗しました。", rawErrorText(error)));
+  };
   const CLUB_POINT_FIXED_TOTAL = 10000000;
   const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
   const roundToTenth = (value) => {
@@ -4668,6 +4769,7 @@
           <div class="table-card-actions">
             ${table.status === "playing" ? '<button type="button" data-action="enterGame" class="primary">対局へ入る</button>' : ""}
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
+            <button type="button" data-action="forceLeave" class="danger">強制退席</button>
             <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
             <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
             <button type="button" data-action="deleteTable" class="admin-only danger">卓削除</button>
@@ -4741,6 +4843,11 @@
           uiLog("enter game clicked", { tableId: table.table_id });
           clearError();
           enterPlayingGame(table.table_id).catch((error) => showError("対局参加に失敗しました", error));
+        });
+        card.querySelector('[data-action="forceLeave"]')?.addEventListener("click", () => {
+          uiLog("force leave clicked", { tableId: table.table_id });
+          clearError();
+          forceLeaveTable(table.table_id).catch((error) => showError("強制退席に失敗しました", error));
         });
         card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });

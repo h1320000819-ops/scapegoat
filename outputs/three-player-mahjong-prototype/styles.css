@@ -828,6 +828,25 @@ button:hover {
   background: #d92d20;
 }
 
+.result-debug-force-leave {
+  background: #b42318;
+  border: 1px solid #ffb4ab;
+  border-radius: 8px;
+  color: #fff7f5;
+  font-size: 12px;
+  font-weight: 900;
+  min-height: 30px;
+  padding: 6px 10px;
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  z-index: 36;
+}
+
+.result-debug-force-leave:hover {
+  background: #d92d20;
+}
+
 .rule-choice-group,
 .rule-config-panel {
   background: rgba(0, 0, 0, 0.18);
