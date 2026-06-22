@@ -693,8 +693,8 @@ button:hover {
 }
 
 .discard-right {
-  left: calc(50% + (var(--center-info-width) / 2) + 14px);
-  top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2));
+  left: calc(50% + (var(--center-info-width) / 2) - 36px);
+  top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 8px);
   transform: translateY(-50%) rotate(-90deg);
 }
 
@@ -1291,7 +1291,7 @@ button:hover {
   flex-direction: row;
   gap: 2px;
   position: fixed;
-  right: 10px;
+  right: 90px;
   top: 10px;
   transform: none;
   transform-origin: top right;
@@ -1309,7 +1309,7 @@ button:hover {
 .seat-right .nuki-dora-area {
   position: fixed;
   right: 4px;
-  top: 4px;
+  top: -8px;
   z-index: 28;
 }
 
@@ -2093,8 +2093,8 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) + 14px);
-    top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2));
+    left: calc(50% + (var(--center-info-width) / 2) - 36px);
+    top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 8px);
     transform: translateY(-50%) rotate(-90deg);
     width: var(--river-width);
   }
@@ -2412,9 +2412,9 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) + 14px);
+    left: calc(50% + (var(--center-info-width) / 2) - 20px);
     right: auto;
-    top: calc(40% + (var(--center-info-height) / 2) - (var(--river-width) / 2));
+    top: calc(40% + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 6px);
     transform: translateY(-50%) rotate(-90deg);
   }
 
@@ -2470,7 +2470,7 @@ button:hover {
     align-items: flex-start;
     flex-direction: row;
     gap: 0;
-    right: 6px;
+    right: 52px;
     top: 6px;
     transform: none;
     width: auto;
@@ -2485,7 +2485,7 @@ button:hover {
 
   .seat-right .nuki-dora-area {
     right: 3px;
-    top: 3px;
+    top: -8px;
   }
 
   .seat-right .meld-set {
