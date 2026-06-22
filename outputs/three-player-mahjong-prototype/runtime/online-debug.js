@@ -31,6 +31,7 @@
   const DEBUG_AUTO_OPENED_TABLES_KEY = "anmikaOnlineDebug.autoOpenedTables";
   const DEBUG_AUTO_START_FAILED_TABLES_KEY = "anmikaOnlineDebug.autoStartFailedTables";
   const DEBUG_RECENTLY_LEFT_TABLE_KEY = "anmikaOnlineDebug.recentlyLeftTable";
+  const DEBUG_AUTO_START_BLOCK_KEY = "anmikaOnlineDebug.autoStartBlockedUntil";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
@@ -316,6 +317,7 @@
     state.recentlyLeftTableId = "";
     state.recentlyLeftAt = 0;
     sessionStorage.removeItem(DEBUG_RECENTLY_LEFT_TABLE_KEY);
+    sessionStorage.removeItem(DEBUG_AUTO_START_BLOCK_KEY);
   };
   const markRecentlyLeftTable = (tableId, leftAt = Date.now()) => {
     tableId = normalizeRemoteTableId(tableId);
@@ -324,7 +326,17 @@
     state.recentlyLeftAt = Number(leftAt || Date.now());
     try {
       sessionStorage.setItem(DEBUG_RECENTLY_LEFT_TABLE_KEY, JSON.stringify({ tableId, leftAt: state.recentlyLeftAt }));
+      sessionStorage.setItem(DEBUG_AUTO_START_BLOCK_KEY, String(Date.now() + 10 * 60 * 1000));
     } catch {}
+  };
+  const isAutoStartBlocked = () => {
+    const until = Number(sessionStorage.getItem(DEBUG_AUTO_START_BLOCK_KEY) || 0);
+    if (!until) return false;
+    if (Date.now() > until) {
+      sessionStorage.removeItem(DEBUG_AUTO_START_BLOCK_KEY);
+      return false;
+    }
+    return true;
   };
   const maskRecentlyLeftTable = (table) => {
     if (!table?.table_id || !isRecentlyLeftTable(table.table_id)) return table;
@@ -2047,6 +2059,7 @@
   };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
+    if (!forceNewGame && isAutoStartBlocked()) return null;
     tableId = requireTableId(tableId, "自動対局開始");
     if (!forceNewGame && isLaunchInProgress(tableId)) return null;
     if (!forceNewGame && wasAutoOpenedRecently(tableId)) return null;
@@ -2109,6 +2122,7 @@
   };
   const maybeAutoStartTables = async () => {
     if (!ENABLE_AUTO_TABLE_START) return;
+    if (isAutoStartBlocked()) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     clearRecentlyLeftTableIfExpired();
@@ -2122,6 +2136,7 @@
   };
   const scheduleAutoStartFromVisibleTables = () => {
     if (!ENABLE_AUTO_TABLE_START) return;
+    if (isAutoStartBlocked()) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     if (state.autoStartRenderScheduled) return;
@@ -4745,7 +4760,9 @@
         $("tableCards").append(card);
       }
     });
-    const nextTableId = normalizeRemoteTableId(activeTableId) || urlTableId || getStartableTableId();
+    const nextTableId = isAutoStartBlocked()
+      ? ""
+      : (normalizeRemoteTableId(activeTableId) || urlTableId || getStartableTableId());
     if (nextTableId) setActiveTableId(nextTableId);
     const tableId = selectedTableId();
     $("tableUrl").textContent = tableId ? buildTableShareUrl(tableId) : "なし";

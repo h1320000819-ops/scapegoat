@@ -355,6 +355,7 @@ const saveSocketDebugStatus = (patch = {}) => {
 };
 const ONLINE_DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
 const ONLINE_DEBUG_RECENTLY_LEFT_TABLE_KEY = "anmikaOnlineDebug.recentlyLeftTable";
+const ONLINE_DEBUG_AUTO_START_BLOCK_KEY = "anmikaOnlineDebug.autoStartBlockedUntil";
 const DEFAULT_GAME_SERVER_PORT = 8787;
 const defaultGameServerUrl = () => {
   if (globalThis.location?.protocol === "file:") return `http://127.0.0.1:${DEFAULT_GAME_SERVER_PORT}`;
@@ -516,6 +517,7 @@ const forgetOnlineDebugLaunchCache = (sync, activeTableId = "") => {
   try { forgetLocalOnlineDebugTable(activeTableId); } catch {}
   try { forgetLocalOnlineDebugTable(sync?.localTableId); } catch {}
   try { sessionStorage.removeItem("anmikaOnlineDebug.launchingTable"); } catch {}
+  try { globalThis.anmikaGameSocket?.disconnect?.(); } catch {}
 };
 const onlineDebugLobbyUrl = (clubId = "") => {
   const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
@@ -544,6 +546,7 @@ const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "")
   if (!leftTableId) return base;
   try {
     sessionStorage.setItem(ONLINE_DEBUG_RECENTLY_LEFT_TABLE_KEY, JSON.stringify({ tableId: leftTableId, leftAt: Date.now() }));
+    sessionStorage.setItem(ONLINE_DEBUG_AUTO_START_BLOCK_KEY, String(Date.now() + 10 * 60 * 1000));
   } catch {}
   try {
     const url = new URL(base, globalThis.location?.href || "http://localhost/");
