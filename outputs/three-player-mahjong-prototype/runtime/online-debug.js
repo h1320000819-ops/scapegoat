@@ -423,10 +423,13 @@
   };
   const filledSeatCount = (rows) => rows.filter((seat) => seat.user_id || seat.player_type === "cpu").length;
   const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
-  const visibleTableSeats = (table) => normalizeSeats(
-    table?.table_seats || table?.seats || table?.tableSeats || state.localSeatsByTable[localSeatKey(table?.table_id)] || [],
-    table?.table_id
-  );
+  const visibleTableSeats = (table) => {
+    const visibleTable = maskRecentlyLeftTable(table);
+    return normalizeSeats(
+      visibleTable?.table_seats || visibleTable?.seats || visibleTable?.tableSeats || state.localSeatsByTable[localSeatKey(visibleTable?.table_id)] || [],
+      visibleTable?.table_id
+    );
+  };
   const enforceOneVisibleSeatForCurrentUser = (preferredTableId = state.activeTableId, preferredSeatIndex = null) => {
     if (!state.user?.id || !Array.isArray(state.tables)) return;
     const userId = state.user.id;
@@ -4445,6 +4448,15 @@
     try {
       await loadTables();
       const tableId = selectedTableId();
+      if (tableId && isRecentlyLeftTable(tableId)) {
+        state.activeTableId = "";
+        state.activeGameState = null;
+        state.activeGameEvents = [];
+        state.onlineGameOpened = false;
+        sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+        renderOnlineGamePanel();
+        return;
+      }
       if (tableId && state.onlineGameOpened) {
         await loadSeats().catch((error) => log(`席の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
         await loadActiveGameState(tableId).catch((error) => log(`対局状態の自動更新に失敗しました。(${reason})`, rawErrorText(error)));
@@ -4481,6 +4493,16 @@
     }, LOBBY_AUTO_REFRESH_MS);
   };
   const render = () => {
+    clearRecentlyLeftTableIfExpired();
+    if (state.activeTableId && isRecentlyLeftTable(state.activeTableId)) {
+      clearLocalUserSeatsForTable(state.activeTableId);
+      state.activeTableId = "";
+      state.activeGameState = null;
+      state.activeGameEvents = [];
+      state.onlineGameOpened = false;
+      sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
+      if (has("onlineGamePanel")) $("onlineGamePanel").classList.remove("open");
+    }
     const activeClubId = selectedClubId();
     const activeTableId = state.activeTableId || selectedTableId();
     $("currentUser").textContent = state.user ? `${state.user.displayName} / ${state.user.loginId || state.user.id}` : "未ログイン";
@@ -4583,7 +4605,8 @@
       option.textContent = `URL指定卓 (${urlTableId})`;
       $("tableSelect").append(option);
     }
-    state.tables.forEach((table) => {
+    state.tables.forEach((rawTable) => {
+      const table = maskRecentlyLeftTable(rawTable);
       const option = document.createElement("option");
       option.value = table.table_id;
       option.textContent = `${table.name} (${table.status})`;
