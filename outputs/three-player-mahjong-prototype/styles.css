@@ -688,12 +688,12 @@ button:hover {
 
 .discard-top {
   left: calc(50% + (var(--center-info-width) / 2) - (var(--river-width) / 2));
-  top: calc(50% + var(--center-y-offset) - (var(--center-info-height) / 2));
+  top: calc(50% + var(--center-y-offset) - (var(--center-info-height) / 2) - var(--river-height));
   transform: translateX(-50%) rotate(180deg);
 }
 
 .discard-right {
-  left: calc(50% - (var(--center-info-width) / 2));
+  left: calc(50% + (var(--center-info-width) / 2) + (var(--river-height) / 2));
   top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2));
   transform: translateY(-50%) rotate(-90deg);
 }
@@ -1306,11 +1306,19 @@ button:hover {
   flex-direction: column;
 }
 
+.seat-right .nuki-dora-area {
+  position: fixed;
+  right: 4px;
+  top: 4px;
+  z-index: 28;
+}
+
 .seat-right .nuki-dora-area .exposed-tiles,
 .seat-right .meld-area .exposed-tiles {
   align-items: flex-start;
   flex-direction: row;
   flex-wrap: nowrap;
+  gap: 5px;
   justify-content: flex-start;
 }
 
@@ -2085,7 +2093,7 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% - (var(--center-info-width) / 2));
+    left: calc(50% + (var(--center-info-width) / 2) + (var(--river-height) / 2));
     top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2));
     transform: translateY(-50%) rotate(-90deg);
     width: var(--river-width);
@@ -2399,12 +2407,12 @@ button:hover {
 
   .discard-top {
     left: calc(50% + (var(--center-info-width) / 2) - (var(--river-width) / 2));
-    top: calc(40% - (var(--center-info-height) / 2));
+    top: calc(40% - (var(--center-info-height) / 2) - var(--river-height));
     transform: translateX(-50%) rotate(180deg);
   }
 
   .discard-right {
-    left: calc(50% - (var(--center-info-width) / 2));
+    left: calc(50% + (var(--center-info-width) / 2) + (var(--river-height) / 2));
     right: auto;
     top: calc(40% + (var(--center-info-height) / 2) - (var(--river-width) / 2));
     transform: translateY(-50%) rotate(-90deg);
@@ -2475,6 +2483,11 @@ button:hover {
     margin-bottom: 1px;
   }
 
+  .seat-right .nuki-dora-area {
+    right: 3px;
+    top: 3px;
+  }
+
   .seat-right .meld-set {
     gap: 0;
     margin-right: 0;
@@ -2493,7 +2506,7 @@ button:hover {
     align-items: flex-start;
     flex-direction: column;
     flex-wrap: nowrap;
-    gap: 0;
+    gap: 4px;
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
