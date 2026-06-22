@@ -818,6 +818,46 @@ const loadPersistedRoom = (tableId, expectedGameId = "") => {
   return null;
 };
 
+const deleteLocalPersistedRoom = (tableId) => {
+  const filePaths = [
+    roomStorePath(tableId),
+    roomBackupStorePath(tableId),
+    roomTempStorePath(tableId),
+    roomReplayStorePath(tableId),
+    roomReplayBackupStorePath(tableId),
+    roomReplayTempStorePath(tableId),
+  ];
+  for (const filePath of filePaths) {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (error) {
+      console.warn("[AnmikaGameServer] persisted room delete failed", { tableId, file: filePath, error: error?.message || String(error) });
+    }
+  }
+};
+
+const deletePersistedRoomFromDb = async (tableId) => {
+  if (!ROOM_DB_PERSIST_ENABLED || !hasSupabaseServerWriter() || !tableId) return false;
+  try {
+    await supabaseRest(`/online_game_rooms?table_id=eq.${encodeURIComponent(String(tableId))}`, {
+      method: "DELETE",
+      prefer: "return=minimal",
+    });
+    return true;
+  } catch (error) {
+    console.warn("[AnmikaGameServer] DB persisted room delete failed", { tableId, error: error?.message || String(error) });
+    return false;
+  }
+};
+
+const deletePersistedRoom = (tableId, reason = "resetRoom") => {
+  if (!tableId) return;
+  deleteLocalPersistedRoom(tableId);
+  deletePersistedRoomFromDb(tableId).catch((error) => {
+    console.warn("[AnmikaGameServer] async DB persisted room delete failed", { tableId, reason, error: error?.message || String(error) });
+  });
+};
+
 const roomDbPersistWarnings = new Set();
 const roomDbLoadWarnings = new Set();
 const roomFromPersistedPayload = (parsed, tableId) => {
@@ -4408,9 +4448,13 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     if (room.localPersistTimer) clearTimeout(room.localPersistTimer);
     room = null;
     gameRooms.delete(key);
+    deletePersistedRoom(key, "reset existing memory room");
+  }
+  if (!room && resetRoom) {
+    deletePersistedRoom(key, "reset without memory room");
   }
   if (!room) {
-    room = loadPersistedRoom(key, gameId || "");
+    room = resetRoom ? null : loadPersistedRoom(key, gameId || "");
     if (room && resetRoom) {
       console.log("[AnmikaGameServer] ignore persisted room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
       room = null;
@@ -4427,14 +4471,15 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
       gameId: gameId || `game-${key}`,
       version: 0,
       state: null,
-    events: [],
-    sockets: new Map(),
-    players: new Map(),
-    processedRequestIds: new Set(),
-    disconnectedLeaveSyncedUserIds: new Set(),
-    lastHandLeaveSyncedUserIds: new Set(),
-    updatedAt: now(),
-  };
+      skipDbHydration: Boolean(resetRoom),
+      events: [],
+      sockets: new Map(),
+      players: new Map(),
+      processedRequestIds: new Set(),
+      disconnectedLeaveSyncedUserIds: new Set(),
+      lastHandLeaveSyncedUserIds: new Set(),
+      updatedAt: now(),
+    };
     gameRooms.set(key, room);
   }
   if (gameId && !room.gameId) room.gameId = gameId;
@@ -4451,6 +4496,10 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
 };
 const hydrateRoomFromDbIfNeeded = async (room) => {
   if (!room || room.state) return room;
+  if (room.skipDbHydration) {
+    console.log("[AnmikaGameServer] skip DB room hydration after reset request", { tableId: room.tableId, gameId: room.gameId });
+    return room;
+  }
   const persisted = await loadPersistedRoomFromDb(room.tableId, room.gameId || "");
   if (!persisted?.state) {
     console.warn("[AnmikaGameServer] no DB persisted room found", {

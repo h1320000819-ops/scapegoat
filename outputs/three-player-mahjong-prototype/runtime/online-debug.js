@@ -1124,7 +1124,10 @@
     renderDebug("GameState同期済み");
     return state.activeGameState;
   };
-  const newSocketGameId = (tableId) => `socket-game-${tableId}`;
+  const newSocketGameId = (tableId, { fresh = false } = {}) => {
+    const base = `socket-game-${tableId}`;
+    return fresh ? `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : base;
+  };
   const deactivateTableActiveGameState = async (tableId, reason = "新規対局開始") => {
     tableId = normalizeRemoteTableId(tableId);
     if (!tableId || !state.accessToken) return;
@@ -2198,7 +2201,7 @@
     state.autoStartingTableIds.add(tableId);
     try {
       await deactivateTableActiveGameState(tableId, "自動新規対局開始前").catch(() => {});
-      const onlineGameState = { game_id: newSocketGameId(tableId), version: 0, resetRoom: true };
+      const onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
       table.status = "playing";
       table.is_debug = isDebugTable;
       table.table_seats = seats;
@@ -3105,7 +3108,7 @@
     await clearOwnLastHandFlag(tableId).catch((error) => log("新規対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
     let rows = [];
     await deactivateTableActiveGameState(tableId, "デバッグ新規対局開始前").catch(() => {});
-    let onlineGameState = { game_id: newSocketGameId(tableId), version: 0, resetRoom: true };
+    let onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
     try {
       await rest("/rpc/shared_start_debug_table_game", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
       log("DBの対局開始RPCを実行しました。", { tableId });
@@ -3156,7 +3159,7 @@
     clearLaunchingTable();
     const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
     const endedState = Boolean(lastState?.phase === "gameEnded" || (lastState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(lastState?.phase)) || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
-    const gameId = newSocketGameId(tableId);
+    const gameId = endedState ? newSocketGameId(tableId, { fresh: true }) : newSocketGameId(tableId);
     if (endedState) await deactivateTableActiveGameState(tableId, "終了済み対局への再参加前").catch(() => {});
     startLocalDebugMahjong(tableId, rows, { game_id: gameId, version: 0, resetRoom: endedState });
   };
