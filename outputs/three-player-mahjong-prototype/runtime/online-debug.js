@@ -2173,6 +2173,17 @@
     });
     return Array.isArray(rows) && rows.length > 0;
   };
+  const forceMarkTablePlaying = async (tableId) => {
+    const rows = await rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ status: "playing" }),
+    }).catch((error) => {
+      log("卓ステータスの自動補正に失敗しました。", rawErrorText(error));
+      return null;
+    });
+    return Array.isArray(rows) ? rows[0] : null;
+  };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
     tableId = requireTableId(tableId, "自動対局開始");
@@ -2222,6 +2233,27 @@
           latestTable.table_seats = latestTable.table_seats || seats;
           state.tables = state.tables.map((item) => item.table_id === tableId ? { ...item, ...latestTable } : item);
           await openPlayingTableIfNeeded(latestTable, normalizeSeats(latestTable.table_seats || seats, tableId), { navigate: true, forceOpen: forceNewGame });
+          return state.activeGameState;
+        }
+        const correctedTable = await forceMarkTablePlaying(tableId);
+        if (correctedTable?.table_id || currentUserSeated) {
+          const fallbackTable = {
+            ...table,
+            ...(latestTable || {}),
+            ...(correctedTable || {}),
+            table_id: tableId,
+            status: "playing",
+            table_seats: normalizeSeats(latestTable?.table_seats || correctedTable?.table_seats || seats, tableId),
+          };
+          await deactivateTableActiveGameState(tableId, "自動新規対局開始前").catch(() => {});
+          const onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
+          fallbackTable.is_debug = isDebugTable;
+          clearAutoStartFailedTable(tableId);
+          clearLocalUserLastHandFlagForTable(tableId);
+          clearOwnLastHandFlag(tableId).catch((error) => log("自動対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
+          log("3席が埋まったため、卓ステータスを補正して対局を自動開始しました。", { tableId });
+          await openPlayingTableIfNeeded(fallbackTable, fallbackTable.table_seats, { navigate: true, onlineGameState, forceOpen: true });
+          return onlineGameState;
         }
         return state.activeGameState;
       }
@@ -2260,11 +2292,14 @@
   };
   const queueAutoStartCheckForTable = (tableId, seats = null, reason = "auto", options = {}) => {
     if (!ENABLE_AUTO_TABLE_START || !tableId) return;
-    window.setTimeout(() => {
-      tryAutoStartTableFromSeats(tableId, seats, options).catch((error) => {
-        log(`${reason}後の自動対局開始確認に失敗しました。`, rawErrorText(error));
-      });
-    }, 0);
+    [0, 700, 1800].forEach((delay, index) => {
+      window.setTimeout(() => {
+        const latestSeats = index === 0 ? seats : null;
+        tryAutoStartTableFromSeats(tableId, latestSeats, options).catch((error) => {
+          log(`${reason}後の自動対局開始確認に失敗しました。`, rawErrorText(error));
+        });
+      }, delay);
+    });
   };
   const scheduleAutoStartFromVisibleTables = () => {
     if (!ENABLE_AUTO_TABLE_START) return;
@@ -2634,7 +2669,7 @@
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
       const rows = await loadSeats();
-      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((error) => log("着席後の自動開始確認に失敗しました。", rawErrorText(error)));
+      queueAutoStartCheckForTable(tableId, rows, "着席", { forceNewGame: true });
       const ownSeat = rows.find((seat) => seat.user_id === state.user?.id);
       if (ownSeat) {
         await clearRemoteUserSeatsExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
@@ -2663,7 +2698,7 @@
       enforceOneVisibleSeatForCurrentUser(tableId, target.seat_index);
       renderSeatRows(rows, tableId);
       await loadTables().catch(() => render());
-      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((startError) => log("ローカル着席後の自動開始確認に失敗しました。", rawErrorText(startError)));
+      queueAutoStartCheckForTable(tableId, rows, "ローカル着席", { forceNewGame: true });
     }
   };
   const leave = async (tableId = selectedTableId()) => {
@@ -2699,7 +2734,7 @@
       }
       await loadTables();
       const rows = await loadSeats();
-      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((error) => log("CPU追加後の自動開始確認に失敗しました。", rawErrorText(error)));
+      queueAutoStartCheckForTable(tableId, rows, "CPU追加", { forceNewGame: true });
       return;
     } catch (error) {
       log("DBのCPU追加に失敗したため、ローカルデバッグCPUを追加しました。", rawErrorText(error));
@@ -2712,7 +2747,7 @@
       target.display_name = `CPU${cpuNumber}`;
       saveLocalSeats(tableId, rows);
       renderSeatRows(rows, tableId);
-      await tryAutoStartTableFromSeats(tableId, rows, { forceNewGame: true }).catch((startError) => log("ローカルCPU追加後の自動開始確認に失敗しました。", rawErrorText(startError)));
+      queueAutoStartCheckForTable(tableId, rows, "ローカルCPU追加", { forceNewGame: true });
       render();
     }
   };

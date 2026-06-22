@@ -682,7 +682,7 @@ button:hover {
 
 .discard-bottom {
   left: calc(50% + 36px);
-  top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) + var(--river-center-gap));
+  top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) + var(--river-center-gap) + 6px);
   transform: translateX(-50%) rotate(0deg);
 }
 
@@ -693,7 +693,7 @@ button:hover {
 }
 
 .discard-right {
-  left: calc(50% + (var(--center-info-width) / 2) - 76px);
+  left: calc(50% + (var(--center-info-width) / 2) - 68px);
   top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 8px);
   transform: translateY(-50%) rotate(-90deg);
 }
@@ -2093,7 +2093,7 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) - 76px);
+    left: calc(50% + (var(--center-info-width) / 2) - 68px);
     top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 8px);
     transform: translateY(-50%) rotate(-90deg);
     width: var(--river-width);
@@ -2401,7 +2401,7 @@ button:hover {
 
   .discard-bottom {
     left: calc(50% + var(--discard-tile-width));
-    top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap));
+    top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap) + 4px);
     transform: translateX(-50%) rotate(0deg);
   }
 
@@ -2412,7 +2412,7 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) - 44px);
+    left: calc(50% + (var(--center-info-width) / 2) - 36px);
     right: auto;
     top: calc(40% + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 6px);
     transform: translateY(-50%) rotate(-90deg);
