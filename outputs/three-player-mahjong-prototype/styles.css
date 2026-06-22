@@ -670,11 +670,12 @@ button:hover {
   background: rgba(5, 13, 22, 0.2);
   border-radius: 8px;
   height: var(--river-height);
+  overflow: visible;
   padding: 4px;
   position: absolute;
   transform-origin: center center;
   min-width: var(--river-width);
-  width: max-content;
+  width: var(--river-width);
   z-index: 7;
 }
 
@@ -697,7 +698,7 @@ button:hover {
 }
 
 .discard-grid {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
   flex-direction: column;
   gap: var(--discard-gap);
@@ -713,6 +714,7 @@ button:hover {
   justify-content: flex-start;
   min-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5);
   white-space: nowrap;
+  width: max-content;
 }
 
 .discard .tile,
@@ -1757,6 +1759,14 @@ button:hover {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.result-hand-win-nuki-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.score-main-tiles > .result-hand-win-nuki-row {
+  grid-column: 1 / -1;
+}
+
 .allred-hand-win-row {
   grid-column: 1 / -1;
 }
@@ -1774,7 +1784,8 @@ button:hover {
 
 .score-meld-block strong,
 .score-hand-block strong,
-.score-winning-tile strong {
+.score-winning-tile strong,
+.score-nuki-dora-tile strong {
   display: block;
 }
 
@@ -1908,8 +1919,15 @@ button:hover {
   overflow: visible;
 }
 
+.result-nuki-dora-tiles {
+  flex-wrap: nowrap;
+  justify-content: center;
+  overflow: visible;
+}
+
 .allred-score-result .result-hand-line,
-.allred-score-result .result-winning-tile {
+.allred-score-result .result-winning-tile,
+.allred-score-result .result-nuki-dora-tiles {
   flex-wrap: nowrap;
 }
 
@@ -2279,7 +2297,7 @@ button:hover {
     height: var(--river-height);
     padding: 2px;
     min-width: var(--river-width);
-    width: max-content;
+    width: var(--river-width);
   }
 
   .discard-grid {
@@ -2557,6 +2575,10 @@ button:hover {
     justify-content: start;
   }
 
+  .result-hand-win-nuki-row {
+    grid-template-columns: minmax(0, max-content) max-content max-content;
+  }
+
   .score-hand-and-melds {
     align-items: start;
     gap: 2px;
@@ -2567,7 +2589,8 @@ button:hover {
     max-width: 92px;
   }
 
-  .score-winning-tile {
+  .score-winning-tile,
+  .score-nuki-dora-tile {
     min-width: 18px;
   }
 
@@ -2578,7 +2601,8 @@ button:hover {
 
   .score-meld-block strong,
   .score-hand-block strong,
-  .score-winning-tile strong {
+  .score-winning-tile strong,
+  .score-nuki-dora-tile strong {
     font-size: 8px;
     line-height: 1;
   }

@@ -45,7 +45,7 @@
     try { return JSON.parse(sessionStorage.getItem(DEBUG_RECENTLY_LEFT_TABLE_KEY) || "null") || {}; } catch { return {}; }
   })();
   const initialReturnClubId = initialParams.get("returnClubId") || localStorage.getItem(DEBUG_RETURN_CLUB_KEY) || sessionStorage.getItem("anmikaOnlineDebugActiveClubId") || "";
-  const initialSettingsPage = initialParams.get("settings") || "";
+  const initialSettingsPage = initialParams.get("settings") || initialParams.get("open") || "";
   const shouldOpenTableListOnBoot = Boolean(initialReturnClubId || initialParams.get("leftTableId"));
   const state = {
     accessToken: localStorage.getItem("anmikaAccessToken") || "",
@@ -4033,9 +4033,9 @@
       } catch (error) {
         const raw = rawErrorText(error);
         if (!raw.includes("get_my_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
-        rows = await rest("/replays?select=replay_id,club_id,table_id,game_id,summary,created_at&order=created_at.desc&limit=100");
+        rows = await rest("/replays?select=replay_id,club_id,table_id,game_id,summary,created_at&order=created_at.desc&limit=300");
       }
-      rows = asArray(rows).slice(0, 100);
+      rows = asArray(rows).slice(0, 300);
       if (!rows.length) {
         body.innerHTML = `
           <p class="muted">牌譜はまだありません。</p>
@@ -4043,7 +4043,7 @@
         `;
         return;
       }
-      body.innerHTML = `<p class="muted">クラブに関係なく、このアカウントで取得できる直近100本を表示しています。</p>` + rows
+      body.innerHTML = `<p class="muted">クラブに関係なく、このアカウントで取得できる直近300本を表示しています。</p>` + rows
         .map((row) => {
           const replayId = row.replay_id || row.id;
           const summary = row.summary || {};

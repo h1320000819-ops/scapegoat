@@ -15,6 +15,7 @@ const installResultOkClickBridge = () => {
     const resultOk = event.target?.closest?.("[data-result-ok]");
     if (!resultOk) return;
     event.preventDefault();
+    event.stopImmediatePropagation?.();
     event.stopPropagation();
     const controller = globalThis.__anmikaController || (typeof window !== "undefined" ? window.__anmikaController : null);
     controller?.handleResultOk?.({ resultId: resultOk.dataset?.resultId || "" });
@@ -529,13 +530,16 @@ const onlineDebugReplayListUrl = (clubId = "") => {
   try {
     const url = new URL(base, globalThis.location?.href || "http://localhost/");
     url.searchParams.set("settings", "replays");
+    url.searchParams.set("open", "replays");
     return url.href;
   } catch {
-    return `${base}${base.includes("?") ? "&" : "?"}settings=replays`;
+    return `${base}${base.includes("?") ? "&" : "?"}settings=replays&open=replays`;
   }
 };
 const goToOnlineDebugLobby = (clubId = "", replace = false) => {
-  const target = onlineDebugLobbyUrl(clubId);
+  const currentState = globalThis.__anmikaController?.getState?.();
+  const shouldOpenReplayList = Boolean(currentState?.screen === "replayViewer" || currentState?.selectedReplayId || globalThis.location?.pathname?.includes("/replay"));
+  const target = shouldOpenReplayList ? onlineDebugReplayListUrl(clubId) : onlineDebugLobbyUrl(clubId);
   if (replace) globalThis.location?.replace?.(target);
   else if (globalThis.location) globalThis.location.href = target;
 };
@@ -1005,7 +1009,7 @@ const saveClubs = (clubs) => safeWriteJson(APP_STORAGE_KEYS.clubs, clubs.map(nor
 const loadReplays = () => safeReadJson(APP_STORAGE_KEYS.replays, []);
 const saveReplays = (replays) => {
   if (safeWriteJson(APP_STORAGE_KEYS.replays, replays)) return true;
-  for (const limit of [100, 50, 20, 10, 5, 1]) {
+  for (const limit of [300, 200, 100, 50, 20, 10, 5, 1]) {
     if (safeWriteJson(APP_STORAGE_KEYS.replays, replays.slice(0, limit))) return true;
   }
   return false;
@@ -1149,7 +1153,7 @@ const replayRepository = {
   saveReplay: (replay) => {
     const replays = loadReplays();
     const snapshotLimits = [120, 80, 40, 20, 8, 2, 1];
-    const replayLimits = [200, 100, 50, 20, 10, 5, 1];
+    const replayLimits = [300, 200, 100, 50, 20, 10, 5, 1];
     for (const snapshotLimit of snapshotLimits) {
       const compactReplay = compactReplayForStorage(replay, snapshotLimit);
       const compactOld = replays.filter((item) => item.replayId !== replay.replayId).map((item) => compactReplayForStorage(item, snapshotLimit));
@@ -1196,7 +1200,7 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const filters = [
     "select=replay_id,club_id,table_id,game_id,summary,initial_state,events,snapshots,created_at",
     "order=created_at.desc",
-    `limit=${replayId ? 1 : 100}`,
+    `limit=${replayId ? 1 : 300}`,
   ];
   if (clubId) filters.push(`club_id=eq.${encodeURIComponent(clubId)}`);
   if (replayId) filters.push(`replay_id=eq.${encodeURIComponent(replayId)}`);
@@ -2080,6 +2084,19 @@ const roundClubPointCreditInClubFavor = (value) => {
   if (!Number.isFinite(numeric)) return 0;
   return numeric >= 0 ? ceilToTenth(numeric) : floorToTenth(numeric);
 };
+const hasLiveWallAfterCurrentDraw = (state) => (state?.liveWall?.length ?? 0) > 0;
+const canDeclareKanNow = (state) =>
+  Number(state?.kanCount || 0) < 4 &&
+  (state?.rinshanWall?.length ?? 0) > 0 &&
+  hasLiveWallAfterCurrentDraw(state);
+const formatPointDisplay = (value) => {
+  const rounded = roundToTenth(value);
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+};
+const signedPointDisplay = (value = 0) => {
+  const rounded = roundToTenth(value);
+  return `${rounded > 0 ? "+" : ""}${formatPointDisplay(rounded)}`;
+};
 const calculateRake = (winnerGain, rakePercent) => {
   const gain = Math.max(0, Number(winnerGain || 0));
   const percent = Math.max(0, Number(rakePercent || 0));
@@ -2578,17 +2595,7 @@ const explicitIsPinfu = (shape, context) =>
 const isPureClosedTriplet = (hand, tileType) => {
   const key = typeof tileType === "string" ? tileType : tileKindKey(tileType);
   const counts = countTiles(hand.filter((tile) => !isFlowerTile(tile)));
-  if ((counts.get(key) ?? 0) < 3) return false;
-  const shapes = explicitFindStandardShapes(counts, 4);
-  if (shapes.length > 0) return shapes.every((shape) => shape.melds.some((meld) => meld.type === "triplet" && meld.key === key));
-  const parsed = parseNumberKey(key);
-  if (!parsed) return true;
-  const sequencePatterns = [
-    [`${parsed.suit}-${parsed.rank - 2}`, `${parsed.suit}-${parsed.rank - 1}`],
-    [`${parsed.suit}-${parsed.rank - 1}`, `${parsed.suit}-${parsed.rank + 1}`],
-    [`${parsed.suit}-${parsed.rank + 1}`, `${parsed.suit}-${parsed.rank + 2}`],
-  ];
-  return !sequencePatterns.some((keys) => keys.every((candidate) => (counts.get(candidate) ?? 0) > 0));
+  return (counts.get(key) ?? 0) >= 3;
 };
 const explicitShousangen = (shape, triplets) => {
   const dragons = new Set(["honor-white", "honor-green", "honor-red"]);
@@ -3198,6 +3205,7 @@ class GameController {
       const resultOk = event.target?.closest?.("[data-result-ok]");
       if (!resultOk) return;
       event.preventDefault();
+      event.stopImmediatePropagation?.();
       event.stopPropagation();
       globalThis.__anmikaController?.handleResultOk?.({ resultId: resultOk.dataset?.resultId || "" });
     }, true);
@@ -5034,6 +5042,23 @@ class GameController {
   updateAssistSettings(playerId, partial) {
     const player = this.getPlayer(playerId);
     player.assistSettings = { autoWin: false, noCall: false, ...(player.assistSettings ?? {}), ...partial };
+    if (this.state.pendingAction?.playerId === playerId && partial.noCall) {
+      const remainingOptions = getActionOptions(this.state.pendingAction).filter((option) =>
+        !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan"))
+      );
+      if (remainingOptions.length) this.state.pendingAction = { ...this.state.pendingAction, options: remainingOptions };
+      else {
+        const fromPlayerId = getActionOptions(this.state.pendingAction).find((option) => option.fromPlayerId)?.fromPlayerId || null;
+        this.continueAfterDiscardCallWindow(fromPlayerId);
+      }
+    }
+    if (isSocketAuthoritativeGame()) {
+      submitOnlineGameAction("assistSettings", { targetPlayerId: playerId, partial, localPlayerId: playerId }).catch((error) => {
+        console.warn("[SocketGame] assist settings failed", error);
+        this.state.log.unshift(`鳴きなし設定の同期に失敗: ${error.message}`);
+        this.emit();
+      });
+    }
     this.emit();
   }
   openRuleHelp() {
@@ -5185,7 +5210,7 @@ class GameController {
       const feverEnabled = Boolean(this.state.settings?.ruleConfig?.feverRiichiEnabled);
       player.feverRiichiActive = feverEnabled && hasFeverRiichiTriplet(player);
       player.feverWinCount = 0;
-      appendHandLogEvent(this.state.handLog, { type: "riichi", playerId: player.id, turnIndex: this.state.turnIndex });
+      appendHandLogEvent(this.state.handLog, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: this.state.turnIndex });
       this.state.log.unshift(player.feverRiichiActive ? `${player.name} フィーバーリーチ` : `${player.name} リーチ`);
     }
     player.riichiDiscardTileIds = [];
@@ -5325,15 +5350,17 @@ class GameController {
     const options = [];
     const ron = this.ruleEngine.canWin(this.state, human, tile);
     if (ron.canWin && !human.sameTurnFuriten && !isPermanentFuriten(this.state, human)) options.push({ type: "ron", playerId: human.id, fromPlayerId, sourceTile: tile, options: { yaku: ron.yaku } });
-    if (!human.isRiichi && this.state.kanCount < 4 && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) options.push({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
-    if (!human.isRiichi && human.hand.filter((t) => sameTileKind(t, tile)).length >= 2) options.push({ type: "pon", playerId: human.id, fromPlayerId, sourceTile: tile });
+    const canCallAfterDiscard = hasLiveWallAfterCurrentDraw(this.state);
+    if (canCallAfterDiscard && !human.isRiichi && canDeclareKanNow(this.state) && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) options.push({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
+    if (canCallAfterDiscard && !human.isRiichi && human.hand.filter((t) => sameTileKind(t, tile)).length >= 2) options.push({ type: "pon", playerId: human.id, fromPlayerId, sourceTile: tile });
     if (options.length > 0) return this.setPendingActions(human.id, options);
     return false;
   }
   queueCallAfterDiscard(tile, fromPlayerId, alreadySkippedRon) {
     const human = this.state.players.find((p) => p.type === "human" && p.id !== fromPlayerId);
     if (!human || !tile) return false;
-    if (!human.isRiichi && this.state.kanCount < 4 && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) return this.setPendingAction({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
+    if (!hasLiveWallAfterCurrentDraw(this.state)) return false;
+    if (!human.isRiichi && canDeclareKanNow(this.state) && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) return this.setPendingAction({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
     if (!human.isRiichi && human.hand.filter((t) => sameTileKind(t, tile)).length >= 2) return this.setPendingAction({ type: "pon", playerId: human.id, fromPlayerId, sourceTile: tile });
     if (alreadySkippedRon) this.continueAfterDiscardCallWindow(fromPlayerId);
     return false;
@@ -5377,6 +5404,7 @@ class GameController {
   }
   confirmPon(action) {
     const player = this.getPlayer(action.playerId);
+    if (!hasLiveWallAfterCurrentDraw(this.state)) return;
     const consumed = takeMatchingTiles(player.hand, action.sourceTile, 2);
     if (consumed.length !== 2) return;
     this.removeCalledTileFromDiscard(action.fromPlayerId, action.sourceTile.id);
@@ -5392,6 +5420,7 @@ class GameController {
   confirmKan(action) {
     const player = this.getPlayer(action.playerId);
     const kanType = action.options?.kanType ?? "ankan";
+    if (!canDeclareKanNow(this.state)) return;
     let tiles = [];
     if (kanType === "minkan") {
       const consumed = takeMatchingTiles(player.hand, action.sourceTile, 3);
@@ -5457,11 +5486,11 @@ class GameController {
         if (tsumo.canWin) options.push({ type: "tsumo", playerId, sourceTile: player.drawnTile, options: { yaku: tsumo.yaku } });
       }
     }
-    if (player.isRiichi && this.state.kanCount < 4) {
+    if (player.isRiichi && canDeclareKanNow(this.state)) {
       const four = findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]);
       if (four) options.push({ type: "kan", playerId, options: { kanType: "ankan" } });
     }
-    if (!player.isRiichi && this.state.kanCount < 4) {
+    if (!player.isRiichi && canDeclareKanNow(this.state)) {
       const four = findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]);
       if (four) options.push({ type: "kan", playerId, options: { kanType: "ankan" } });
       const concealed = [...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])];
@@ -5494,9 +5523,9 @@ class GameController {
     const player = this.getPlayer(playerId);
     // 簡易実装: リーチ後の暗槓は、待ち変化判定が必要なため現時点では禁止する。
     if (player.isRiichi) return this.queueRiichiDiscard(playerId);
-    const four = this.state.kanCount < 4 ? findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]) : null;
+    const four = canDeclareKanNow(this.state) ? findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]) : null;
     if (four) return this.setPendingAction({ type: "kan", playerId, options: { kanType: "ankan" } });
-    if (this.state.kanCount < 4) {
+    if (canDeclareKanNow(this.state)) {
       const concealed = [...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])];
       const canKakan = player.melds.some((meld) => meld.type === "pon" && concealed.some((tile) => sameTileKind(tile, meld.tiles[0])));
       if (canKakan) return this.setPendingAction({ type: "kan", playerId, options: { kanType: "kakan" } });
@@ -5720,10 +5749,15 @@ class GameController {
     });
   }
   revealAdditionalDoraIndicator(reason) {
-    const tile = this.state.liveWall.pop();
-    if (tile) { this.state.doraIndicators.push(tile); appendHandLogEvent(this.state.handLog, { type: "doraReveal", tile, doraIndicators: [...this.state.doraIndicators], turnIndex: this.state.turnIndex, reason }); }
-    const ura = this.state.liveWall.pop();
-    if (ura) this.state.uraDoraIndicators.push(ura);
+    const tile = this.state.liveWall.shift();
+    const ura = this.state.liveWall.shift();
+    if (tile) {
+      this.state.doraIndicators ??= [];
+      this.state.uraDoraIndicators ??= [];
+      this.state.doraIndicators.push(tile);
+      if (ura) this.state.uraDoraIndicators.push(ura);
+      appendHandLogEvent(this.state.handLog, { type: "doraReveal", tile, doraIndicators: [...this.state.doraIndicators], uraDoraIndicators: [...this.state.uraDoraIndicators], turnIndex: this.state.turnIndex, reason });
+    }
   }
   endExhaustiveDraw() {
     if (this.state.handLog.result) return;
@@ -5852,6 +5886,7 @@ const replayEventText = (event, state, nameFn = null) => {
     if (event.type === "riichi") return `${name(event.playerId)} リーチ`;
     if (event.type === "pon") return `${name(event.playerId)} ポン ${formatTile(event.tile)}`;
     if (event.type === "kan") return `${name(event.playerId)} カン`;
+    if (event.type === "assistSettings") return "";
     if (event.type === "skipAction") return "";
     if (event.type === "nukiDora") return `${name(event.playerId)} 抜きドラ ${formatTile(event.tile)}`;
     if (event.type === "doraReveal") return `ドラ表示 ${formatTile(event.tile)}`;
@@ -6488,13 +6523,13 @@ class GameView {
     </section>`;
   }
   replayListScreen(state) {
-    state.replaySummaries = replayRepository.listReplays().slice(0, 100);
+    state.replaySummaries = replayRepository.listReplays().slice(0, 300);
     const emptyMessage = `<div class="empty-replay-note">
       <p>保存された牌譜はまだありません。</p>
-      <p>この画面では、クラブに関係なくログイン中アカウントで取得できる直近100本を表示します。</p>
+      <p>この画面では、クラブに関係なくログイン中アカウントで取得できる直近300本を表示します。</p>
     </div>`;
     return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="${state.selectedClubId ? "clubHome" : "clubSelect"}">${state.selectedClubId ? "クラブホーム" : "クラブ選択"}</button></div>
-      <h3>牌譜一覧（直近100本）</h3>
+      <h3>牌譜一覧（直近300本）</h3>
       <div class="card-grid">${state.replaySummaries.map((summary) => `<article class="lobby-card replay-card" data-replay-card="${summary.replayId}">
         <h3>${summary.resultLabel}</h3>
         <p>${new Date(summary.endedAt).toLocaleString("ja-JP")}</p>
@@ -6665,7 +6700,7 @@ class GameView {
       <h2>設定</h2>
       <label class="setting-row"><span>レーキ: ${rake}%</span><input type="range" min="0" max="20" step="0.5" value="${rake}" data-rake-percent /></label>
       <label class="setting-row"><span>初期持ち時間</span><input type="number" min="1" max="120" step="1" value="${Math.round((state.settings?.initialClockMs ?? INITIAL_TIME_MS) / 1000)}" data-clock-seconds /> 秒</label>
-      <p>累積レーキ: ${state.rakePool ?? 0}点</p>
+      <p>累積レーキ: ${formatPointDisplay(state.rakePool ?? 0)}点</p>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
   }
@@ -6704,7 +6739,7 @@ class GameView {
     if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
     return `<section class="score-result result-modal"><h2>最終結果</h2>
       ${isSocketAuthoritativeGame() ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
-      <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${Number(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
+      <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${formatPointDisplay(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
   }
@@ -6718,7 +6753,7 @@ class GameView {
     const roundLabel = `${formatRoundLabel(state)}${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
     const playerRows = (state.players ?? []).map((player) => {
       const role = getSeatRoleLabel(state, player.id);
-      return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${player.score}点</strong><em>${role}</em></li>`;
+      return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${formatPointDisplay(player.score)}点</strong><em>${role}</em></li>`;
     }).join("");
     const doraTiles = (state.doraIndicators ?? []).map((tile) => renderTileView({ tile })).join("");
     const liveWallCount = state.liveWall?.length ?? 0;
@@ -6833,7 +6868,7 @@ class GameView {
   }
   paymentRows(state, payments) {
     const paymentMap = Array.isArray(payments) ? Object.fromEntries(payments.map((payment) => [payment.playerId, payment.delta])) : payments ?? {};
-    return state.players.map((player) => `<li>${player.name}: ${(paymentMap[player.id] ?? 0) >= 0 ? "+" : ""}${paymentMap[player.id] ?? 0}</li>`).join("");
+    return state.players.map((player) => `<li>${player.name}: ${signedPointDisplay(paymentMap[player.id] ?? 0)}</li>`).join("");
   }
   exhaustiveDrawResult(state, result) {
     const tenpaiResults = result.tenpaiResults ?? state.players.map((player) => ({
@@ -6865,7 +6900,7 @@ class GameView {
       ${hasPayment ? `<ul>${this.paymentRows(state, result.payments ?? {})}</ul>` : `<p>点数移動なし</p>`}
       ${carryRiichiStickCount > 0 ? `<p>リーチ棒 x${carryRiichiStickCount} は次局へ持ち越し</p>` : ""}
       <h3>現在点数</h3>
-      <ul>${state.players.map((player) => `<li>${player.name}: ${result.finalScores?.[player.id] ?? player.score}点</li>`).join("")}</ul>
+      <ul>${state.players.map((player) => `<li>${player.name}: ${formatPointDisplay(result.finalScores?.[player.id] ?? player.score)}点</li>`).join("")}</ul>
       ${renderAgariYameButton(state)}${renderResultOkButton(state)}
     </section>`;
   }
@@ -6879,8 +6914,11 @@ class GameView {
     const scoringWinningTile = score.selectedWait ?? result?.scoringWinningTile ?? score.winningTile ?? displayWinningTile;
     const handTiles = resultHand13Tiles(score, winner, scoringWinningTile);
     const meldsInlineView = resultMeldsInlineView(state, winner);
+    const nukiDoraTiles = Array.isArray(winner?.nukiDoraTiles) ? winner.nukiDoraTiles : [];
     const resultHandLineView = `<div class="score-hand-block"><strong>手牌・副露</strong><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>`;
     const resultWinningTileView = `<div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles result-winning-tile">${displayWinningTile ? renderTileView({ tile: displayWinningTile, isDrawnTile: true }) : ""}</div></div>`;
+    const resultNukiDoraTileView = `<div class="score-nuki-dora-tile"><strong>華牌</strong><div class="result-tiles result-nuki-dora-tiles">${nukiDoraTiles.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>`;
+    const resultHandWinNukiRow = `<div class="score-hand-win-row result-hand-win-nuki-row">${resultHandLineView}${resultWinningTileView}${resultNukiDoraTileView}</div>`;
     const winnerRiichi = Boolean(winner?.isRiichi || winner?.riichiTurnIndex !== null || result?.riichi);
     const payments = Array.isArray(score.paymentDeltas)
       ? Object.fromEntries(score.paymentDeltas.map((payment) => [payment.playerId, payment.delta]))
@@ -6897,7 +6935,7 @@ class GameView {
       const rounded = roundToTenth(value);
       return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
     };
-    const signed = (value = 0) => `${Number(value || 0) > 0 ? "+" : ""}${value}点`;
+    const signed = (value = 0) => `${signedPointDisplay(value)}点`;
     if (isTsumoLossless3maState(state)) {
       const yakuRowsForAllRed = yakuList.map((yaku) => {
         const suffix = yaku.detail ? `（${escapeHtml(yaku.detail)}）` : "";
@@ -6932,7 +6970,7 @@ class GameView {
       return `<section class="score-result result-modal win-result-modal allred-score-result"><h2>和了結果</h2>
         <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
         <div class="allred-result-grid">
-          <div class="score-hand-win-row allred-hand-win-row">${resultHandLineView}${resultWinningTileView}</div>
+          <div class="allred-hand-win-row">${resultHandWinNukiRow}</div>
           <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
           <div><strong>裏ドラ表示牌</strong><div class="result-tiles">${winnerRiichi ? state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし" : "リーチなし"}</div></div>
         </div>
@@ -6940,7 +6978,7 @@ class GameView {
         <ul>${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
         <p class="final-score-line">${scoreLabel}</p>
         <h3>点数の移動</h3>
-        <ul>${state.players.map((player) => `<li>${player.name} <strong>${player.score}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}</ul>
+        <ul>${state.players.map((player) => `<li>${player.name} <strong>${formatPoint(player.score)}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}</ul>
         <h3>祝儀の移動</h3>
         <ul>${state.players.map((player) => {
           const totalChips = pointToChips(totalChipPayments[player.id]);
@@ -6961,7 +6999,7 @@ class GameView {
     const uraCount = winnerRiichi ? Math.floor(Number(bonus.uraDora ?? 0) / 5) : 0;
     if (doraVisible > 0) yakuRows.push(`<li>ドラ${doraVisible}</li>`);
     if (uraCount > 0) yakuRows.push(`<li>裏${uraCount}</li>`);
-    yakuRows.push(`<li>${score.limitType ?? "通常"} ${score.basePoints ?? 0}点</li>`);
+    yakuRows.push(`<li>${score.limitType ?? "通常"} ${formatPointDisplay(score.basePoints ?? 0)}点</li>`);
     const baibaMultiplier = Number(score.baibaMultiplier ?? 1);
     const pochiMultiplier = Number(score.pointMultiplier ?? 1);
     const multiplierTotal = baibaMultiplier * pochiMultiplier;
@@ -6990,10 +7028,7 @@ class GameView {
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント精算なし</p>` : ""}
-      <div class="score-tile-section score-main-tiles score-hand-win-row">
-        ${resultHandLineView}
-        ${resultWinningTileView}
-      </div>
+      <div class="score-tile-section score-main-tiles">${resultHandWinNukiRow}</div>
       <div class="score-tile-section score-dora-section">
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
         ${winnerRiichi ? `<div><strong>裏ドラ表示牌</strong><div class="result-tiles">${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>` : ""}
@@ -7001,12 +7036,12 @@ class GameView {
       <h3>役一覧</h3>
       <ul class="score-yaku compact-yaku">${yakuRows.join("")}</ul>
       <div class="compact-score-lines">
-        <p>追加点合計 ${score.bonusPoints ?? 0}</p>
+        <p>追加点合計 ${formatPoint(score.bonusPoints ?? 0)}</p>
         <p>倍率合計 ×${multiplierTotal}${multiplierLabels}</p>
-        <p class="final-score-line">点数 ${score.finalPoints ?? score.totalPoints ?? 0}点</p>
+        <p class="final-score-line">点数 ${formatPoint(score.finalPoints ?? score.totalPoints ?? 0)}点</p>
       </div>
       <ul class="score-payments">
-        ${state.players.map((player) => `<li>${player.name} <strong>${player.score}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}
+        ${state.players.map((player) => `<li>${player.name} <strong>${formatPoint(player.score)}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}
       </ul>
       ${chipLines}
       ${tobiLines}

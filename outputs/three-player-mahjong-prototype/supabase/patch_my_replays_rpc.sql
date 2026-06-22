@@ -1,5 +1,5 @@
 -- Account-wide replay list for the current signed-in user.
--- Shows the latest 100 replays the account participated in.
+-- Shows the latest 300 replays the account participated in.
 
 drop function if exists public.get_my_replays();
 
@@ -41,7 +41,7 @@ as '
       or r.summary->''players'' @> jsonb_build_array(jsonb_build_object(''playerId'', auth.uid()::text))
     )
   order by r.created_at desc
-  limit 100
+  limit 300
 ';
 
 grant execute on function public.get_my_replays() to authenticated;

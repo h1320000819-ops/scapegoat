@@ -34,6 +34,7 @@ const createHealthServer = () => http.createServer((req, res) => {
 let io = null;
 
 const gameRooms = new Map();
+const roomStartLocks = new Map();
 let shutdownHandlersInstalled = false;
 let processExceptionHandlersInstalled = false;
 const serverDiagnostics = {
@@ -48,6 +49,28 @@ const isoNow = () => new Date().toISOString();
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
 const makeRoomKey = (tableId) => String(tableId || "");
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const isFinalEndedRoomState = (state) => Boolean(
+  state?.phase === "gameEnded" ||
+  state?.finalResult ||
+  state?.handLog?.result?.finalResult ||
+  state?.handLog?.result?.type === "gameEnded"
+);
+const withRoomStartLock = async (tableId, task) => {
+  const key = makeRoomKey(tableId);
+  if (!key) return task();
+  const previous = roomStartLocks.get(key) || Promise.resolve();
+  let release = () => {};
+  const lock = new Promise((resolve) => { release = resolve; });
+  const chain = previous.catch(() => {}).then(() => lock);
+  roomStartLocks.set(key, chain);
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (roomStartLocks.get(key) === chain) roomStartLocks.delete(key);
+  }
+};
 const safeStoreFileName = (tableId) => `${String(tableId || "").replace(/[^a-zA-Z0-9_.-]/g, "_")}.json`;
 const roomStorePath = (tableId) => path.join(STATE_STORE_DIR, safeStoreFileName(tableId));
 const roomBackupStorePath = (tableId) => `${roomStorePath(tableId)}.bak`;
@@ -369,6 +392,10 @@ const isRoomPlayerConnected = (room, userId) => {
 };
 const autoOkPlayerIdsForResult = (room, actingPlayerId = "") => {
   if (!room?.state?.handLog?.result) return [];
+  const resultId = getCurrentResultId(room.state);
+  const startedAt = Number(room.state.resultCountdownStartedAt || 0);
+  if (!resultId || room.state.resultCountdownResultId !== resultId || !startedAt) return [];
+  if (now() - startedAt < RESULT_AUTO_OK_DELAY_MS) return [];
   const connectedIds = connectedHumanPlayerIds(room);
   return ensureArray(room.state.players)
     .filter((player) => player?.id && player.type !== "cpu")
@@ -1262,12 +1289,17 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
   const shouldApplyRake = !scoreRakeApplied && winnerId && isUuid(winnerId) && winnerRawGain > 0 && rakePercent > 0;
   let rakeRaw = 0;
   let rakePlayerDeduction = 0;
+  let rakeTotalAmount = 0;
   if (shouldApplyRake) {
     rakeRaw = winnerRawGain * (rakePercent / 100);
+    rakeTotalAmount = roundClubPointCreditInClubFavor(rakeRaw);
     const winnerAfterRake = roundPlayerPointDeltaInClubFavor(winnerRawGain - rakeRaw);
     rakePlayerDeduction = roundPlayerPointDeltaInClubFavor(winnerRawGain) - winnerAfterRake;
     deltas[winnerId] = winnerAfterRake;
     allPointDeltas[winnerId] = winnerAfterRake;
+  }
+  else if (scoreRakeApplied) {
+    rakeTotalAmount = roundClubPointCreditInClubFavor(scoreRakePoints * rate);
   }
 
   const realPlayerTotal = roundToTenth(Object.values(deltas).reduce((sum, value) => sum + Number(value || 0), 0));
@@ -1287,7 +1319,8 @@ const anmikaClubPointDeltasFromResult = (state, result, pointRate = 1) => {
         winnerId,
         rakePercent,
         winnerRawGain: roundToTenth(winnerRawGain),
-        rakeRaw: scoreRakeApplied ? roundToTenth(scoreRakePoints * rate) : roundToTenth(rakeRaw),
+        totalAmount: rakeTotalAmount,
+        rakeRaw: scoreRakeApplied ? rakeTotalAmount : roundToTenth(rakeRaw),
         rakeGamePoints: scoreRakeApplied ? roundToTenth(scoreRakePoints) : null,
         playerDeduction: rakePlayerDeduction,
         roundingPolicy: "小数第2位以下は常にクラブ側へ寄せる",
@@ -2068,7 +2101,7 @@ const syncClubPointEffects = async (room) => {
   return room.clubPointSyncInFlight;
 };
 
-const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand"]);
+const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand", "assistSettings"]);
 const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 const getCurrentResultId = (state) => state?.handLog?.result?.resultId || "";
@@ -2357,6 +2390,11 @@ const drawFromWall = (state, player, source = "liveWall") => {
   appendHandEvent(state, { type: "draw", playerId: player.id, tile, from: source, turnIndex: state.turnIndex ?? 0 });
   return tile;
 };
+const hasLiveWallAfterCurrentDraw = (state) => ensureArray(state?.liveWall).length > 0;
+const canServerDeclareKanNow = (state) =>
+  Number(state?.kanCount || 0) < 4 &&
+  ensureArray(state?.rinshanWall).length > 0 &&
+  hasLiveWallAfterCurrentDraw(state);
 const removeTileById = (tiles, tileId) => {
   const index = ensureArray(tiles).findIndex((tile) => tile.id === tileId);
   if (index < 0) return null;
@@ -2437,7 +2475,12 @@ const removeLastMatchingDiscard = (state, fromPlayerId, sourceTile) => {
 };
 const setServerPendingActions = (state, playerId, options, source = null) => {
   if (!playerId || !ensureArray(options).length) return false;
-  state.pendingAction = { playerId, options, source };
+  const player = findPlayer(state, playerId);
+  const filteredOptions = player?.assistSettings?.noCall
+    ? ensureArray(options).filter((option) => !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan")))
+    : ensureArray(options);
+  if (!filteredOptions.length) return false;
+  state.pendingAction = { playerId, options: filteredOptions, source };
   state.phase = "waitingForAction";
   state.isWaitingForHumanAction = true;
   state.activeClockPlayerId = playerId;
@@ -2446,7 +2489,7 @@ const setServerPendingActions = (state, playerId, options, source = null) => {
   appendHandEvent(state, {
     type: "pendingAction",
     playerId,
-    options: options.map((option) => option.type),
+    options: filteredOptions.map((option) => option.type),
     source,
     turnIndex: state.turnIndex ?? 0,
   });
@@ -2466,8 +2509,10 @@ const hasTurquoise5pInTilesOrMeldsServer = (tiles, melds) =>
   ].some((tile) => tile?.suit === "pinzu" && Number(tile.rank) === 5 && tile.color === "turquoise");
 const isServerMenzen = (player) => !ensureArray(player?.melds).some((meld) => ["pon", "minkan", "kakan"].includes(meld?.type));
 const getServerSeatWind = (state, playerId) => {
-  const index = ensureArray(state?.players).findIndex((player) => player.id === playerId);
-  return ["east", "south", "west"][Math.max(0, index)] || "west";
+  const players = ensureArray(state?.players);
+  const dealerIndex = Math.max(0, players.findIndex((player) => player.id === state?.round?.dealerPlayerId));
+  const playerIndex = Math.max(0, players.findIndex((player) => player.id === playerId));
+  return ["east", "south", "west"][(playerIndex - dealerIndex + players.length) % players.length] || "west";
 };
 const serverHonorText = { east: "東", south: "南", west: "西", north: "北", white: "白", green: "發", red: "中" };
 const serverTileLabel = (key) => {
@@ -3181,31 +3226,7 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
   }
   const handTiles = ensureArray(player?.hand).filter((tile) => tileKindKey(tile) === targetKey);
   const drawnMatches = player?.drawnTile && tileKindKey(player.drawnTile) === targetKey ? 1 : 0;
-  if (handTiles.length + drawnMatches < 3) return false;
-
-  const visibleTiles = [...ensureArray(player?.hand), ...(player?.drawnTile ? [player.drawnTile] : [])].filter((tile) => !isFlowerTile(tile));
-  const counts = countTilesForShape(visibleTiles);
-  const targetCount = counts.get(targetKey) || 0;
-  if (targetCount < 3) return false;
-  const parsed = parseServerNumberKey(targetKey);
-  if (parsed) {
-    const sequencePatterns = [
-      [`${parsed.suit}:${parsed.rank - 2}`, `${parsed.suit}:${parsed.rank - 1}`],
-      [`${parsed.suit}:${parsed.rank - 1}`, `${parsed.suit}:${parsed.rank + 1}`],
-      [`${parsed.suit}:${parsed.rank + 1}`, `${parsed.suit}:${parsed.rank + 2}`],
-    ];
-    if (sequencePatterns.some((keys) => keys.every((candidate) => (counts.get(candidate) || 0) > 0))) return false;
-  }
-
-  const withoutTriplet = cloneCounts(counts);
-  withoutTriplet.set(targetKey, targetCount - 3);
-  for (const [key, count] of withoutTriplet.entries()) {
-    if (count < 2) continue;
-    const afterPair = cloneCounts(withoutTriplet);
-    afterPair.set(key, count - 2);
-    if (canRemoveAllMelds(afterPair)) return true;
-  }
-  return false;
+  return handTiles.length + drawnMatches >= 3;
 };
 const hasServerFeverRiichiTriplet = (player) =>
   hasServerPureClosedTriplet(player, "pinzu", 7) || hasServerPureClosedTriplet(player, "souzu", 7);
@@ -3240,6 +3261,7 @@ const queueServerSelfDrawOptions = (state, player) => {
   const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
   if (feverPlayer && feverPlayer.id !== player.id) return beginServerRiichiAutoDiscard(state, player);
   const options = [];
+  const canKanNow = canServerDeclareKanNow(state);
   if (canServerTsumo(state, player)) {
     const option = { type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null };
     if (player.isRiichi) {
@@ -3248,13 +3270,13 @@ const queueServerSelfDrawOptions = (state, player) => {
     }
     options.push(option);
   }
-  if (!player.isRiichi && Number(state.kanCount || 0) < 4) {
+  if (!player.isRiichi && canKanNow) {
     const kanTile = findServerAnkanCandidate(player, { allowRiichi: false });
     if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
     const kakan = findServerKakanCandidate(player);
     if (kakan) options.push({ type: "kan", playerId: player.id, sourceTile: kakan.tile, tile: kakan.tile, options: { kanType: "kakan", meldTile: kakan.meld?.tiles?.[0] } });
   }
-  if (player.isRiichi && Number(state.kanCount || 0) < 4) {
+  if (player.isRiichi && canKanNow) {
     const kanTile = findServerAnkanCandidate(player, { allowRiichi: true });
     if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
   }
@@ -3341,9 +3363,12 @@ const applyServerFlowerEffect = (state) => {
 const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
   const feverPlayer = ensureArray(state.players).find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
   if (feverPlayer && feverPlayer.id !== fromPlayerId) return false;
+  const canCallAfterDiscard = hasLiveWallAfterCurrentDraw(state);
+  const canCallKanAfterDiscard = canCallAfterDiscard && canServerDeclareKanNow(state);
   const candidates = ensureArray(state.players).filter((player) => player.id !== fromPlayerId && player.type !== "cpu");
   for (const player of candidates) {
     const matchingCount = ensureArray(player.hand).filter((tile) => sameTileKind(tile, sourceTile)).length;
+    const noCall = Boolean(player.assistSettings?.noCall);
     const options = [];
     if (canServerRon(state, player, sourceTile)) {
       const option = { type: "ron", playerId: player.id, fromPlayerId, sourceTile };
@@ -3354,8 +3379,8 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
       }
       options.push(option);
     }
-    if (!player.isRiichi) {
-      if (matchingCount >= 3 && Number(state.kanCount || 0) < 4) {
+    if (canCallAfterDiscard && !player.isRiichi && !noCall) {
+      if (matchingCount >= 3 && canCallKanAfterDiscard) {
         options.push({ type: "kan", playerId: player.id, fromPlayerId, sourceTile, options: { kanType: "minkan" } });
       }
       if (matchingCount >= 2) {
@@ -3579,6 +3604,33 @@ const applyServerAction = (state, event) => {
     return state;
   }
 
+  if (action === "assistSettings") {
+    player.assistSettings = {
+      autoWin: Boolean(player.assistSettings?.autoWin),
+      noCall: Boolean(player.assistSettings?.noCall),
+      ...(payload.partial || {}),
+    };
+    if (state.pendingAction?.playerId === player.id && player.assistSettings.noCall) {
+      const options = ensureArray(state.pendingAction.options).filter((option) =>
+        !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan"))
+      );
+      if (options.length) state.pendingAction = { ...state.pendingAction, options };
+      else {
+        const source = state.pendingAction.source || {};
+        state.pendingAction = null;
+        if (source.type === "afterDiscard") {
+          state.phase = "playing";
+          const fromIndex = ensureArray(state.players).findIndex((p) => p.id === source.fromPlayerId);
+          if (fromIndex >= 0) state.currentPlayerIndex = fromIndex;
+          advanceTurn(state);
+          enterCurrentTurnOnServer(state);
+        }
+      }
+    }
+    appendHandEvent(state, { type: "assistSettings", playerId: player.id, noCall: Boolean(player.assistSettings.noCall), autoWin: Boolean(player.assistSettings.autoWin), turnIndex: state.turnIndex ?? 0 });
+    return state;
+  }
+
   const isCallKan = action === "kan" && Boolean(payload.action?.fromPlayerId || payload.fromPlayerId);
   if (["draw", "discard", "riichi", "flower", "nukiDora", "tsumo"].includes(action) && active?.id !== player.id) {
     throw new Error("現在の手番ではありません");
@@ -3698,6 +3750,10 @@ const applyServerAction = (state, event) => {
     const tiles = [];
     const isMinkan = Boolean(fromPlayerId && sourceTile);
     const kanType = option.options?.kanType || payload.kanType || option.kanType;
+    if (!canServerDeclareKanNow(state)) {
+      throw new Error("最終ツモまたは嶺上牌がない局面ではカンできません");
+    }
+    if (isMinkan && player.assistSettings?.noCall) throw new Error("鳴きなし中は明槓できません");
     if (kanType === "kakan") {
       const targetMeld = ensureArray(player.melds).find((meld) => meld?.type === "pon" && meld?.tiles?.[0] && sameTileKind(meld.tiles[0], baseTile));
       if (!targetMeld) throw new Error("加槓できるポンがありません");
@@ -3763,6 +3819,8 @@ const applyServerAction = (state, event) => {
   }
 
   if (action === "pon") {
+    if (player.assistSettings?.noCall) throw new Error("鳴きなし中はポンできません");
+    if (!hasLiveWallAfterCurrentDraw(state)) throw new Error("最後の打牌にはポンできません");
     const option = payload.action || {};
     const sourceTile = option.sourceTile || payload.sourceTile;
     const fromPlayerId = option.fromPlayerId || payload.fromPlayerId;
@@ -4436,8 +4494,29 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
   if (!key) throw new Error("tableId is required");
   let room = gameRooms.get(key);
   if (room && gameId && room.gameId && room.gameId !== gameId) {
-    console.log("[AnmikaGameServer] reset room by new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
-    resetRoom = true;
+    if (room.state && !isFinalEndedRoomState(room.state)) {
+      console.warn("[AnmikaGameServer] ignore new gameId for active room", {
+        tableId: key,
+        previousGameId: room.gameId,
+        requestedGameId: gameId,
+        phase: room.state.phase,
+        version: room.version,
+      });
+      resetRoom = false;
+    } else {
+      console.log("[AnmikaGameServer] reset room by new gameId", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+      resetRoom = true;
+    }
+  }
+  if (room && resetRoom && room.state && !isFinalEndedRoomState(room.state)) {
+    console.warn("[AnmikaGameServer] ignore resetRoom for active room", {
+      tableId: key,
+      gameId: room.gameId,
+      requestedGameId: gameId || "",
+      phase: room.state.phase,
+      version: room.version,
+    });
+    resetRoom = false;
   }
   if (room && resetRoom) {
     console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
@@ -4449,6 +4528,22 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     room = null;
     gameRooms.delete(key);
     deletePersistedRoom(key, "reset existing memory room");
+  }
+  if (!room && resetRoom) {
+    const persisted = loadPersistedRoom(key, "");
+    if (persisted?.state && !isFinalEndedRoomState(persisted.state)) {
+      console.warn("[AnmikaGameServer] protect active persisted room from reset request", {
+        tableId: key,
+        persistedGameId: persisted.gameId,
+        requestedGameId: gameId || "",
+        phase: persisted.state.phase,
+        version: persisted.version,
+      });
+      room = persisted;
+      room.skipDbHydration = false;
+      gameRooms.set(key, room);
+      resetRoom = false;
+    }
   }
   if (!room && resetRoom) {
     deletePersistedRoom(key, "reset without memory room");
@@ -4917,62 +5012,64 @@ io.on("connection", (socket) => {
   socket.on("game:initState", async (payload = {}, ack) => {
     try {
       const { tableId, gameId, state, players, settings, ruleConfig, userId, allowCreateInitialState = true, resetRoom = false } = payload;
-      const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
-      console.log("[AnmikaGameServer] initState", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state), version: room.version });
-      if (room.state) {
-        const viewerId = userId || socket.data.userId || null;
-        if (clearRoomLastHandForUser(room, viewerId)) {
-          room.updatedAt = now();
-          persistRoom(room);
+      await withRoomStartLock(tableId, async () => {
+        const room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
+        console.log("[AnmikaGameServer] initState", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state), version: room.version });
+        if (room.state) {
+          const viewerId = userId || socket.data.userId || null;
+          if (clearRoomLastHandForUser(room, viewerId)) {
+            room.updatedAt = now();
+            persistRoom(room);
+          }
+          ack?.({ ok: true, alreadyInitialized: true, ...publicRoomState(room, viewerId) });
+          socket.emit("game:state", publicRoomState(room, viewerId));
+          scheduleRoomServerEffect(room);
+          scheduleRoomClockTimeout(room);
+          scheduleRoomResultTimeout(room);
+          const isStartupPhase = Number(room.state?.turnIndex || 0) <= 1 && !ensureArray(room.state?.handLog?.events).some((event) => event?.type === "discard");
+          if (isStartupPhase) scheduleStartupStateBurst(room, "alreadyInitializedStartupBurst");
+          return;
         }
-        ack?.({ ok: true, alreadyInitialized: true, ...publicRoomState(room, viewerId) });
-        socket.emit("game:state", publicRoomState(room, viewerId));
+        const recoveredClientState = isRecoverableClientState(state, room.tableId, room.gameId) ? clone(state) : null;
+        if (state && !recoveredClientState) {
+          console.warn("[AnmikaGameServer] rejected client initial state recovery payload", {
+            tableId: room.tableId,
+            gameId: room.gameId,
+            hasPlayers: Array.isArray(state?.players),
+            hasLiveWall: Array.isArray(state?.liveWall),
+            handId: state?.handLog?.handId,
+            viewForPlayerId: state?.onlineMeta?.viewForPlayerId,
+          });
+        }
+        if (!recoveredClientState && allowCreateInitialState === false) {
+          throw new Error("保存済み局面を復元できませんでした。新しい配牌は作成しません。数秒後に再読み込みしてください。");
+        }
+        const serverState = recoveredClientState || createServerInitialState({
+          tableId: room.tableId,
+          gameId: room.gameId,
+          players,
+          settings,
+          ruleConfig,
+        });
+        console.log("[AnmikaGameServer] initial state source", {
+          tableId: room.tableId,
+          gameId: room.gameId,
+          source: recoveredClientState ? "clientRecovery" : "newInitial",
+          allowCreateInitialState,
+          hasSupabaseWriter: hasSupabaseServerWriter(),
+        });
+        acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
+        markRoomPlayerConnected(room, userId || socket.data.userId, socket);
+        resumeClockForReconnectedPlayer(room, userId || socket.data.userId);
+        scheduleDisconnectedTimeouts(room);
         scheduleRoomServerEffect(room);
         scheduleRoomClockTimeout(room);
         scheduleRoomResultTimeout(room);
-        const isStartupPhase = Number(room.state?.turnIndex || 0) <= 1 && !ensureArray(room.state?.handLog?.events).some((event) => event?.type === "discard");
-        if (isStartupPhase) scheduleStartupStateBurst(room, "alreadyInitializedStartupBurst");
-        return;
-      }
-      const recoveredClientState = isRecoverableClientState(state, room.tableId, room.gameId) ? clone(state) : null;
-      if (state && !recoveredClientState) {
-        console.warn("[AnmikaGameServer] rejected client initial state recovery payload", {
-          tableId: room.tableId,
-          gameId: room.gameId,
-          hasPlayers: Array.isArray(state?.players),
-          hasLiveWall: Array.isArray(state?.liveWall),
-          handId: state?.handLog?.handId,
-          viewForPlayerId: state?.onlineMeta?.viewForPlayerId,
-        });
-      }
-      if (!recoveredClientState && allowCreateInitialState === false) {
-        throw new Error("保存済み局面を復元できませんでした。新しい配牌は作成しません。数秒後に再読み込みしてください。");
-      }
-      const serverState = recoveredClientState || createServerInitialState({
-        tableId: room.tableId,
-        gameId: room.gameId,
-        players,
-        settings,
-        ruleConfig,
+        persistRoom(room);
+        broadcastState(room);
+        scheduleStartupStateBurst(room, "serverInitialBurst");
+        ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
       });
-      console.log("[AnmikaGameServer] initial state source", {
-        tableId: room.tableId,
-        gameId: room.gameId,
-        source: recoveredClientState ? "clientRecovery" : "newInitial",
-        allowCreateInitialState,
-        hasSupabaseWriter: hasSupabaseServerWriter(),
-      });
-      acceptStateFromServerPipeline(room, serverState, recoveredClientState ? "serverRecoveredInitial" : "serverInitial", userId || socket.data.userId);
-      markRoomPlayerConnected(room, userId || socket.data.userId, socket);
-      resumeClockForReconnectedPlayer(room, userId || socket.data.userId);
-      scheduleDisconnectedTimeouts(room);
-      scheduleRoomServerEffect(room);
-      scheduleRoomClockTimeout(room);
-      scheduleRoomResultTimeout(room);
-      persistRoom(room);
-      broadcastState(room);
-      scheduleStartupStateBurst(room, "serverInitialBurst");
-      ack?.({ ok: true, ...publicRoomState(room, userId || socket.data.userId || null) });
     } catch (error) {
       console.error("[AnmikaGameServer] initState failed", { socketId: socket.id, payload: { tableId: payload?.tableId, gameId: payload?.gameId, userId: payload?.userId }, error: error?.message || String(error) });
       ack?.({ ok: false, error: error.message });

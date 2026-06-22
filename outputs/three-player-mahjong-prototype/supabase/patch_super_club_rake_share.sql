@@ -329,12 +329,13 @@ begin
     );
   end if;
 
-  v_rake_amount := round(greatest(coalesce(v_rake_amount, 0), 0)::numeric, 1);
+  v_rake_amount := ceil(greatest(coalesce(v_rake_amount, 0), 0)::numeric * 10.0) / 10.0;
   if v_rake_amount <= 0 then
     return;
   end if;
 
-  v_super_share := round((v_rake_amount * v_share_percent / 100.0)::numeric, 1);
+  -- Always round in favor of the super account and never exchange below 0.1pt.
+  v_super_share := ceil((v_rake_amount * v_share_percent / 100.0)::numeric * 10.0) / 10.0;
   if v_super_share <= 0 then
     return;
   end if;

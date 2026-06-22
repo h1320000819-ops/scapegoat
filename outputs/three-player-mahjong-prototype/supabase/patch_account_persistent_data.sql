@@ -149,7 +149,7 @@ as '
   where r.club_id = p_club_id
     and public.is_club_member(r.club_id, auth.uid())
   order by r.created_at desc
-  limit 100;
+  limit 300;
 ';
 
 grant execute on function public.get_my_club_replays(uuid) to authenticated;
