@@ -2066,7 +2066,12 @@ const syncReplayEffects = async (room) => {
     if (!result) return;
     if (isTsumoLossless3maState(state)) {
       if (state.phase !== "gameEnded" || !state.finalResult) return;
-      await saveReplayToDb(room, `${room.gameId}:hanchanReplay`, "hanchan", {
+      const hanchanReplayKey = [
+        room.gameId || room.tableId || "game",
+        "hanchanReplay",
+        state.hanchanReplayInitialState?.handLog?.handId || state.hanchanReplaySnapshots?.[0]?.handLog?.handId || state.handLog?.handId || state.finalResult?.createdAt || state.finalResult?.reason || "current",
+      ].join(":");
+      await saveReplayToDb(room, hanchanReplayKey, "hanchan", {
         initialState: state.hanchanReplayInitialState || state.replayInitialState || state,
         snapshots: state.hanchanReplaySnapshots?.length ? state.hanchanReplaySnapshots : state.replaySnapshots,
         result: state.finalResult,
@@ -5190,6 +5195,9 @@ const scheduleRoomResultTimeout = (room) => {
       syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
       broadcastState(room);
+      if (shouldSyncRoomDbEffects(room.state)) {
+        safeSyncClubPointEffects(room, "resultOkAutoAfterApply");
+      }
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
@@ -5604,6 +5612,9 @@ io.on("connection", (socket) => {
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
       scheduleDisconnectedTimeouts(room);
+      if (actionType === "resultOk" && shouldSyncRoomDbEffects(room.state)) {
+        safeSyncClubPointEffects(room, "resultOkAfterApply");
+      }
       if (ACTION_DEBUG_LOGS) {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }
