@@ -2161,6 +2161,17 @@
     }
     return table;
   };
+  const claimTableStart = async (tableId) => {
+    const rows = await rest("/tables?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.waiting", {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ status: "playing" }),
+    }).catch((error) => {
+      log("自動開始ロック取得に失敗しました。", rawErrorText(error));
+      return null;
+    });
+    return Array.isArray(rows) && rows.length > 0;
+  };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
     if (!forceNewGame && isAutoStartBlocked()) return null;
@@ -2191,15 +2202,25 @@
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
       table.table_seats = seats;
-      if (!forceNewGame) {
-        await openPlayingTableIfNeeded(table, seats, { navigate: true });
-        return state.activeGameState;
-      }
+      await openPlayingTableIfNeeded(table, seats, { navigate: true, forceOpen: forceNewGame });
+      return state.activeGameState;
     }
 
     if (state.autoStartingTableIds.has(tableId)) return null;
     state.autoStartingTableIds.add(tableId);
     try {
+      const claimed = await claimTableStart(tableId);
+      if (!claimed) {
+        const latestTable = await rest("/tables?select=*,table_seats(*)&table_id=eq." + encodeURIComponent(tableId) + "&limit=1")
+          .then((rows) => Array.isArray(rows) ? rows[0] : null)
+          .catch(() => null);
+        if (latestTable?.status === "playing") {
+          latestTable.table_seats = latestTable.table_seats || seats;
+          state.tables = state.tables.map((item) => item.table_id === tableId ? { ...item, ...latestTable } : item);
+          await openPlayingTableIfNeeded(latestTable, normalizeSeats(latestTable.table_seats || seats, tableId), { navigate: true, forceOpen: forceNewGame });
+        }
+        return state.activeGameState;
+      }
       await deactivateTableActiveGameState(tableId, "自動新規対局開始前").catch(() => {});
       const onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
       table.status = "playing";
@@ -2208,10 +2229,6 @@
       clearAutoStartFailedTable(tableId);
       clearLocalUserLastHandFlagForTable(tableId);
       clearOwnLastHandFlag(tableId).catch((error) => log("自動対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
-      rest("/tables?table_id=eq." + encodeURIComponent(tableId), {
-        method: "PATCH",
-        body: JSON.stringify({ status: "playing" }),
-      }).catch((error) => log("自動開始時の卓ステータス更新はスキップしました。", rawErrorText(error)));
       log(isDebugTable ? "CPU入りデバッグ卓を自動開始しました。" : "実プレイヤー3人が揃ったため、対局を自動開始しました。", { tableId });
       await openPlayingTableIfNeeded(table, seats, { navigate: true, onlineGameState, forceOpen: forceNewGame });
       return onlineGameState;
@@ -3117,6 +3134,25 @@
     clearLocalUserLastHandFlagForTable(tableId);
     await clearOwnLastHandFlag(tableId).catch((error) => log("新規対局開始前のラス半解除をスキップしました。", rawErrorText(error)));
     let rows = [];
+    const existingTable = state.tables.find((item) => item.table_id === tableId) || await rest("/tables?select=*,table_seats(*)&table_id=eq." + encodeURIComponent(tableId) + "&limit=1")
+      .then((items) => Array.isArray(items) ? items[0] : null)
+      .catch(() => null);
+    if (existingTable?.status === "playing") {
+      rows = normalizeSeats(existingTable.table_seats || getKnownSeats(tableId), tableId);
+      await openPlayingTableIfNeeded(existingTable, rows, { navigate: true, forceOpen: true });
+      return;
+    }
+    const claimed = await claimTableStart(tableId);
+    if (!claimed) {
+      const latestTable = await rest("/tables?select=*,table_seats(*)&table_id=eq." + encodeURIComponent(tableId) + "&limit=1")
+        .then((items) => Array.isArray(items) ? items[0] : null)
+        .catch(() => null);
+      if (latestTable?.status === "playing") {
+        rows = normalizeSeats(latestTable.table_seats || getKnownSeats(tableId), tableId);
+        await openPlayingTableIfNeeded(latestTable, rows, { navigate: true, forceOpen: true });
+      }
+      return;
+    }
     await deactivateTableActiveGameState(tableId, "デバッグ新規対局開始前").catch(() => {});
     let onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
     try {
