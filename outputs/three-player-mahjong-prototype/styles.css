@@ -710,7 +710,7 @@ button:hover {
   display: flex;
   gap: var(--discard-gap);
   height: var(--discard-tile-height);
-  justify-content: center;
+  justify-content: flex-start;
   min-width: calc(var(--discard-tile-width) * 6 + var(--discard-gap) * 5);
   white-space: nowrap;
 }
