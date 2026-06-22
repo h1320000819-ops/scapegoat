@@ -901,6 +901,24 @@
         log("ラス半終了後の退席RPCに失敗しました。直接退席へ切り替えます。", raw);
       }
     });
+    const ownSeatRows = await rest(
+      "/table_seats?select=table_id,seat_index&table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id)
+    ).catch(() => []);
+    for (const seat of Array.isArray(ownSeatRows) ? ownSeatRows : []) {
+      if (seat?.seat_index === null || seat?.seat_index === undefined) continue;
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&seat_index=eq." + encodeURIComponent(String(seat.seat_index)),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            user_id: null,
+            player_type: "empty",
+            display_name: null,
+            is_last_hand_declared: false,
+          }),
+        }
+      ).catch((error) => log("ラス半終了後の座席番号指定退席に失敗しました。", rawErrorText(error)));
+    }
     await rest(
       "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(state.user.id),
       {

@@ -810,6 +810,23 @@ const leaveOnlineTableForSync = async (sync) => {
   };
   const clearOwnSeatDirectly = async () => {
     if (!sync.userId) return false;
+    const seatRowsResponse = await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?select=table_id,seat_index&table_id=eq.${encodeURIComponent(sync.tableId)}&user_id=eq.${encodeURIComponent(sync.userId)}`, {
+      headers,
+    }).catch(() => null);
+    const seatRows = seatRowsResponse?.ok ? await seatRowsResponse.json().catch(() => []) : [];
+    for (const seat of Array.isArray(seatRows) ? seatRows : []) {
+      if (seat?.seat_index === null || seat?.seat_index === undefined) continue;
+      await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?table_id=eq.${encodeURIComponent(sync.tableId)}&seat_index=eq.${encodeURIComponent(String(seat.seat_index))}`, {
+        method: "PATCH",
+        headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify({
+          user_id: null,
+          player_type: "empty",
+          display_name: null,
+          is_last_hand_declared: false,
+        }),
+      }).catch((error) => console.warn("[OnlineSync] seat-index leave failed", error));
+    }
     const fallbackResponse = await fetch(`${sync.supabaseUrl}/rest/v1/table_seats?table_id=eq.${encodeURIComponent(sync.tableId)}&user_id=eq.${encodeURIComponent(sync.userId)}`, {
       method: "PATCH",
       headers: { ...headers, Prefer: "return=minimal" },
