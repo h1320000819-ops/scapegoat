@@ -425,10 +425,14 @@
   const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
   const visibleTableSeats = (table) => {
     const visibleTable = maskRecentlyLeftTable(table);
-    return normalizeSeats(
+    const seats = normalizeSeats(
       visibleTable?.table_seats || visibleTable?.seats || visibleTable?.tableSeats || state.localSeatsByTable[localSeatKey(visibleTable?.table_id)] || [],
       visibleTable?.table_id
     );
+    if (!isRecentlyLeftTable(visibleTable?.table_id)) return seats;
+    return seats.map((seat) => seat.user_id === state.user?.id
+      ? { ...seat, user_id: null, player_type: "empty", display_name: null, is_last_hand_declared: false }
+      : { ...seat, is_last_hand_declared: false });
   };
   const enforceOneVisibleSeatForCurrentUser = (preferredTableId = state.activeTableId, preferredSeatIndex = null) => {
     if (!state.user?.id || !Array.isArray(state.tables)) return;

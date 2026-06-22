@@ -512,6 +512,11 @@ const forgetLocalOnlineDebugTable = (tableId) => {
     console.warn("[OnlineDebug] ローカル卓キャッシュの削除に失敗しました", error);
   }
 };
+const forgetOnlineDebugLaunchCache = (sync, activeTableId = "") => {
+  try { forgetLocalOnlineDebugTable(activeTableId); } catch {}
+  try { forgetLocalOnlineDebugTable(sync?.localTableId); } catch {}
+  try { sessionStorage.removeItem("anmikaOnlineDebug.launchingTable"); } catch {}
+};
 const onlineDebugLobbyUrl = (clubId = "") => {
   const query = clubId ? `?returnClubId=${encodeURIComponent(clubId)}` : "";
   if (globalThis.location?.protocol === "file:") return new URL(`online-debug/index.html${query}`, globalThis.location.href).href;
@@ -3968,7 +3973,7 @@ class GameController {
           const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
           await leaveOnlineTableForSync(sync);
           if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
-          forgetLocalOnlineDebugTable(activeTableId);
+          forgetOnlineDebugLaunchCache(sync, activeTableId);
           saveOnlineSync(null);
           if (sync.returnUrl) {
             window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
@@ -4824,7 +4829,7 @@ class GameController {
           const leavePlayerId = sync?.userId || localPlayerId;
           await leaveOnlineTableForSync(sync);
           if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
-          forgetLocalOnlineDebugTable(activeTableId);
+          forgetOnlineDebugLaunchCache(sync, activeTableId);
           saveOnlineSync(null);
           if (sync?.returnUrl) {
             window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
@@ -4882,7 +4887,7 @@ class GameController {
         const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
         await leaveOnlineTableForSync(sync);
         if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
-        forgetLocalOnlineDebugTable(activeTableId);
+        forgetOnlineDebugLaunchCache(sync, activeTableId);
         saveOnlineSync(null);
         if (sync?.returnUrl) {
           window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
@@ -4929,7 +4934,7 @@ class GameController {
         const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
         await leaveOnlineTableForSync(sync);
         if (activeTableId && leavePlayerId) this.leaveSeat(activeTableId, leavePlayerId);
-        forgetLocalOnlineDebugTable(activeTableId);
+        forgetOnlineDebugLaunchCache(sync, activeTableId);
         window.location.href = normalizeOnlineDebugReturnUrl(sync.returnUrl, localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "", sync.tableId || activeTableId);
       } else {
         window.location.href = sync.returnUrl;
@@ -4989,7 +4994,7 @@ class GameController {
     if (activeTableId && leavePlayerId) {
       try { this.leaveSeat(activeTableId, leavePlayerId); } catch {}
     }
-    forgetLocalOnlineDebugTable(activeTableId);
+    forgetOnlineDebugLaunchCache(sync, activeTableId);
     saveOnlineSync(null);
     try { globalThis.anmikaGameSocket?.disconnect?.(); } catch {}
     window.location.href = returnUrl;
