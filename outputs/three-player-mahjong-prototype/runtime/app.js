@@ -6063,19 +6063,45 @@ const calledTileIndexForMeld = (state, ownerId, fromPlayerId, tileCount) => {
   if (callFrom === "shimocha") return tileCount - 1;
   return tileCount === 4 ? 1 : Math.floor(tileCount / 2);
 };
+const meldRotationClass = (rotation) => rotation ? `meld-rotate-${rotation}` : "";
+const meldDisplaySpec = (state, ownerId, meld, tileCount) => {
+  const ownerSeat = seatPositionForPlayer(state, ownerId);
+  const fromSeat = seatPositionForPlayer(state, meld?.fromPlayerId);
+  if (!fromSeat || meld?.type === "ankan") {
+    const calledIndex = meld?.type === "ankan" ? -1 : calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount);
+    return { calledIndex, rotations: [] };
+  }
+  if (ownerSeat === "right" && fromSeat === "top") {
+    return { calledIndex: 0, rotations: Array.from({ length: tileCount }, (_, index) => index === 0 ? "0" : "ccw90") };
+  }
+  if (ownerSeat === "right" && fromSeat === "bottom") {
+    return { calledIndex: tileCount - 1, rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "180" : "ccw90") };
+  }
+  if (ownerSeat === "top" && fromSeat === "right") {
+    return { calledIndex: tileCount - 1, rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "cw90" : "180") };
+  }
+  if (ownerSeat === "top" && fromSeat === "bottom") {
+    const calledIndex = tileCount === 4 ? 2 : 1;
+    return { calledIndex, rotations: Array.from({ length: tileCount }, (_, index) => index === calledIndex ? "cw90" : "180") };
+  }
+  return { calledIndex: calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount), rotations: [] };
+};
 const renderMeldSet = (state, ownerId, meld) => {
   const calledTile = meld.calledTile ?? (meld.fromPlayerId ? meld.tiles.at(-1) : null);
-  const sidewaysIndex = meld.type === "ankan" ? -1 : calledTileIndexForMeld(state, ownerId, meld.fromPlayerId, meld.type === "minkan" ? 4 : 3);
+  const tileCount = meld.type === "minkan" ? 4 : 3;
+  const displaySpec = meldDisplaySpec(state, ownerId, meld, tileCount);
+  const sidewaysIndex = displaySpec.calledIndex;
   let baseTiles = meld.type === "kakan" ? meld.tiles.slice(0, 3) : [...(meld.tiles || [])];
   if (calledTile && sidewaysIndex >= 0 && baseTiles.length > sidewaysIndex) {
     const otherTiles = baseTiles.filter((tile) => tile.id !== calledTile.id);
     baseTiles = [...otherTiles];
     baseTiles.splice(sidewaysIndex, 0, calledTile);
-    baseTiles = baseTiles.slice(0, meld.type === "minkan" ? 4 : 3);
+    baseTiles = baseTiles.slice(0, tileCount);
   }
   const tiles = baseTiles.map((tile, index) => {
     const sideways = index === sidewaysIndex;
-    return `<span class="meld-tile ${sideways ? "sideways called-tile" : ""}">${renderTileView({ tile })}</span>`;
+    const rotationClass = meldRotationClass(displaySpec.rotations[index]);
+    return `<span class="meld-tile ${sideways ? "sideways called-tile" : ""} ${rotationClass}">${renderTileView({ tile })}</span>`;
   }).join("");
   const added = meld.type === "kakan" ? (meld.addedTile ?? meld.tiles.at(-1)) : null;
   return `<span class="meld-set meld-${meld.type}" style="--called-index:${Math.max(0, sidewaysIndex)}">
