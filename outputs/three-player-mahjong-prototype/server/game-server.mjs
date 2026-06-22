@@ -445,23 +445,28 @@ const scheduleDisconnectedLastHandTimeout = (room) => {
   const nextAt = Math.min(...candidates.map((record) => Number(record.disconnectedAt || 0) + DISCONNECTED_LAST_HAND_GRACE_MS));
   const delay = Math.max(0, nextAt - now());
   room.disconnectedLastHandTimer = setTimeout(() => {
-    room.disconnectedLastHandTimer = null;
-    const ids = markDisconnectedPlayersAsLastHand(room);
-    if (ids.length) {
-      room.version = Number(room.version || 0) + 1;
-      room.state.version = room.version;
-      room.state.onlineMeta = {
-        ...(room.state.onlineMeta || {}),
-        transport: "socket.io",
-        reason: "disconnectedLastHandGrace",
-        publishedBy: null,
-        publishedAt: now(),
-      };
-      room.updatedAt = now();
-      persistRoom(room);
-      broadcastState(room);
+    try {
+      room.disconnectedLastHandTimer = null;
+      const ids = markDisconnectedPlayersAsLastHand(room);
+      if (ids.length) {
+        room.version = Number(room.version || 0) + 1;
+        room.state.version = room.version;
+        room.state.onlineMeta = {
+          ...(room.state.onlineMeta || {}),
+          transport: "socket.io",
+          reason: "disconnectedLastHandGrace",
+          publishedBy: null,
+          publishedAt: now(),
+        };
+        room.updatedAt = now();
+        persistRoom(room);
+        broadcastState(room);
+      }
+      scheduleDisconnectedLastHandTimeout(room);
+    } catch (error) {
+      logServerException("timer:disconnectedLastHand", error, { tableId: room?.tableId, gameId: room?.gameId, version: room?.version });
+      scheduleDisconnectedLastHandTimeout(room);
     }
-    scheduleDisconnectedLastHandTimeout(room);
   }, delay);
 };
 const scheduleDisconnectedProgressTimeout = (room) => {
@@ -488,39 +493,44 @@ const scheduleDisconnectedProgressTimeout = (room) => {
   ));
   const delay = Math.max(0, nextAt - now());
   room.disconnectedProgressTimer = setTimeout(() => {
-    room.disconnectedProgressTimer = null;
-    const ids = disconnectedHumanPlayerIds(room)
-      .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
-      .filter((id) => registry.get(id)?.disconnectedAutoPlay || Number(registry.get(id)?.disconnectedProgressWaitStartedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS <= now())
-      .filter((id) => {
-        const record = registry.get(id);
-        if (!record?.disconnectedAutoPlay && Number(record?.disconnectedProgressWaitStartedAt || 0) > 0) {
-          record.disconnectedAutoPlay = true;
-          record.disconnectedAutoPlayAt = now();
-        }
-        return isDisconnectedPlayerProgressTarget(room, id);
-      });
-    const progressed = applyDisconnectedGraceActions(room, ids);
-    if (progressed) {
-      advanceServerCpuTurns(room.state);
-      room.version = Number(room.version || 0) + 1;
-      room.state.version = room.version;
-      room.state.onlineMeta = {
-        ...(room.state.onlineMeta || {}),
-        transport: "socket.io",
-        reason: "disconnectedGraceProgress",
-        publishedBy: null,
-        publishedAt: now(),
-      };
-      room.updatedAt = now();
-      persistRoom(room);
-      syncClubPointEffects(room);
-      broadcastState(room);
-      scheduleRoomServerEffect(room);
-      scheduleRoomClockTimeout(room);
-      scheduleRoomResultTimeout(room);
+    try {
+      room.disconnectedProgressTimer = null;
+      const ids = disconnectedHumanPlayerIds(room)
+        .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
+        .filter((id) => registry.get(id)?.disconnectedAutoPlay || Number(registry.get(id)?.disconnectedProgressWaitStartedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS <= now())
+        .filter((id) => {
+          const record = registry.get(id);
+          if (!record?.disconnectedAutoPlay && Number(record?.disconnectedProgressWaitStartedAt || 0) > 0) {
+            record.disconnectedAutoPlay = true;
+            record.disconnectedAutoPlayAt = now();
+          }
+          return isDisconnectedPlayerProgressTarget(room, id);
+        });
+      const progressed = applyDisconnectedGraceActions(room, ids);
+      if (progressed) {
+        advanceServerCpuTurns(room.state);
+        room.version = Number(room.version || 0) + 1;
+        room.state.version = room.version;
+        room.state.onlineMeta = {
+          ...(room.state.onlineMeta || {}),
+          transport: "socket.io",
+          reason: "disconnectedGraceProgress",
+          publishedBy: null,
+          publishedAt: now(),
+        };
+        room.updatedAt = now();
+        persistRoom(room);
+        safeSyncClubPointEffects(room, "disconnectedGraceProgress");
+        broadcastState(room);
+        scheduleRoomServerEffect(room);
+        scheduleRoomClockTimeout(room);
+        scheduleRoomResultTimeout(room);
+      }
+      scheduleDisconnectedProgressTimeout(room);
+    } catch (error) {
+      logServerException("timer:disconnectedProgress", error, { tableId: room?.tableId, gameId: room?.gameId, version: room?.version });
+      scheduleDisconnectedProgressTimeout(room);
     }
-    scheduleDisconnectedProgressTimeout(room);
   }, delay);
 };
 const scheduleDisconnectedTimeouts = (room) => {
@@ -2192,6 +2202,30 @@ const syncClubPointEffects = async (room) => {
   });
   return room.clubPointSyncInFlight;
 };
+const safeSyncClubPointEffects = (room, reason = "unspecified") => {
+  try {
+    return Promise.resolve(syncClubPointEffects(room)).catch((error) => {
+      console.error("[ClubPointSync] async failed", {
+        reason,
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        version: room?.version,
+        error: error?.message || String(error),
+        stack: error?.stack || "",
+      });
+    });
+  } catch (error) {
+    console.error("[ClubPointSync] sync failed", {
+      reason,
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      error: error?.message || String(error),
+      stack: error?.stack || "",
+    });
+    return null;
+  }
+};
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand", "assistSettings"]);
 const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"]);
@@ -2346,7 +2380,7 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
   const blueChips = ensureArray(scoreResult?.winningTiles).filter((tile) => tile?.color === "blue" || tile?.isRocket).length + ensureArray(winner?.nukiDoraTiles).filter((tile) => tile?.color === "blue").length;
   const ippatsuChips = yakuNames.has("一発") ? 1 : 0;
   const uraChips = Number(scoreResult?.dora?.ura || 0);
-  const yakumanChips = ensureArray(scoreResult?.yakuList || scoreResult?.yaku).some((item) => item.isYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
+  const yakumanChips = ensureArray(scoreResult?.yakuList || scoreResult?.yaku).some((item) => item.isYakuman && !item.isCountedYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
   const chipsPerPayer = blueChips + ippatsuChips + uraChips + yakumanChips;
   const chipPoint = getChipPointValue(state);
   const pointPerPayer = roundToTenth(chipsPerPayer * chipPoint);
@@ -2818,7 +2852,7 @@ const serverCountAnkou = (triplets, { isTsumo, winningKey }) => triplets.filter(
 }).length;
 const serverIsRyanmen = (shape, winningKey) => {
   const parsed = parseServerNumberKey(winningKey);
-  if (!parsed || shape.pairKey === winningKey) return false;
+  if (!parsed) return false;
   return shape.melds.some((meld) => {
     if (meld.type !== "sequence" || meld.suit !== parsed.suit) return false;
     if (parsed.rank === meld.start) return meld.start !== 7;
@@ -3079,6 +3113,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
   const winningTiles = [...ensureArray(player.hand), ...(tile ? [tile] : []), ...ensureArray(player.melds).flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
   const bonusSourceTiles = [...winningTiles, ...ensureArray(player.nukiDoraTiles)];
   const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
+  const hasRealYakuman = ensureArray(yaku).some((item) => item.isYakuman && !item.isCountedYakuman);
   const yakuHan = hasYakuman ? 14 : ensureArray(yaku).reduce((sum, item) => sum + Number(item.han || 0), 0);
   const normalDora = hasYakuman ? 0 : countServerIndicatorDora(state.doraIndicators, winningTiles);
   const uraDora = hasYakuman || !player.isRiichi ? 0 : countServerIndicatorDora(state.uraDoraIndicators, winningTiles);
@@ -3097,7 +3132,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     let dealerPay = 0;
     if (winType === "tsumo") {
       const tsumoScore = getTsumoLossless3maTsumoScoreFromHan(totalHan, isDealer);
-      limitType = tsumoScore.limitType;
+      limitType = hasRealYakuman ? "本役満" : tsumoScore.limitType;
       childPay = tsumoScore.childPay + honba * 1000;
       dealerPay = tsumoScore.dealerPay + honba * 1000;
       for (const p of ensureArray(state.players)) {
@@ -3109,7 +3144,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
       basePoints = isDealer ? childPay : Math.max(childPay, dealerPay);
     } else {
       const ronScore = getTsumoLossless3maRonScoreFromHan(totalHan, isDealer);
-      limitType = ronScore.limitType;
+      limitType = hasRealYakuman ? "本役満" : ronScore.limitType;
       basePoints = ronScore.basePoints + honba * 1000;
       payments[player.id] = basePoints;
       if (loserId) payments[loserId] = -basePoints;
@@ -3184,7 +3219,7 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
     beforeBaibaPoints,
     totalPoints,
     finalPoints: totalPoints,
-    limitType,
+    limitType: hasRealYakuman ? "本役満" : limitType,
     yaku,
     yakuList: yaku,
     doraDetails: [
@@ -3404,7 +3439,7 @@ const queueServerSelfDrawOptions = (state, player) => {
   const canKanNow = canServerDeclareKanNow(state);
   if (canServerTsumo(state, player)) {
     const option = { type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null };
-    if (player.isRiichi) {
+    if (player.isRiichi || player.assistSettings?.autoWin) {
       applyServerAction(state, { playerId: player.id, actionType: "tsumo", payload: { action: option, sourceTile: player.drawnTile || null } });
       return true;
     }
@@ -3444,6 +3479,23 @@ const beginServerFlowerAnnouncement = (state, player, tile) => {
   state.activeClockPlayerId = null;
   state.clockStartedAt = null;
   appendHandEvent(state, { type: "flowerAnnouncement", playerId: player.id, tile, turnIndex: state.turnIndex ?? 0 });
+  return true;
+};
+const scheduleServerFeverForcedDiscard = (state, player, feverPlayer) => {
+  if (!state || !player?.drawnTile || !feverPlayer || feverPlayer.id === player.id) return false;
+  const flower = findAutoFlowerTile(player);
+  if (flower && beginServerFlowerAnnouncement(state, player, flower)) return true;
+  state.phase = "riichiAutoDiscard";
+  state.isWaitingForHumanAction = false;
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.pendingServerEffect = {
+    type: "riichiAutoDiscard",
+    playerId: player.id,
+    resumeAt: Date.now() + 850,
+    reason: "feverRiichiForcedDiscard",
+  };
+  appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
   return true;
 };
 const beginServerWinAnnouncement = (state, player, winType) => {
@@ -3653,6 +3705,8 @@ const applyServerFlowerEffect = (state) => {
   state.flowerAnnouncement = null;
   const nextFlower = findAutoFlowerTile(player);
   if (nextFlower) return beginServerFlowerAnnouncement(state, player, nextFlower);
+  const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+  if (scheduleServerFeverForcedDiscard(state, player, feverPlayer)) return true;
   state.phase = "waitingForHumanDiscard";
   if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
   return true;
@@ -3696,7 +3750,17 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
       firstCallPending ??= { playerId: player.id, options };
     }
   }
-  if (ronOptions.length > 0) return setServerPendingMultiRonActions(state, ronOptions, { type: "afterDiscard", fromPlayerId, sourceTile });
+  if (ronOptions.length > 0) {
+    const source = { type: "afterDiscard", fromPlayerId, sourceTile };
+    if (!setServerPendingMultiRonActions(state, ronOptions, source)) return false;
+    for (const option of ronOptions) {
+      const ronPlayer = findPlayer(state, option.playerId);
+      if (!ronPlayer?.assistSettings?.autoWin && !ronPlayer?.isRiichi) continue;
+      resolveServerMultiRonResponse(state, ronPlayer, "ron", { action: option, fromPlayerId, sourceTile });
+      if (!isServerMultiRonPending(state.pendingAction)) return true;
+    }
+    return true;
+  }
   if (firstCallPending) return setServerPendingActions(state, firstCallPending.playerId, firstCallPending.options, { type: "afterDiscard", fromPlayerId, sourceTile });
   return false;
 };
@@ -3724,20 +3788,7 @@ const enterCurrentTurnOnServer = (state) => {
     return;
   }
   const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
-  if (feverPlayer && feverPlayer.id !== player.id) {
-    state.phase = "riichiAutoDiscard";
-    state.isWaitingForHumanAction = false;
-    state.activeClockPlayerId = null;
-    state.clockStartedAt = null;
-    state.pendingServerEffect = {
-      type: "riichiAutoDiscard",
-      playerId: player.id,
-      resumeAt: Date.now() + 850,
-      reason: "feverRiichiForcedDiscard",
-    };
-    appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
-    return;
-  }
+  if (scheduleServerFeverForcedDiscard(state, player, feverPlayer)) return;
   const flower = findAutoFlowerTile(player);
   if (flower && beginServerFlowerAnnouncement(state, player, flower)) return;
   if (queueServerSelfDrawOptions(state, player)) return;
@@ -3983,15 +4034,7 @@ const applyServerAction = (state, event) => {
     drawFromWall(state, player, "liveWall");
     state.phase = "waitingForHumanDiscard";
     const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
-    if (feverPlayer && feverPlayer.id !== player.id) {
-      state.phase = "riichiAutoDiscard";
-      state.isWaitingForHumanAction = false;
-      state.activeClockPlayerId = null;
-      state.clockStartedAt = null;
-      state.pendingServerEffect = { type: "riichiAutoDiscard", playerId: player.id, resumeAt: Date.now() + 850, reason: "feverRiichiForcedDiscard" };
-      appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
-      return state;
-    }
+    if (scheduleServerFeverForcedDiscard(state, player, feverPlayer)) return state;
     const flower = findAutoFlowerTile(player);
     if (flower && beginServerFlowerAnnouncement(state, player, flower)) return state;
     if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
@@ -4001,6 +4044,9 @@ const applyServerAction = (state, event) => {
   if (action === "discard") {
     const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
     const forcedTsumogiri = Boolean(feverPlayer && feverPlayer.id !== player.id && player.drawnTile);
+    if (forcedTsumogiri && isFlowerTile(player.drawnTile)) {
+      if (beginServerFlowerAnnouncement(state, player, player.drawnTile)) return state;
+    }
     const tileId = forcedTsumogiri ? player.drawnTile.id : (payload.tileId || payload.tile?.id);
     if (!tileId) throw new Error("打牌する牌が指定されていません");
     const isRiichiChoiceDiscard = state.pendingAction?.playerId === player.id &&
@@ -4345,6 +4391,9 @@ const applyServerRiichiAutoDiscardEffect = (state) => {
     state.phase = "waitingForHumanDiscard";
     return false;
   }
+  if (isFeverForcedDiscard && isFlowerTile(player.drawnTile)) {
+    return beginServerFlowerAnnouncement(state, player, player.drawnTile);
+  }
   state.phase = "playing";
   appendHandEvent(state, { type: isFeverForcedDiscard ? "feverForcedDiscard" : "riichiAutoDiscard", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
   return Boolean(discardForServer(state, player, player.drawnTile.id));
@@ -4567,6 +4616,11 @@ const calculateServerExhaustiveDraw = (state) => {
     const lastDiscard = ensureArray(nagashiWinner.discardedTiles).at(-1)?.tile || ensureArray(nagashiWinner.discardedTiles).at(-1) || null;
     const yaku = [{ name: "流し役満", han: 13, isYakuman: true }];
     const scoreResult = applyServerWinRake(state, nagashiWinner.id, calculateServerScoreResult(state, nagashiWinner, "tsumo", lastDiscard, null, yaku));
+    const chipSettlement = isTsumoLossless3maState(state)
+      ? calculateTsumoLosslessChipSettlement(state, nagashiWinner, "tsumo", null, scoreResult)
+      : null;
+    if (chipSettlement?.payments) accumulateTsumoLosslessClubPointPayments(state, chipSettlement.payments);
+    if (chipSettlement) scoreResult.chipSettlement = chipSettlement;
     for (const player of ensureArray(state.players)) {
       player.score = Number(player.score || 0) + Number(scoreResult.payments?.[player.id] || 0);
     }
@@ -4579,6 +4633,7 @@ const calculateServerExhaustiveDraw = (state) => {
       winType: "tsumo",
       winningTile: lastDiscard,
       scoreResult,
+      chipSettlement,
       payments: scoreResult.paymentDeltas,
       reason: "nagashiYakuman",
       finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
@@ -5114,7 +5169,7 @@ const scheduleRoomResultTimeout = (room) => {
       if (timerResultId && room.resultPointSyncResultId !== timerResultId) {
         room.resultPointSyncResultId = timerResultId;
         queueReplayEffectsSnapshot(room);
-        syncClubPointEffects(room).catch((error) => console.warn("[ResultOkAuto] async point sync failed", { tableId: room.tableId, gameId: room.gameId, resultId: timerResultId, error: error?.message || String(error) }));
+        safeSyncClubPointEffects(room, "resultOkAuto");
       }
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
@@ -5166,7 +5221,7 @@ const applyPendingRoomServerEffect = (room) => {
   room.state.version = room.version;
   room.updatedAt = now();
   persistRoom(room);
-  syncClubPointEffects(room);
+  safeSyncClubPointEffects(room, "pendingServerEffect");
   return true;
 };
 const applyDueRoomServerEffect = (room) => {
@@ -5182,14 +5237,20 @@ const scheduleRoomServerEffect = (room) => {
   }
   const delay = Math.max(0, Number(room.state.pendingServerEffect.resumeAt || Date.now()) - Date.now());
   room.effectTimer = setTimeout(() => {
-    room.effectTimer = null;
-    if (!room.state?.pendingServerEffect) return;
-    applyPendingRoomServerEffect(room);
-    broadcastState(room);
-    scheduleRoomServerEffect(room);
-    scheduleRoomClockTimeout(room);
-    scheduleRoomResultTimeout(room);
-    scheduleDisconnectedTimeouts(room);
+    try {
+      room.effectTimer = null;
+      if (!room.state?.pendingServerEffect) return;
+      applyPendingRoomServerEffect(room);
+      broadcastState(room);
+      scheduleRoomServerEffect(room);
+      scheduleRoomClockTimeout(room);
+      scheduleRoomResultTimeout(room);
+      scheduleDisconnectedTimeouts(room);
+    } catch (error) {
+      logServerException("timer:serverEffect", error, { tableId: room?.tableId, gameId: room?.gameId, version: room?.version, effectType: room?.state?.pendingServerEffect?.type || "" });
+      try { broadcastState(room); } catch {}
+      scheduleRoomServerEffect(room);
+    }
   }, delay);
 };
 
@@ -5201,54 +5262,53 @@ const scheduleRoomClockTimeout = (room) => {
   }
   const playerId = room.state.activeClockPlayerId;
   if (!playerId || room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement"].includes(room.state.phase)) return;
-  const player = findPlayer(room.state, playerId);
-  if (player?.type !== "cpu" && !isRoomPlayerConnected(room, playerId)) return;
   const delay = Math.max(0, getServerClockRemainingMs(room.state, playerId)) + 80;
   room.clockTimer = setTimeout(() => {
-    room.clockTimer = null;
-    if (room.actionInFlight) {
-      console.warn("[Clock] deferred during action", {
-        tableId: room.tableId,
-        gameId: room.gameId,
-        action: room.actionInFlight?.actionType || "",
-        playerId: room.actionInFlight?.playerId || "",
-      });
-      room.clockTimer = setTimeout(() => {
-        room.clockTimer = null;
-        scheduleRoomClockTimeout(room);
-      }, 250);
-      return;
-    }
-    if (!room.state?.activeClockPlayerId) return;
-    const activePlayerId = room.state.activeClockPlayerId;
-    const activePlayer = findPlayer(room.state, activePlayerId);
-    if (activePlayer?.type !== "cpu" && !isRoomPlayerConnected(room, activePlayerId)) {
-      stopServerClockForPlayer(room.state, activePlayerId, { recoverAfterDiscard: false });
+    try {
+      room.clockTimer = null;
+      if (room.actionInFlight) {
+        console.warn("[Clock] deferred during action", {
+          tableId: room.tableId,
+          gameId: room.gameId,
+          action: room.actionInFlight?.actionType || "",
+          playerId: room.actionInFlight?.playerId || "",
+        });
+        room.clockTimer = setTimeout(() => {
+          try {
+            room.clockTimer = null;
+            scheduleRoomClockTimeout(room);
+          } catch (error) {
+            logServerException("timer:clockDeferred", error, { tableId: room?.tableId, gameId: room?.gameId, version: room?.version });
+          }
+        }, 250);
+        return;
+      }
+      if (!room.state?.activeClockPlayerId) return;
+      const activePlayerId = room.state.activeClockPlayerId;
+      const changed = applyServerClockTimeout(room.state);
+      if (!changed) return;
+      advanceServerCpuTurns(room.state);
+      room.version = Number(room.version || 0) + 1;
+      room.state.version = room.version;
+      room.state.onlineMeta = {
+        ...(room.state.onlineMeta || {}),
+        transport: "socket.io",
+        reason: "clockTimeout",
+        publishedBy: playerId,
+        publishedAt: now(),
+      };
       room.updatedAt = now();
       persistRoom(room);
+      safeSyncClubPointEffects(room, "clockTimeout");
       broadcastState(room);
-      scheduleDisconnectedTimeouts(room);
-      return;
+      scheduleRoomServerEffect(room);
+      scheduleRoomClockTimeout(room);
+      scheduleRoomResultTimeout(room);
+    } catch (error) {
+      logServerException("timer:clockTimeout", error, { tableId: room?.tableId, gameId: room?.gameId, version: room?.version, playerId });
+      try { broadcastState(room); } catch {}
+      scheduleRoomClockTimeout(room);
     }
-    const changed = applyServerClockTimeout(room.state);
-    if (!changed) return;
-    advanceServerCpuTurns(room.state);
-    room.version = Number(room.version || 0) + 1;
-    room.state.version = room.version;
-    room.state.onlineMeta = {
-      ...(room.state.onlineMeta || {}),
-      transport: "socket.io",
-      reason: "clockTimeout",
-      publishedBy: playerId,
-      publishedAt: now(),
-    };
-    room.updatedAt = now();
-    persistRoom(room);
-    syncClubPointEffects(room);
-    broadcastState(room);
-    scheduleRoomServerEffect(room);
-    scheduleRoomClockTimeout(room);
-    scheduleRoomResultTimeout(room);
   }, delay);
 };
 
@@ -5267,7 +5327,7 @@ const acceptStateFromServerPipeline = (room, state, reason, publishedBy) => {
   ensureRoomPlayerRegistry(room);
   room.updatedAt = now();
   persistRoom(room);
-  syncClubPointEffects(room);
+  safeSyncClubPointEffects(room, "acceptState");
   broadcastState(room);
   scheduleRoomServerEffect(room);
   scheduleRoomClockTimeout(room);
@@ -5479,7 +5539,7 @@ io.on("connection", (socket) => {
         if (resultSyncId && room.resultPointSyncResultId !== resultSyncId) {
           room.resultPointSyncResultId = resultSyncId;
           queueReplayEffectsSnapshot(room);
-          syncClubPointEffects(room).catch((error) => console.warn("[ResultOk] async point sync failed", { tableId: room.tableId, gameId: room.gameId, playerId, resultId: resultSyncId, error: error?.message || String(error) }));
+          safeSyncClubPointEffects(room, "resultOk");
         }
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
@@ -5550,7 +5610,7 @@ io.on("connection", (socket) => {
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
       syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
-      if (actionType !== "resultOk" && shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
+      if (actionType !== "resultOk" && shouldSyncRoomDbEffects(room.state)) safeSyncClubPointEffects(room, `gameAction:${actionType}`);
     } catch (error) {
       if (room?.actionInFlight) room.actionInFlight = null;
       if (room?.state && ["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(payload?.actionType)) {

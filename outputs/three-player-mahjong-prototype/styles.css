@@ -681,19 +681,19 @@ button:hover {
 }
 
 .discard-bottom {
-  left: 50%;
+  left: calc(50% + 36px);
   top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) + var(--river-center-gap));
   transform: translateX(-50%) rotate(0deg);
 }
 
 .discard-top {
-  left: 50%;
+  left: calc(50% + 36px);
   top: calc(50% + var(--center-y-offset) - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
   transform: translateX(-50%) rotate(180deg);
 }
 
 .discard-right {
-  left: calc(50% + (var(--center-info-width) / 2) + var(--river-center-gap));
+  left: calc(50% + (var(--center-info-width) / 2) + var(--river-center-gap) - 24px);
   top: calc(50% + var(--center-y-offset));
   transform: translateY(-50%) rotate(-90deg);
 }
@@ -1306,7 +1306,10 @@ button:hover {
   transform-origin: top left;
 }
 
-.seat-right .meld-area .meld-tile .tile,
+.seat-right .meld-area .meld-tile .tile {
+  transform: none;
+}
+
 .seat-right .meld-area .meld-tile.sideways .tile,
 .seat-right .meld-area .meld-tile.called-tile .tile {
   transform: rotate(90deg);
@@ -1655,6 +1658,18 @@ button:hover {
   color: #d8fff5;
   font-size: clamp(54px, 10vw, 112px);
   text-shadow: 0 6px 0 #063d4a, 0 0 34px rgba(38, 233, 255, 0.75), 0 18px 42px rgba(0, 0, 0, 0.75);
+}
+
+.pon-announcement > div {
+  color: #eaff9c;
+  font-size: clamp(58px, 11vw, 118px);
+  text-shadow: 0 7px 0 #31530e, 0 0 28px rgba(182, 255, 71, 0.78), 0 18px 42px rgba(0, 0, 0, 0.76);
+}
+
+.kan-announcement > div {
+  color: #ffe7a8;
+  font-size: clamp(62px, 11vw, 124px);
+  text-shadow: 0 7px 0 #7a3b06, 0 0 30px rgba(255, 183, 65, 0.82), 0 18px 42px rgba(0, 0, 0, 0.76);
 }
 
 .fever-announcement > div {
@@ -2036,7 +2051,7 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2));
+    left: calc(50% + (var(--center-info-width) / 2) - 24px);
     top: 50%;
     transform: translateY(-50%) rotate(-90deg);
     width: var(--river-width);
@@ -2343,19 +2358,19 @@ button:hover {
   }
 
   .discard-bottom {
-    left: 50%;
+    left: calc(50% - 18px);
     top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap));
     transform: translateX(-50%) rotate(0deg);
   }
 
   .discard-top {
-    left: 50%;
+    left: calc(50% - 18px);
     top: calc(40% - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
     transform: translateX(-50%) rotate(180deg);
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2));
+    left: calc(50% + (var(--center-info-width) / 2) - 18px);
     right: auto;
     top: 40%;
     transform: translateY(-50%) rotate(-90deg);
@@ -2439,7 +2454,10 @@ button:hover {
     justify-content: flex-start;
   }
 
-  .seat-right .meld-area .meld-tile .tile,
+  .seat-right .meld-area .meld-tile .tile {
+    transform: none;
+  }
+
   .seat-right .meld-area .meld-tile.sideways .tile,
   .seat-right .meld-area .meld-tile.called-tile .tile {
     transform: rotate(90deg);

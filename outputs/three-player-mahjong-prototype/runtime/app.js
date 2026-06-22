@@ -1671,7 +1671,6 @@ const getReplayEvents = (replay) => {
 };
 const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
-  if (event.type === "draw") return true;
   if (event.type === "skipAction") return true;
   if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichi", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "feverForcedDiscard", "nukiDora"].includes(event.type)) return true;
   return false;
@@ -2629,7 +2628,7 @@ const explicitCountAnkou = (triplets, context) => triplets.filter((triplet) => {
   return true;
 }).length;
 const explicitIsRyanmen = (shape, winningKey) => {
-  if (!winningKey || shape.pairKey === winningKey) return false;
+  if (!winningKey) return false;
   const parsed = parseNumberKey(winningKey);
   if (!parsed) return false;
   return shape.melds.some((meld) => {
@@ -2795,7 +2794,7 @@ class RuleEngine {
     const goldTileCount = bonusSourceTiles.filter((tile) => tile.color === "gold").length;
     const nuki = input.nukiDoraCount ?? 0;
     const uraDora = input.uraDoraCount ?? 0;
-    const hasRealYakuman = input.yaku.some((yaku) => yaku.isYakuman);
+    const hasRealYakuman = input.yaku.some((yaku) => yaku.isYakuman && !yaku.isCountedYakuman);
     const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((sum, yaku) => sum + yaku.han, 0);
     const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki + uraDora;
     const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
@@ -2810,7 +2809,7 @@ class RuleEngine {
       let dealerPay = 0;
       if (input.winType === "tsumo") {
         const tsumoScore = getTsumoLossless3maTsumoScoreFromHan(totalHan, isDealer);
-        limitType = tsumoScore.limitType;
+        limitType = hasRealYakuman ? "本役満" : tsumoScore.limitType;
         childPay = tsumoScore.childPay + honba * 1000;
         dealerPay = tsumoScore.dealerPay + honba * 1000;
         for (const id of input.playerIds) {
@@ -2822,7 +2821,7 @@ class RuleEngine {
         basePoints = isDealer ? childPay : Math.max(childPay, dealerPay);
       } else {
         const ronScore = getTsumoLossless3maRonScoreFromHan(totalHan, isDealer);
-        limitType = ronScore.limitType;
+        limitType = hasRealYakuman ? "本役満" : ronScore.limitType;
         basePoints = ronScore.basePoints + honba * 1000;
         payments[input.winnerId] = basePoints;
         if (input.discarderId) payments[input.discarderId] = -basePoints;
@@ -2885,7 +2884,7 @@ class RuleEngine {
       visibleDora > 0 ? { name: "ドラ", han: visibleDora } : null,
       (input.uraDoraCount ?? 0) > 0 ? { name: "裏ドラ", han: input.uraDoraCount ?? 0 } : null,
     ].filter(Boolean);
-    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: input.uraDoraCount ?? 0 }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
+    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType: hasRealYakuman ? "本役満" : limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: input.uraDoraCount ?? 0 }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
   }
 }
 
@@ -3223,6 +3222,25 @@ class GameController {
       this.handleResultOk({ autoAllResultOk: true });
     });
   }
+  showActionAnnouncement(event, { targetState = this.state, durationMs = 850, emit = false } = {}) {
+    if (!event?.type) return false;
+    const labels = { pon: "ポン", kan: "カン" };
+    const label = labels[event.type];
+    if (!label) return false;
+    const announcementKey = `${event.type}:${event.playerId || ""}:${event.turnIndex ?? ""}:${event.kanType || ""}:${event.tile?.id || event.tiles?.map?.((tile) => tile?.id).join(",") || ""}`;
+    if (announcementKey === this.lastDisplayedAnnouncementKey) return false;
+    this.lastDisplayedAnnouncementKey = announcementKey;
+    targetState.serverAnnouncement = { text: label, kind: `call-${event.type}` };
+    if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
+    this.announcementClearTimer = setTimeout(() => {
+      if (this.state.serverAnnouncement?.kind === `call-${event.type}`) {
+        this.state.serverAnnouncement = null;
+        this.emit();
+      }
+    }, durationMs);
+    if (emit) this.emit();
+    return true;
+  }
   setOnlineLoadingMessage(message) {
     const text = String(message || "");
     if (this.onlineLoadingRevealTimer) {
@@ -3357,7 +3375,11 @@ class GameController {
       this.state.lastClockRenderTick = 0;
       this.state.discardDebugMessage = this.gameSocket?.connected ? "サーバーの時間切れ処理を待っています..." : "接続が切れています。再接続後に手番を再開します。";
       this.onStateChanged(this.state);
-      if (!this.gameSocket?.connected) this.resyncSocketGameState("clockExpiredWhileDisconnected").catch(() => {});
+      const nowMs = Date.now();
+      if (!this.clockExpiredResyncAt || nowMs - this.clockExpiredResyncAt >= 2000) {
+        this.clockExpiredResyncAt = nowMs;
+        this.resyncSocketGameState(this.gameSocket?.connected ? "clockExpiredAwaitingServer" : "clockExpiredWhileDisconnected").catch(() => {});
+      }
       return;
     }
     if (this.state.pendingAction) {
@@ -3979,6 +4001,9 @@ class GameController {
           }
         }, latestEvent.feverRiichiActive ? 1800 : 1000);
       }
+    }
+    if (latestEvent?.type === "pon" || latestEvent?.type === "kan") {
+      this.showActionAnnouncement(latestEvent, { targetState: next, durationMs: latestEvent.type === "kan" ? 1050 : 850 });
     }
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
@@ -5186,6 +5211,7 @@ class GameController {
     const player = getCurrentPlayer(this.state);
     const activeFever = getActiveFeverRiichiPlayer(this.state);
     if (activeFever && activeFever.id !== player?.id && player?.drawnTile) {
+      if (isFlowerTile(player.drawnTile) && this.beginFlowerAnnouncement(player.id, player.drawnTile.id)) return;
       tileId = player.drawnTile.id;
     }
     const viewerPlayerId = isCpuAction ? player?.id : (isSocketAuthoritativeGame() ? loadOnlineSync()?.userId : getLocalHumanPlayerId(this.state));
@@ -5441,7 +5467,14 @@ class GameController {
     if (!human) return false;
     const options = [];
     const ron = this.ruleEngine.canWin(this.state, human, tile);
-    if (ron.canWin && !human.sameTurnFuriten && !isPermanentFuriten(this.state, human)) options.push({ type: "ron", playerId: human.id, fromPlayerId, sourceTile: tile, options: { yaku: ron.yaku } });
+    if (ron.canWin && !human.sameTurnFuriten && !isPermanentFuriten(this.state, human)) {
+      const option = { type: "ron", playerId: human.id, fromPlayerId, sourceTile: tile, options: { yaku: ron.yaku } };
+      if (human.isRiichi || human.assistSettings?.autoWin) {
+        this.confirmRon(option);
+        return true;
+      }
+      options.push(option);
+    }
     const canCallAfterDiscard = hasLiveWallAfterCurrentDraw(this.state);
     if (canCallAfterDiscard && !human.isRiichi && canDeclareKanNow(this.state) && human.hand.filter((t) => sameTileKind(t, tile)).length >= 3) options.push({ type: "kan", playerId: human.id, fromPlayerId, sourceTile: tile, options: { kanType: "minkan" } });
     if (canCallAfterDiscard && !human.isRiichi && human.hand.filter((t) => sameTileKind(t, tile)).length >= 2) options.push({ type: "pon", playerId: human.id, fromPlayerId, sourceTile: tile });
@@ -5501,7 +5534,9 @@ class GameController {
     if (consumed.length !== 2) return;
     this.removeCalledTileFromDiscard(action.fromPlayerId, action.sourceTile.id);
     player.melds.push({ type: "pon", tiles: [...consumed, action.sourceTile], calledTile: action.sourceTile, fromPlayerId: action.fromPlayerId });
-    appendHandLogEvent(this.state.handLog, { type: "pon", playerId: player.id, fromPlayerId: action.fromPlayerId, tile: action.sourceTile, consumedTiles: consumed, turnIndex: this.state.turnIndex });
+    const ponEvent = { type: "pon", playerId: player.id, fromPlayerId: action.fromPlayerId, tile: action.sourceTile, consumedTiles: consumed, turnIndex: this.state.turnIndex };
+    appendHandLogEvent(this.state.handLog, ponEvent);
+    this.showActionAnnouncement(ponEvent, { targetState: this.state, durationMs: 850 });
     appendReplaySnapshot(this.state);
     for (const p of this.state.players) { p.ippatsu = false; p.ippatsuOwnDrawStarted = false; }
     this.state.currentPlayerIndex = this.state.players.findIndex((p) => p.id === player.id);
@@ -5538,7 +5573,9 @@ class GameController {
       player.melds.push({ type: "ankan", tiles });
     }
     this.state.kanCount++;
-    appendHandLogEvent(this.state.handLog, { type: "kan", playerId: player.id, fromPlayerId: action.fromPlayerId, tiles, kanType, turnIndex: this.state.turnIndex });
+    const kanEvent = { type: "kan", playerId: player.id, fromPlayerId: action.fromPlayerId, tiles, kanType, turnIndex: this.state.turnIndex };
+    appendHandLogEvent(this.state.handLog, kanEvent);
+    this.showActionAnnouncement(kanEvent, { targetState: this.state, durationMs: 1050 });
     appendReplaySnapshot(this.state);
     this.revealAdditionalDoraIndicator("kan");
     if (player.drawnTile) {
@@ -5772,6 +5809,7 @@ class GameController {
     }
     if (!player.drawnTile) this.drawTile({ suppressEmit: true });
     if (this.state.phase === "exhaustiveDraw") return;
+    if (this.maybeAnnounceFlowerForCurrentTurn()) return;
     const activeFever = getActiveFeverRiichiPlayer(this.state);
     if (activeFever && activeFever.id !== player.id && player.drawnTile) {
       const tsumogiriTileId = player.drawnTile.id;
@@ -5784,7 +5822,6 @@ class GameController {
       }, 800);
       return;
     }
-    if (this.maybeAnnounceFlowerForCurrentTurn()) return;
     this.autoNukiDoraForCurrentTurn();
     if (player.drawnTile && player.feverRiichiActive) {
       const tsumo = this.ruleEngine.canWin(this.state, player, player.drawnTile);
@@ -6133,8 +6170,6 @@ class GameView {
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
-    this.root.querySelectorAll("[data-rake-percent]").forEach((input) => input.addEventListener("input", () => this.handlers.onUpdateSettings({ rakePercent: Number(input.value) })));
-    this.root.querySelectorAll("[data-clock-seconds]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ initialClockMs: Math.max(1, Number(input.value)) * 1000 })));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
   }
@@ -6782,7 +6817,7 @@ class GameView {
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
-    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : "";
+    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : "";
     const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
     return `<div class="win-announcement ${className}"><div>${content}</div></div>`;
   }
@@ -6796,14 +6831,10 @@ class GameView {
     return `<button type="button" class="settings-toggle" data-settings-toggle>設定</button>`;
   }
   settingsPanel(state) {
-    const rake = state.settings?.rakePercent ?? 0;
     const sync = loadOnlineSync();
     const showDebugLeave = Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     return `<aside class="settings-panel">
       <h2>設定</h2>
-      <label class="setting-row"><span>レーキ: ${rake}%</span><input type="range" min="0" max="20" step="0.5" value="${rake}" data-rake-percent /></label>
-      <label class="setting-row"><span>初期持ち時間</span><input type="number" min="1" max="120" step="1" value="${Math.round((state.settings?.initialClockMs ?? INITIAL_TIME_MS) / 1000)}" data-clock-seconds /> 秒</label>
-      <p>累積レーキ: ${formatPointDisplay(state.rakePool ?? 0)}点</p>
       <button type="button" class="secondary" data-page-reload>画面更新</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
@@ -6890,7 +6921,7 @@ class GameView {
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
-      <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "Fリーチ" : "リーチ"}</span>` : ""}</div>
+      <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
       <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
       ${this.exposedAreaClean(player)}
@@ -7083,7 +7114,7 @@ class GameView {
     if (isTsumoLossless3maState(state)) {
       const yakuRowsForAllRed = yakuList.map((yaku) => {
         const suffix = yaku.detail ? `（${escapeHtml(yaku.detail)}）` : "";
-        return `<li>${escapeHtml(yaku.name)}${suffix} ${Number(yaku.han || 0) ? `${Number(yaku.han)}翻` : ""}</li>`;
+        return `<li>${escapeHtml(yaku.name)}${suffix}${Number(yaku.han || 0) && !yaku.isYakuman ? ` ${Number(yaku.han)}翻` : ""}</li>`;
       });
       const doraNormal = Number(score.dora?.normal ?? 0);
       const doraColored = Number(score.dora?.colored ?? 0);
