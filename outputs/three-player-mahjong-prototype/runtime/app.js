@@ -11,15 +11,29 @@ const SOCKET_STATE_STALL_RESYNC_MS = 3200;
 const installResultOkClickBridge = () => {
   if (globalThis.__anmikaResultOkBridgeInstalled) return;
   globalThis.__anmikaResultOkBridgeInstalled = true;
+  let lastHandledAt = 0;
+  let lastHandledResultId = "";
   const handler = (event) => {
     const resultOk = event.target?.closest?.("[data-result-ok]");
     if (!resultOk) return;
+    if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 0) return;
+    const resultId = resultOk.dataset?.resultId || "";
+    const nowMs = Date.now();
+    if (resultId && resultId === lastHandledResultId && nowMs - lastHandledAt < 250) {
+      event.preventDefault();
+      event.stopImmediatePropagation?.();
+      event.stopPropagation();
+      return;
+    }
+    lastHandledAt = nowMs;
+    lastHandledResultId = resultId;
     event.preventDefault();
     event.stopImmediatePropagation?.();
     event.stopPropagation();
     const controller = globalThis.__anmikaController || (typeof window !== "undefined" ? window.__anmikaController : null);
-    controller?.handleResultOk?.({ resultId: resultOk.dataset?.resultId || "" });
+    controller?.handleResultOk?.({ resultId });
   };
+  document.addEventListener("pointerdown", handler, true);
   document.addEventListener("click", handler, true);
 };
 installResultOkClickBridge();
@@ -1969,6 +1983,14 @@ const formatRoundLabel = (state) => {
   }
   return `${base}${honba > 0 ? `（${honba}本場）` : ""}`;
 };
+const formatCenterRoundLabel = (state) => {
+  const round = state?.round ?? {};
+  const honba = Math.max(0, Number(round.honba ?? state?.honba ?? 0) || 0);
+  if (!isTsumoLossless3maState(state)) return `東場 ${honba}本場`;
+  const index = Number(round.hanchanRoundIndex ?? 0);
+  const base = TSUMO_LOSSLESS_ROUNDS[index] || state?.handLog?.roundLabel || "東1局";
+  return `${base} ${honba}本場`;
+};
 const formatReplayHandLabel = (snapshot, fallbackLabel = "", fallbackIndex = 0) => {
   const round = snapshot?.round ?? {};
   const honba = Number(round.honba ?? snapshot?.honba ?? 0);
@@ -1983,12 +2005,19 @@ const buildReplayHandMarkers = (replay, snapshots = []) => {
   const summaryMarkers = replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
   const seen = new Set();
   const markers = [];
+  const firstSnapshotIndexForHand = (handId, fallbackIndex = 0) => {
+    if (!handId) return Math.max(0, Number(fallbackIndex || 0));
+    const index = snapshots.findIndex((snapshot) => snapshot?.handLog?.handId === handId);
+    return index >= 0 ? index : Math.max(0, Number(fallbackIndex || 0));
+  };
   const pushMarker = (marker = {}, indexFallback = 0) => {
-    const index = Math.max(0, Number(marker.index ?? indexFallback ?? 0));
-    const snapshot = snapshots[index] ?? null;
-    const handId = marker.handId || snapshot?.handLog?.handId || `hand-${index}`;
+    const fallbackIndex = Math.max(0, Number(marker.index ?? indexFallback ?? 0));
+    const fallbackSnapshot = snapshots[fallbackIndex] ?? null;
+    const handId = marker.handId || fallbackSnapshot?.handLog?.handId || `hand-${fallbackIndex}`;
     if (seen.has(handId)) return;
     seen.add(handId);
+    const index = firstSnapshotIndexForHand(handId, fallbackIndex);
+    const snapshot = snapshots[index] ?? fallbackSnapshot;
     markers.push({
       handId,
       index,
@@ -2159,7 +2188,8 @@ const renderResultOkButton = (state) => {
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
   const isSubmitting = Boolean(state.resultOkSubmitted && !isConfirmed);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
-  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}">${isConfirmed ? `OK済み (${countdown}秒)${countText}` : isSubmitting ? `OK送信中 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+  const disabledAttr = isConfirmed || isSubmitting ? " disabled aria-disabled=\"true\"" : "";
+  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}"${disabledAttr}>${isConfirmed ? `OK済み (${countdown}秒)${countText}` : isSubmitting ? `OK送信中 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
 };
 const renderAgariYameButton = (state) => {
   if (!canLocalPlayerAgariYame(state)) return "";
@@ -4865,11 +4895,16 @@ class GameController {
       const localPlayerId = getLocalHumanPlayerId(this.state);
       if (!localPlayerId) return;
       if (this.state.resultOkSubmitted && Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 800) return;
+      const requestId = `result-ok-${result.resultId || "result"}-${localPlayerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.state.resultOkSubmitted = true;
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultAutoCloseHandled = true;
+      this.state.resultOkPlayerIds = [...new Set([...(this.state.resultOkPlayerIds || []), localPlayerId])];
+      if (this.state.handLog?.result) {
+        this.state.handLog.result.resultOkPlayerIds = [...new Set([...(this.state.handLog.result.resultOkPlayerIds || []), localPlayerId])];
+      }
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk) }, { timeoutMs: 12000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 8000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
           this.emit();
@@ -4897,6 +4932,10 @@ class GameController {
       }).catch((error) => {
         this.state.resultOkSubmitted = false;
         this.state.resultAutoCloseHandled = false;
+        this.state.resultOkPlayerIds = (this.state.resultOkPlayerIds || []).filter((id) => id !== localPlayerId);
+        if (this.state.handLog?.result?.resultId === result.resultId) {
+          this.state.handLog.result.resultOkPlayerIds = (this.state.handLog.result.resultOkPlayerIds || []).filter((id) => id !== localPlayerId);
+        }
         console.warn("[SocketGame] result ok failed", error);
         this.state.log.unshift(`オンライン次局開始に失敗: ${error.message}`);
         this.emit();
@@ -5984,7 +6023,7 @@ const renderMeldSet = (state, ownerId, meld) => {
   }
   const tiles = baseTiles.map((tile, index) => {
     const sideways = index === sidewaysIndex;
-    return `<span class="meld-tile ${sideways ? "sideways" : ""}">${renderTileView({ tile })}</span>`;
+    return `<span class="meld-tile ${sideways ? "sideways called-tile" : ""}">${renderTileView({ tile })}</span>`;
   }).join("");
   const added = meld.type === "kakan" ? (meld.addedTile ?? meld.tiles.at(-1)) : null;
   return `<span class="meld-set meld-${meld.type}" style="--called-index:${Math.max(0, sidewaysIndex)}">
@@ -6090,6 +6129,7 @@ class GameView {
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
     this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
     this.root.querySelectorAll("[data-force-table-leave]").forEach((b) => b.addEventListener("click", () => this.handlers.onForceTableLeave?.()));
+    this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
@@ -6732,12 +6772,19 @@ class GameView {
     </section>`;
   }
   winAnnouncement(state) {
-    return `<div class="win-announcement"><div>${state.winAnnouncement ?? ""}</div></div>`;
+    const announcement = state.serverAnnouncement || {};
+    const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
+    if (lines.length > 1) {
+      return `<div class="win-announcement double-ron-announcement"><div>${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div></div>`;
+    }
+    return `<div class="win-announcement"><div>${escapeHtml(state.winAnnouncement ?? "")}</div></div>`;
   }
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
-    const className = announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : "";
-    return `<div class="win-announcement ${className}"><div>${escapeHtml(announcement.text ?? "")}</div></div>`;
+    const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
+    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : "";
+    const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
+    return `<div class="win-announcement ${className}"><div>${content}</div></div>`;
   }
   flowerAnnouncement(state) {
     return `<div class="win-announcement flower-announcement"><div>${state.flowerAnnouncement ?? "華"}</div></div>`;
@@ -6757,6 +6804,7 @@ class GameView {
       <label class="setting-row"><span>レーキ: ${rake}%</span><input type="range" min="0" max="20" step="0.5" value="${rake}" data-rake-percent /></label>
       <label class="setting-row"><span>初期持ち時間</span><input type="number" min="1" max="120" step="1" value="${Math.round((state.settings?.initialClockMs ?? INITIAL_TIME_MS) / 1000)}" data-clock-seconds /> 秒</label>
       <p>累積レーキ: ${formatPointDisplay(state.rakePool ?? 0)}点</p>
+      <button type="button" class="secondary" data-page-reload>画面更新</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
   }
@@ -6806,7 +6854,7 @@ class GameView {
   }
   centerInfoClean(state, dealer) {
     const baibaDetails = getVisibleBaibaMultiplierDetails(state);
-    const roundLabel = `${formatRoundLabel(state)}${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
+    const roundLabel = `${formatCenterRoundLabel(state)}${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
     const playerRows = (state.players ?? []).map((player) => {
       const role = getSeatRoleLabel(state, player.id);
       return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${formatPointDisplay(player.score)}点</strong><em>${role}</em></li>`;
@@ -6962,6 +7010,46 @@ class GameView {
   }
   scoreBreakdown(score, state) {
     const result = state.handLog.result;
+    if (Array.isArray(result?.wins) && result.wins.length > 1) {
+      const combinedPayments = Array.isArray(result.payments)
+        ? Object.fromEntries(result.payments.map((payment) => [payment.playerId, payment.delta]))
+        : result.payments ?? {};
+      const signed = (value = 0) => `${signedPointDisplay(value)}点`;
+      const winBlocks = result.wins.map((win, index) => {
+        const winScore = win.scoreResult || {};
+        const winner = state.players.find((player) => player.id === win.winnerId);
+        const scoringTile = win.scoringWinningTile || winScore.selectedWait || win.winningTile || result.winningTile;
+        const displayTile = winScore.displayWinningTile || win.winningTile || scoringTile;
+        const handTiles = resultHand13Tiles(winScore, winner, scoringTile);
+        const meldsInlineView = resultMeldsInlineView(state, winner);
+        const yakuList = winScore.yakuList ?? winScore.yaku ?? [];
+        const yakuRows = yakuList.map((yaku) => {
+          const suffix = yaku.detail ? `（${escapeHtml(yaku.detail)}）` : "";
+          const han = Number(yaku.han || 0) ? ` ${Number(yaku.han)}翻` : "";
+          return `<li>${escapeHtml(yaku.name)}${suffix}${han}</li>`;
+        }).join("");
+        const scoreLabel = isTsumoLossless3maState(state)
+          ? `${winScore.limitType && winScore.limitType !== "通常" ? winScore.limitType : `${Number(winScore.han ?? winScore.totalHan ?? 0)}翻`}ロン`
+          : `${winScore.limitType ?? "通常"} ${formatPointDisplay(winScore.finalPoints ?? winScore.totalPoints ?? 0)}点`;
+        return `<section class="double-ron-result-block">
+          <h3>${index === 0 ? "上家取り" : "和了"}: ${escapeHtml(winner?.name || getPlayerNameById(win.winnerId))} ロン</h3>
+          <div class="score-hand-win-row result-hand-win-nuki-row">
+            <div class="score-hand-block"><strong>手牌・副露</strong><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>
+            <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles result-winning-tile">${displayTile ? renderTileView({ tile: displayTile, isDrawnTile: true }) : ""}</div></div>
+          </div>
+          <ul class="score-yaku compact-yaku">${yakuRows || "<li>なし</li>"}</ul>
+          <p class="final-score-line">${scoreLabel}</p>
+        </section>`;
+      }).join("");
+      return `<section class="score-result result-modal win-result-modal compact-score-result double-ron-result"><h2>ダブロン</h2>
+        ${winBlocks}
+        <h3>点数の移動</h3>
+        <ul class="score-payments">
+          ${state.players.map((player) => `<li>${player.name} <strong>${formatPointDisplay(player.score)}点</strong> <span>（${signed(combinedPayments[player.id] ?? 0)}）</span></li>`).join("")}
+        </ul>
+        ${renderResultOkButton(state)}
+      </section>`;
+    }
     const winner = result?.type === "win" ? state.players.find((p) => p.id === result.winnerId) : null;
     const playerName = (playerId) => state.players.find((player) => player.id === playerId)?.name || getPlayerNameById(playerId);
     const bonus = score.bonuses ?? {};

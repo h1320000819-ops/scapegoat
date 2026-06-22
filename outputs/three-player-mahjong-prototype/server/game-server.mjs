@@ -265,6 +265,13 @@ const buildViewStateForPlayer = (state, viewerId) => {
   });
   viewState.liveWall = hiddenTileArray(asArray(state.liveWall).length, "wall");
   viewState.rinshanWall = hiddenTileArray(asArray(state.rinshanWall).length, "rinshan");
+  if (viewState.pendingAction?.type === "multiRon") {
+    const alreadyResponded = Boolean(viewState.pendingAction.responses?.[viewerId]);
+    const options = alreadyResponded ? [] : asArray(viewState.pendingAction.optionsByPlayerId?.[viewerId]);
+    viewState.pendingAction = options.length
+      ? { playerId: viewerId, options, source: viewState.pendingAction.source, type: "multiRon" }
+      : null;
+  }
   if (!isResultPhase(state)) viewState.uraDoraIndicators = [];
   viewState.onlineMeta = {
     ...(viewState.onlineMeta || {}),
@@ -375,6 +382,7 @@ const markRoomPlayerDisconnected = (room, socketId, reason = "") => {
 const isDisconnectedPlayerProgressTarget = (room, playerId) => {
   if (!room?.state || !playerId) return false;
   if (room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase)) return false;
+  if (room.state.pendingAction?.type === "multiRon" && room.state.pendingAction.playerIds?.includes?.(playerId) && !room.state.pendingAction.responses?.[playerId]) return true;
   if (room.state.pendingAction?.playerId === playerId) return true;
   const active = currentPlayer(room.state);
   return active?.id === playerId && ["playing", "waitingForHumanDiscard", "waitingForRiichiDiscard"].includes(room.state.phase);
@@ -523,7 +531,8 @@ const resumeClockForReconnectedPlayer = (room, userId) => {
   if (!room?.state || !userId) return false;
   if (room.state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement", "showingWinAnnouncement"].includes(room.state.phase)) return false;
   const current = currentPlayer(room.state);
-  const isPendingOwner = room.state.pendingAction?.playerId === userId;
+  const isPendingOwner = room.state.pendingAction?.playerId === userId ||
+    (room.state.pendingAction?.type === "multiRon" && room.state.pendingAction.playerIds?.includes?.(userId) && !room.state.pendingAction.responses?.[userId]);
   const isDiscardOwner = current?.id === userId && ["waitingForHumanDiscard", "waitingForRiichiDiscard", "playing"].includes(room.state.phase);
   if (!isPendingOwner && !isDiscardOwner) return false;
   startServerClockForPlayer(room.state, findPlayer(room.state, userId));
@@ -536,6 +545,15 @@ const applyDisconnectedGraceActions = (room, playerIds = []) => {
   for (const playerId of playerIds) {
     const player = findPlayer(room.state, playerId);
     if (!player || player.type === "cpu") continue;
+    if (room.state.pendingAction?.type === "multiRon" && room.state.pendingAction.playerIds?.includes?.(playerId) && !room.state.pendingAction.responses?.[playerId]) {
+      applyServerAction(room.state, {
+        playerId,
+        actionType: "skip",
+        payload: { pending: clone(room.state.pendingAction), reason: "disconnectedGraceTimeout" },
+      });
+      changed = true;
+      continue;
+    }
     if (room.state.pendingAction?.playerId === playerId) {
       applyServerAction(room.state, {
         playerId,
@@ -704,6 +722,10 @@ const nextHanchanPlayersFromSeats = (state) => {
 };
 const startNextTsumoLosslessHanchanIfReady = async (room) => {
   if (!room?.state || !isTsumoLossless3maState(room.state) || room.state.phase !== "gameEnded") return false;
+  await Promise.race([
+    enforceContinuationPointLimit(room, { timing: "nextHanchanStart" }),
+    new Promise((resolve) => setTimeout(() => resolve([]), 1200)),
+  ]).catch((error) => console.warn("[PointLimit] bounded next-hanchan check failed", { tableId: room.tableId, gameId: room.gameId, error: error?.message || String(error) }));
   syncDeclaredLastHandLeaves(room);
   await fillRoomSeatsFromWaitingList(room);
   const players = nextHanchanPlayersFromSeats(room.state);
@@ -1148,6 +1170,66 @@ const getRoomTableContext = async (room) => {
 const nonCpuPlayersForPointSettlement = (state) =>
   asArray(state?.players).filter((player) => player?.type !== "cpu" && isUuid(player?.id));
 const pointSettlementPlayerById = (state) => new Map(asArray(state?.players).map((player) => [player.id, player]));
+const requiredContinuationPointBalance = (state) => {
+  const rate = Math.max(0, Number(state?.settings?.pointRate || 1));
+  return isTsumoLossless3maState(state) ? roundToTenth(150 * rate) : roundToTenth(1000 * rate);
+};
+const markPlayersLastHandForBalance = (state, playerIds = [], reason = "pointBalanceLimit") => {
+  const ids = [...new Set(asArray(playerIds).filter((id) => id && isUuid(id)))];
+  if (!ids.length) return false;
+  state.settings ??= {};
+  const before = new Set(asArray(state.lastHandDeclaredBy));
+  for (const id of ids) before.add(id);
+  state.lastHandDeclaredBy = [...before];
+  state.settings.isLastHand = state.lastHandDeclaredBy.length > 0;
+  state.seats = normalizeServerSeats(state.seats);
+  for (const seat of state.seats) {
+    if (ids.includes(seat?.playerId)) seat.isLastHandDeclared = true;
+  }
+  appendHandEvent(state, { type: "lastHandByPointBalance", playerIds: ids, reason, requiredPointBalance: requiredContinuationPointBalance(state), turnIndex: state.turnIndex ?? 0 });
+  return true;
+};
+const enforceContinuationPointLimit = async (room, { timing = "nextHand" } = {}) => {
+  if (!room?.state || !hasSupabaseServerWriter()) return [];
+  const state = room.state;
+  const players = nonCpuPlayersForPointSettlement(state);
+  if (!players.length) return [];
+  const required = requiredContinuationPointBalance(state);
+  if (!(required > 0)) return [];
+  const table = await getRoomTableContext(room).catch((error) => {
+    console.warn("[PointLimit] table context unavailable", { tableId: room.tableId, gameId: room.gameId, error: error?.message || String(error) });
+    return null;
+  });
+  if (!table?.club_id) return [];
+  const playerIds = players.map((player) => player.id);
+  const rows = await supabaseRest(
+    `/club_members?select=user_id,point_balance&club_id=eq.${encodeURIComponent(table.club_id)}&user_id=in.(${playerIds.map(encodeURIComponent).join(",")})`
+  ).catch((error) => {
+    console.warn("[PointLimit] balance check failed", { tableId: room.tableId, gameId: room.gameId, timing, error: error?.message || String(error) });
+    return null;
+  });
+  if (!Array.isArray(rows)) return [];
+  const balanceById = new Map(rows.map((row) => [row.user_id, Number(row.point_balance || 0)]));
+  const insufficient = players
+    .filter((player) => Number(balanceById.get(player.id) ?? 0) + 1e-9 < required)
+    .map((player) => player.id);
+  const newlyMarked = insufficient.filter((id) => !asArray(state.lastHandDeclaredBy).includes(id));
+  if (!newlyMarked.length) return insufficient;
+  if (markPlayersLastHandForBalance(state, newlyMarked, timing)) {
+    state.continuationPointLimit ??= { checks: [] };
+    state.continuationPointLimit.checks.push({
+      timing,
+      required,
+      playerIds: newlyMarked,
+      balances: Object.fromEntries(newlyMarked.map((id) => [id, roundToTenth(balanceById.get(id) ?? 0)])),
+      checkedAt: now(),
+    });
+    console.log("[PointLimit] marked last hand", { tableId: room.tableId, gameId: room.gameId, timing, required, playerIds: newlyMarked });
+    room.updatedAt = now();
+    persistRoom(room);
+  }
+  return insufficient;
+};
 const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
 const roundToTenth = (value) => {
   const numeric = Number(value || 0);
@@ -2050,6 +2132,11 @@ const syncClubPointEffects = async (room) => {
         ...compensationMetadata,
       });
       await syncAnmikaRakeLogEffect(room, result, rate);
+      enforceContinuationPointLimit(room, { timing: "nextHand" })
+        .then((insufficient) => {
+          if (insufficient?.length) broadcastState(room);
+        })
+        .catch((error) => console.warn("[PointLimit] async next-hand check failed", { tableId: room.tableId, gameId: room.gameId, error: error?.message || String(error) }));
       return;
     }
     if (!isTsumoLossless3maState(state)) return;
@@ -2086,6 +2173,11 @@ const syncClubPointEffects = async (room) => {
         accumulatedInGamePayments: accumulated,
         ...compensationMetadata,
       });
+      enforceContinuationPointLimit(room, { timing: "nextHanchan" })
+        .then((insufficient) => {
+          if (insufficient?.length) broadcastState(room);
+        })
+        .catch((error) => console.warn("[PointLimit] async next-hanchan check failed", { tableId: room.tableId, gameId: room.gameId, error: error?.message || String(error) }));
     }
   })().catch((error) => {
     if (room?.state) {
@@ -2490,6 +2582,31 @@ const setServerPendingActions = (state, playerId, options, source = null) => {
     type: "pendingAction",
     playerId,
     options: filteredOptions.map((option) => option.type),
+    source,
+    turnIndex: state.turnIndex ?? 0,
+  });
+  return true;
+};
+const isServerMultiRonPending = (pending) => pending?.type === "multiRon";
+const setServerPendingMultiRonActions = (state, ronOptions, source = null) => {
+  const options = ensureArray(ronOptions).filter((option) => option?.type === "ron" && option.playerId);
+  if (!options.length) return false;
+  const playerIds = [...new Set(options.map((option) => option.playerId))];
+  state.pendingAction = {
+    type: "multiRon",
+    playerIds,
+    optionsByPlayerId: Object.fromEntries(playerIds.map((playerId) => [playerId, options.filter((option) => option.playerId === playerId)])),
+    responses: {},
+    source,
+  };
+  state.phase = "waitingForAction";
+  state.isWaitingForHumanAction = true;
+  state.activeClockPlayerId = playerIds[0] || null;
+  state.clockStartedAt = Date.now();
+  state.lastClockRenderTick = null;
+  appendHandEvent(state, {
+    type: "pendingMultiRon",
+    playerIds,
     source,
     turnIndex: state.turnIndex ?? 0,
   });
@@ -3341,6 +3458,163 @@ const beginServerWinAnnouncement = (state, player, winType) => {
     resumeAt: Date.now() + 1800,
   };
 };
+const sortRonWinnersByKamichaFromLoser = (state, loserId, winnerIds) => {
+  const ids = ensureArray(state?.players).map((player) => player.id);
+  const loserIndex = ids.indexOf(loserId);
+  if (loserIndex < 0) return [...winnerIds];
+  const distance = (winnerId) => {
+    const winnerIndex = ids.indexOf(winnerId);
+    if (winnerIndex < 0) return Number.MAX_SAFE_INTEGER;
+    return (loserIndex - winnerIndex + ids.length) % ids.length || ids.length;
+  };
+  return [...winnerIds].sort((a, b) => distance(a) - distance(b));
+};
+const buildServerRonWinEntry = (state, player, sourceTile, loserId) => {
+  const winCheck = evaluateServerWin(state, player, sourceTile, "ron");
+  if (!winCheck.canWin) throw new Error(winCheck.reason || "和了できません");
+  const waits = getWinningTilesForServerTenpai(player);
+  if (isServerFuritenForWaits(player, waits)) throw new Error("フリテンのためロンできません");
+  const scoreResult = applyServerWinRake(
+    state,
+    player.id,
+    calculateServerScoreResult(state, player, "ron", sourceTile, loserId, winCheck.yaku),
+  );
+  scoreResult.displayWinningTile ??= sourceTile;
+  return {
+    winnerId: player.id,
+    loserId,
+    winType: "ron",
+    winningTile: sourceTile,
+    scoringWinningTile: sourceTile,
+    scoreResult,
+  };
+};
+const finalizeServerRonWins = (state, winEntries, loserId, sourceTile) => {
+  const entries = ensureArray(winEntries).filter((entry) => entry?.winnerId);
+  if (!entries.length) return false;
+  const orderedWinnerIds = sortRonWinnersByKamichaFromLoser(state, loserId, entries.map((entry) => entry.winnerId));
+  const orderedEntries = orderedWinnerIds.map((id) => entries.find((entry) => entry.winnerId === id)).filter(Boolean);
+  const primary = orderedEntries[0];
+  const combinedPayments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
+  for (const entry of orderedEntries) {
+    for (const [playerId, delta] of Object.entries(entry.scoreResult?.payments || {})) {
+      combinedPayments[playerId] = Number(combinedPayments[playerId] || 0) + Number(delta || 0);
+    }
+  }
+  const riichiStickCount = isTsumoLossless3maState(state) ? Number(state.riichiStickCount || 0) : 0;
+  const riichiStickPoints = riichiStickCount * 1000;
+  if (riichiStickPoints > 0 && primary?.winnerId) {
+    combinedPayments[primary.winnerId] = Number(combinedPayments[primary.winnerId] || 0) + riichiStickPoints;
+    primary.scoreResult.payments ??= {};
+    primary.scoreResult.payments[primary.winnerId] = Number(primary.scoreResult.payments[primary.winnerId] || 0) + riichiStickPoints;
+    primary.scoreResult.riichiStickCount = riichiStickCount;
+    primary.scoreResult.riichiStickPoints = riichiStickPoints;
+    primary.scoreResult.winnerGain = Number(primary.scoreResult.payments[primary.winnerId] || 0);
+    primary.scoreResult.paymentDeltas = Object.entries(primary.scoreResult.payments).map(([playerId, delta]) => ({ playerId, delta }));
+    state.riichiStickCount = 0;
+  }
+  for (const player of ensureArray(state.players)) {
+    player.score = Number(player.score || 0) + Number(combinedPayments[player.id] || 0);
+  }
+  const chipSettlements = [];
+  const tobiPrizes = [];
+  for (const entry of orderedEntries) {
+    const winner = findPlayer(state, entry.winnerId);
+    if (!winner) continue;
+    const chipSettlement = isTsumoLossless3maState(state)
+      ? (entry.scoreResult.chipSettlement || calculateTsumoLosslessChipSettlement(state, winner, "ron", loserId, entry.scoreResult))
+      : null;
+    const tobiPrize = isTsumoLossless3maState(state)
+      ? calculateTsumoLosslessTobiPrize(state, winner.id, "ron", loserId)
+      : null;
+    if (chipSettlement?.payments) accumulateTsumoLosslessClubPointPayments(state, chipSettlement.payments);
+    if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
+    entry.chipSettlement = chipSettlement;
+    entry.tobiPrize = tobiPrize;
+    if (chipSettlement) chipSettlements.push({ winnerId: winner.id, ...chipSettlement });
+    if (tobiPrize) tobiPrizes.push({ winnerId: winner.id, ...tobiPrize });
+  }
+  state.pendingAction = null;
+  state.handLog ??= {};
+  state.handLog.result = {
+    resultId: randomUUID(),
+    createdAt: now(),
+    type: "win",
+    winnerId: primary.winnerId,
+    loserId,
+    winType: "ron",
+    winningTile: primary.winningTile || sourceTile,
+    scoringWinningTile: primary.scoringWinningTile || sourceTile,
+    scoreResult: primary.scoreResult,
+    wins: orderedEntries,
+    winners: orderedEntries.map((entry) => entry.winnerId),
+    payments: Object.entries(combinedPayments).map(([playerId, delta]) => ({ playerId, delta })),
+    chipSettlements,
+    tobiPrizes,
+    riichiStickCount,
+    riichiStickPoints,
+    primaryWinnerRule: orderedEntries.length > 1 ? "kamicha" : "single",
+  };
+  resetResultCountdownState(state);
+  for (const entry of orderedEntries) {
+    appendHandEvent(state, { type: "ron", playerId: entry.winnerId, fromPlayerId: loserId, tile: entry.winningTile || sourceTile, scoringTile: entry.scoringWinningTile || sourceTile, scoreResult: entry.scoreResult, isDoubleRon: orderedEntries.length > 1, primaryWinnerId: primary.winnerId, turnIndex: state.turnIndex ?? 0 });
+  }
+  const primaryPlayer = findPlayer(state, primary.winnerId);
+  beginServerWinAnnouncement(state, primaryPlayer || { id: primary.winnerId }, "ron");
+  if (orderedEntries.length > 1) {
+    state.winAnnouncement = "ダブロン";
+    state.serverAnnouncement = {
+      text: "ダブロン",
+      kind: "double-ron",
+      lines: orderedEntries.map((entry) => `${findPlayer(state, entry.winnerId)?.name || "Player"} ロン`),
+      ronCount: orderedEntries.length,
+    };
+  }
+  return true;
+};
+const continueServerAfterDiscardSource = (state, source) => {
+  state.pendingAction = null;
+  state.phase = "playing";
+  const fromIndex = ensureArray(state.players).findIndex((p) => p.id === source?.fromPlayerId);
+  if (fromIndex >= 0) state.currentPlayerIndex = fromIndex;
+  advanceTurn(state);
+  enterCurrentTurnOnServer(state);
+};
+const resolveServerMultiRonResponse = (state, player, action, payload = {}) => {
+  const pending = state.pendingAction;
+  if (!isServerMultiRonPending(pending)) return false;
+  if (!pending.playerIds?.includes?.(player.id)) throw new Error("このロン選択の対象プレイヤーではありません");
+  if (pending.responses?.[player.id]) return true;
+  pending.responses ??= {};
+  const option = asArray(pending.optionsByPlayerId?.[player.id]).find((item) => item.type === "ron");
+  if (!option) throw new Error("ロン選択が見つかりません");
+  if (action === "ron") {
+    const sourceTile = payload.action?.sourceTile || payload.sourceTile || option.sourceTile || pending.source?.sourceTile;
+    const loserId = payload.action?.fromPlayerId || payload.fromPlayerId || option.fromPlayerId || pending.source?.fromPlayerId;
+    pending.responses[player.id] = { type: "ron", entry: buildServerRonWinEntry(state, player, sourceTile, loserId) };
+    appendHandEvent(state, { type: "ronAccepted", playerId: player.id, fromPlayerId: loserId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
+  } else {
+    pending.responses[player.id] = { type: "skip" };
+    player.sameTurnFuriten = true;
+    appendHandEvent(state, { type: "skipAction", playerId: player.id, actionType: "ron", turnIndex: state.turnIndex ?? 0 });
+  }
+  const waitingIds = pending.playerIds.filter((id) => !pending.responses[id]);
+  if (waitingIds.length) {
+    state.activeClockPlayerId = waitingIds[0];
+    state.clockStartedAt = Date.now();
+    state.phase = "waitingForAction";
+    state.isWaitingForHumanAction = true;
+    return true;
+  }
+  const entries = pending.playerIds.map((id) => pending.responses[id]).filter((response) => response?.type === "ron").map((response) => response.entry);
+  const source = pending.source || {};
+  if (entries.length) {
+    finalizeServerRonWins(state, entries, source.fromPlayerId || entries[0]?.loserId, source.sourceTile || entries[0]?.winningTile);
+    return true;
+  }
+  continueServerAfterDiscardSource(state, source);
+  return true;
+};
 const drawRinshanAfterFlower = (state, player, removedFromDrawn) => {
   const tile = ensureArray(state.rinshanWall).shift();
   if (!tile) return null;
@@ -3395,6 +3669,8 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
   const canCallAfterDiscard = hasLiveWallAfterCurrentDraw(state);
   const canCallKanAfterDiscard = canCallAfterDiscard && canServerDeclareKanNow(state);
   const candidates = ensureArray(state.players).filter((player) => player.id !== fromPlayerId && player.type !== "cpu");
+  const ronOptions = [];
+  let firstCallPending = null;
   for (const player of candidates) {
     const matchingCount = ensureArray(player.hand).filter((tile) => sameTileKind(tile, sourceTile)).length;
     const noCall = Boolean(player.assistSettings?.noCall);
@@ -3403,10 +3679,10 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
       const option = { type: "ron", playerId: player.id, fromPlayerId, sourceTile };
       console.log("[Ron] available", { tableId: state.tableId, playerId: player.id, fromPlayerId, tile: tileKindKey(sourceTile), version: state.version });
       if (player.isRiichi) {
-        applyServerAction(state, { playerId: player.id, actionType: "ron", payload: { action: option, fromPlayerId, sourceTile } });
-        return true;
+        ronOptions.push(option);
+        continue;
       }
-      options.push(option);
+      ronOptions.push(option);
     }
     if (canCallAfterDiscard && !player.isRiichi && !noCall) {
       if (matchingCount >= 3 && canCallKanAfterDiscard) {
@@ -3417,9 +3693,11 @@ const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
       }
     }
     if (options.length > 0) {
-      return setServerPendingActions(state, player.id, options, { type: "afterDiscard", fromPlayerId, sourceTile });
+      firstCallPending ??= { playerId: player.id, options };
     }
   }
+  if (ronOptions.length > 0) return setServerPendingMultiRonActions(state, ronOptions, { type: "afterDiscard", fromPlayerId, sourceTile });
+  if (firstCallPending) return setServerPendingActions(state, firstCallPending.playerId, firstCallPending.options, { type: "afterDiscard", fromPlayerId, sourceTile });
   return false;
 };
 const advanceTurn = (state) => {
@@ -3693,6 +3971,11 @@ const applyServerAction = (state, event) => {
   const activeFeverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
   if (activeFeverPlayer && activeFeverPlayer.id !== player.id && ["ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"].includes(action)) {
     throw new Error("フィーバーリーチ中の他家はツモ切りのみです");
+  }
+
+  if (isServerMultiRonPending(state.pendingAction) && ["ron", "skip"].includes(action)) {
+    resolveServerMultiRonResponse(state, player, action, payload);
+    return state;
   }
 
   if (action === "draw") {
@@ -4072,6 +4355,10 @@ const applyServerClockTimeout = (state) => {
   if (!playerId || state.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "showingFlowerAnnouncement"].includes(state.phase)) return false;
   const player = findPlayer(state, playerId);
   if (!player) return false;
+  if (isServerMultiRonPending(state.pendingAction) && state.pendingAction.playerIds?.includes?.(playerId)) {
+    resolveServerMultiRonResponse(state, player, "skip", { pending: clone(state.pendingAction), reason: "timeout" });
+    return true;
+  }
   if (state.pendingAction?.playerId === playerId) {
     applyServerAction(state, {
       playerId,
@@ -4817,14 +5104,18 @@ const scheduleRoomResultTimeout = (room) => {
   room.state.resultCountdownStartedAt ??= Date.now();
   const timerStartedAt = Number(room.state.resultCountdownStartedAt || Date.now());
   const delay = Math.max(0, timerStartedAt + RESULT_AUTO_OK_DELAY_MS - Date.now());
-  room.resultTimer = setTimeout(() => {
+  room.resultTimer = setTimeout(async () => {
     room.resultTimer = null;
     try {
       if (!isWaitingForResultOk(room.state) || getCurrentResultId(room.state) !== timerResultId || Number(room.state.resultCountdownStartedAt || 0) !== timerStartedAt) {
         scheduleRoomResultTimeout(room);
         return;
       }
-      queueReplayEffectsSnapshot(room);
+      if (timerResultId && room.resultPointSyncResultId !== timerResultId) {
+        room.resultPointSyncResultId = timerResultId;
+        queueReplayEffectsSnapshot(room);
+        syncClubPointEffects(room).catch((error) => console.warn("[ResultOkAuto] async point sync failed", { tableId: room.tableId, gameId: room.gameId, resultId: timerResultId, error: error?.message || String(error) }));
+      }
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
         return;
@@ -4843,7 +5134,6 @@ const scheduleRoomResultTimeout = (room) => {
       persistRoom(room);
       syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
-      syncClubPointEffects(room);
       broadcastState(room);
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
@@ -5185,7 +5475,12 @@ io.on("connection", (socket) => {
         }
       }
       if (actionType === "resultOk" && room.state?.handLog?.result) {
-        queueReplayEffectsSnapshot(room);
+        const resultSyncId = getCurrentResultId(room.state);
+        if (resultSyncId && room.resultPointSyncResultId !== resultSyncId) {
+          room.resultPointSyncResultId = resultSyncId;
+          queueReplayEffectsSnapshot(room);
+          syncClubPointEffects(room).catch((error) => console.warn("[ResultOk] async point sync failed", { tableId: room.tableId, gameId: room.gameId, playerId, resultId: resultSyncId, error: error?.message || String(error) }));
+        }
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
@@ -5255,7 +5550,7 @@ io.on("connection", (socket) => {
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
       syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
-      if (shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
+      if (actionType !== "resultOk" && shouldSyncRoomDbEffects(room.state)) syncClubPointEffects(room);
     } catch (error) {
       if (room?.actionInFlight) room.actionInFlight = null;
       if (room?.state && ["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(payload?.actionType)) {

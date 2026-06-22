@@ -7,10 +7,10 @@
   --discard-gap: 5px;
   --center-info-width: 220px;
   --center-info-height: 148px;
-  --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7 + 16px);
-  --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2 + 31px);
-  --river-center-gap: 4px;
-  --river-x-offset: calc(var(--discard-tile-width) + var(--discard-gap));
+  --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7);
+  --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
+  --river-center-gap: 0px;
+  --river-x-offset: 0px;
   --center-y-offset: 6px;
 }
 
@@ -668,11 +668,11 @@ button:hover {
 }
 
 .discard-area {
-  background: rgba(5, 13, 22, 0.2);
-  border-radius: 8px;
+  background: transparent;
+  border-radius: 0;
   height: var(--river-height);
   overflow: visible;
-  padding: 4px;
+  padding: 0;
   position: absolute;
   transform-origin: center center;
   min-width: var(--river-width);
@@ -683,13 +683,13 @@ button:hover {
 .discard-bottom {
   left: 50%;
   top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) + var(--river-center-gap));
-  transform: translateX(calc(-50% + var(--river-x-offset))) rotate(0deg);
+  transform: translateX(-50%) rotate(0deg);
 }
 
 .discard-top {
   left: 50%;
   top: calc(50% + var(--center-y-offset) - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
-  transform: translateX(calc(-50% + var(--river-x-offset))) rotate(180deg);
+  transform: translateX(-50%) rotate(180deg);
 }
 
 .discard-right {
@@ -1302,16 +1302,18 @@ button:hover {
 }
 
 .seat-right .meld-area .meld-set {
-  transform: rotate(90deg);
+  transform: none;
   transform-origin: top left;
 }
 
-.seat-right .meld-area .meld-tile.sideways .tile {
-  transform: none;
+.seat-right .meld-area .meld-tile .tile,
+.seat-right .meld-area .meld-tile.sideways .tile,
+.seat-right .meld-area .meld-tile.called-tile .tile {
+  transform: rotate(90deg);
 }
 
 .seat-right .meld-area .kakan-added {
-  transform: translateX(-50%);
+  transform: translateX(-50%) rotate(90deg);
 }
 
 .meld-area > span,
@@ -1627,6 +1629,26 @@ button:hover {
   letter-spacing: 0;
   line-height: 1;
   text-shadow: 0 8px 0 #5b1710, 0 18px 42px rgba(0, 0, 0, 0.75);
+}
+
+.double-ron-announcement > div {
+  display: grid;
+  gap: 14px;
+  text-align: center;
+}
+
+.double-ron-announcement > div span {
+  display: block;
+}
+
+.double-ron-result-block {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.double-ron-result-block h3 {
+  margin: 4px 0 6px;
 }
 
 .riichi-announcement > div {
@@ -2014,7 +2036,7 @@ button:hover {
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) + var(--river-center-gap));
+    left: calc(50% + (var(--center-info-width) / 2));
     top: 50%;
     transform: translateY(-50%) rotate(-90deg);
     width: var(--river-width);
@@ -2081,9 +2103,9 @@ button:hover {
     --discard-gap: 2px;
     --discard-tile-height: 22px;
     --discard-tile-width: 15px;
-    --river-center-gap: 2px;
-    --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2 + 4px);
-    --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7 + 4px);
+    --river-center-gap: 0px;
+    --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
+    --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7);
     height: var(--anmika-viewport-height, 100dvh);
     min-height: 0;
     overflow: hidden;
@@ -2293,10 +2315,10 @@ button:hover {
   }
 
   .discard-area {
-    background: rgba(5, 13, 22, 0.08);
-    border-radius: 5px;
+    background: transparent;
+    border-radius: 0;
     height: var(--river-height);
-    padding: 2px;
+    padding: 0;
     min-width: var(--river-width);
     width: var(--river-width);
   }
@@ -2323,17 +2345,17 @@ button:hover {
   .discard-bottom {
     left: 50%;
     top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap));
-    transform: translateX(calc(-50% + var(--river-x-offset))) rotate(0deg);
+    transform: translateX(-50%) rotate(0deg);
   }
 
   .discard-top {
     left: 50%;
     top: calc(40% - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
-    transform: translateX(calc(-50% + var(--river-x-offset))) rotate(180deg);
+    transform: translateX(-50%) rotate(180deg);
   }
 
   .discard-right {
-    left: calc(50% + (var(--center-info-width) / 2) + var(--river-center-gap));
+    left: calc(50% + (var(--center-info-width) / 2));
     right: auto;
     top: 40%;
     transform: translateY(-50%) rotate(-90deg);
@@ -2394,7 +2416,7 @@ button:hover {
     gap: 1px;
     margin-right: 0;
     min-height: 44px;
-    transform: rotate(90deg);
+    transform: none;
     transform-origin: top left;
   }
 
@@ -2417,12 +2439,14 @@ button:hover {
     justify-content: flex-start;
   }
 
-  .seat-right .meld-area .meld-tile.sideways .tile {
-    transform: none;
+  .seat-right .meld-area .meld-tile .tile,
+  .seat-right .meld-area .meld-tile.sideways .tile,
+  .seat-right .meld-area .meld-tile.called-tile .tile {
+    transform: rotate(90deg);
   }
 
   .seat-right .meld-area .kakan-added {
-    transform: translateX(-50%);
+    transform: translateX(-50%) rotate(90deg);
   }
 
   .seat-right .hand-row > .tile,

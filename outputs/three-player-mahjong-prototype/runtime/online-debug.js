@@ -2121,7 +2121,8 @@
     if (!forceOpen && wasAutoOpenedRecently(table.table_id)) return;
     if (forceOpen) clearRecentlyLeftTable(table.table_id);
     else clearRecentlyLeftTableIfExpired();
-    if (!forceOpen && isRecentlyLeftTable(table.table_id)) {
+    const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
+    if (!forceOpen && isRecentlyLeftTable(table.table_id) && !isCurrentUserSeatedAt(seats)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
       clearLocalUserSeatsForTable(table.table_id);
       state.autoOpenedPlayingTableIds.delete(table.table_id);
@@ -2132,7 +2133,7 @@
       }
       return;
     }
-    const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
+    if (!forceOpen && isRecentlyLeftTable(table.table_id) && isCurrentUserSeatedAt(seats)) clearRecentlyLeftTable(table.table_id);
     if (!isCurrentUserSeatedAt(seats)) return;
     if (!forceOpen && state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
@@ -2174,15 +2175,17 @@
   };
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
-    if (!forceNewGame && isAutoStartBlocked()) return null;
     tableId = requireTableId(tableId, "自動対局開始");
     if (!forceNewGame && isLaunchInProgress(tableId)) return null;
     if (!forceNewGame && wasAutoOpenedRecently(tableId)) return null;
-    if (!forceNewGame && wasAutoStartFailedRecently(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
+    const hasThreeSeats = filledSeatCount(seats) >= 3;
+    const currentUserSeated = isCurrentUserSeatedAt(seats);
+    if (!forceNewGame && isAutoStartBlocked() && !(hasThreeSeats && currentUserSeated)) return null;
+    if (!forceNewGame && wasAutoStartFailedRecently(tableId) && !(hasThreeSeats && currentUserSeated)) return null;
     if (forceNewGame) clearRecentlyLeftTable(tableId);
     else clearRecentlyLeftTableIfExpired();
-    if (!forceNewGame && isRecentlyLeftTable(tableId)) {
+    if (!forceNewGame && isRecentlyLeftTable(tableId) && !currentUserSeated) {
       console.log("[LastHand] recently left table: suppress auto-start", tableId);
       clearLocalUserSeatsForTable(tableId);
       state.autoOpenedPlayingTableIds.delete(tableId);
@@ -2193,8 +2196,9 @@
       }
       return null;
     }
-    if (filledSeatCount(seats) < 3) return null;
-    if (!isCurrentUserSeatedAt(seats)) return null;
+    if (!forceNewGame && isRecentlyLeftTable(tableId) && currentUserSeated) clearRecentlyLeftTable(tableId);
+    if (!hasThreeSeats) return null;
+    if (!currentUserSeated) return null;
 
     const table = getOrCreateTableRecord(tableId, seats);
     const isDebugTable = hasCpuSeat(seats) || table.is_debug;
@@ -2243,7 +2247,6 @@
   };
   const maybeAutoStartTables = async () => {
     if (!ENABLE_AUTO_TABLE_START) return;
-    if (isAutoStartBlocked()) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     clearRecentlyLeftTableIfExpired();
@@ -2265,7 +2268,6 @@
   };
   const scheduleAutoStartFromVisibleTables = () => {
     if (!ENABLE_AUTO_TABLE_START) return;
-    if (isAutoStartBlocked()) return;
     if (document.body.dataset.screen !== "club-home") return;
     if (state.onlineGameOpened || isLaunchInProgress()) return;
     if (state.autoStartRenderScheduled) return;
@@ -4916,9 +4918,7 @@
         $("tableCards").append(card);
       }
     });
-    const nextTableId = isAutoStartBlocked()
-      ? ""
-      : (normalizeRemoteTableId(activeTableId) || urlTableId || getStartableTableId());
+    const nextTableId = normalizeRemoteTableId(activeTableId) || urlTableId || getStartableTableId();
     if (nextTableId) setActiveTableId(nextTableId);
     const tableId = selectedTableId();
     $("tableUrl").textContent = tableId ? buildTableShareUrl(tableId) : "なし";
@@ -5048,6 +5048,7 @@
     bind("loadRakeButton", loadRake);
     bind("settingsGearButton", toggleSettings);
     bind("settingsToggleButton", toggleSettings);
+    bind("globalReloadButton", () => window.location.reload());
     bind("showCreateTableButton", async () => showCreateTablePanel());
     bind("cancelCreateTableButton", async () => hideCreateTablePanel());
     bind("showClubPointsButton", showClubPoints);
