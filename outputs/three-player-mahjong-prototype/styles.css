@@ -1279,11 +1279,11 @@ button:hover {
 
 .seat-top .meld-area .meld-tile.sideways .tile,
 .seat-top .meld-area .meld-tile.called-tile .tile {
-  transform: rotate(270deg);
+  transform: rotate(90deg);
 }
 
 .seat-top .meld-area .kakan-added {
-  transform: translateX(-50%) rotate(270deg);
+  transform: translateX(-50%) rotate(90deg);
 }
 
 .seat-right .exposed-row {
@@ -1320,7 +1320,7 @@ button:hover {
 }
 
 .seat-right .meld-area .meld-tile .tile {
-  transform: rotate(90deg);
+  transform: rotate(270deg);
 }
 
 .seat-right .meld-area .meld-tile.sideways .tile,
@@ -2430,11 +2430,11 @@ button:hover {
 
   .seat-top .meld-area .meld-tile.sideways .tile,
   .seat-top .meld-area .meld-tile.called-tile .tile {
-    transform: rotate(270deg);
+    transform: rotate(90deg);
   }
 
   .seat-top .meld-area .kakan-added {
-    transform: translateX(-50%) rotate(270deg);
+    transform: translateX(-50%) rotate(90deg);
   }
 
   .seat-right .exposed-row {
@@ -2482,7 +2482,7 @@ button:hover {
   }
 
   .seat-right .meld-area .meld-tile .tile {
-    transform: rotate(90deg);
+    transform: rotate(270deg);
   }
 
   .seat-right .meld-area .meld-tile.sideways .tile,
