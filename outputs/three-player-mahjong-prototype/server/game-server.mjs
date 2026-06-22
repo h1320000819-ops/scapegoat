@@ -1637,11 +1637,58 @@ const buildSimpleReplayPayload = (room, { scope = "hand", initialState = null, e
     updatedAt: now(),
   };
 };
-const compactReplaySnapshotList = (snapshots, limit) => asArray(snapshots)
-  .slice(Math.max(0, asArray(snapshots).length - limit))
-  .map(compactStateForReplay);
+const replaySnapshotMeaningfulKey = (snapshot) => {
+  const result = snapshot?.handLog?.result;
+  const pending = snapshot?.pendingAction;
+  return [
+    snapshot?.handLog?.handId || "",
+    snapshot?.phase || "",
+    snapshot?.turnIndex ?? 0,
+    snapshot?.currentPlayerIndex ?? 0,
+    asArray(snapshot?.handLog?.events).length,
+    result?.resultId || result?.type || "",
+    pending?.type || "",
+    pending?.playerId || "",
+    asArray(snapshot?.liveWall).length,
+    asArray(snapshot?.rinshanWall).length,
+  ].join("|");
+};
+const isReplayAnchorSnapshot = (snapshot, index, snapshots) => {
+  const previous = index > 0 ? snapshots[index - 1] : null;
+  const next = index + 1 < snapshots.length ? snapshots[index + 1] : null;
+  const handId = snapshot?.handLog?.handId || "";
+  if (!index) return true;
+  if (handId && handId !== (previous?.handLog?.handId || "")) return true;
+  if (handId && handId !== (next?.handLog?.handId || "")) return true;
+  if (snapshot?.handLog?.result) return true;
+  return ["handEnded", "exhaustiveDraw", "gameEnded", "finalResult"].includes(snapshot?.phase);
+};
+const pickReplaySnapshotsForLimit = (snapshots, limit) => {
+  const list = asArray(snapshots).filter(Boolean);
+  if (!limit || list.length <= limit) return list;
+  const anchors = [];
+  const anchorIndexes = new Set();
+  list.forEach((snapshot, index) => {
+    if (!isReplayAnchorSnapshot(snapshot, index, list)) return;
+    anchors.push(snapshot);
+    anchorIndexes.add(index);
+  });
+  if (anchors.length >= limit) return anchors.slice(Math.max(0, anchors.length - limit));
+  const remainingSlots = limit - anchors.length;
+  const nonAnchors = list.filter((_, index) => !anchorIndexes.has(index));
+  const pickedNonAnchors = [];
+  if (remainingSlots > 0 && nonAnchors.length) {
+    const stride = Math.max(1, Math.ceil(nonAnchors.length / remainingSlots));
+    for (let index = 0; index < nonAnchors.length && pickedNonAnchors.length < remainingSlots; index += stride) {
+      pickedNonAnchors.push(nonAnchors[index]);
+    }
+  }
+  const picked = new Set([...anchors, ...pickedNonAnchors]);
+  return list.filter((snapshot) => picked.has(snapshot));
+};
+const compactReplaySnapshotList = (snapshots, limit) => pickReplaySnapshotsForLimit(snapshots, limit).map(compactStateForReplay);
 const HAND_REPLAY_SNAPSHOT_LIMIT = 260;
-const HANCHAN_REPLAY_SNAPSHOT_LIMIT = 2400;
+const HANCHAN_REPLAY_SNAPSHOT_LIMIT = 12000;
 const buildRoomReplayPayload = (room) => {
   const state = room?.state;
   if (!room?.tableId || !state?.handLog?.handId) return null;
@@ -1760,16 +1807,18 @@ const appendServerReplaySnapshot = (state) => {
   const snapshot = compactStateForReplay(state);
   state.replaySnapshots = asArray(state.replaySnapshots);
   const last = state.replaySnapshots.at(-1);
-  if (last?.version !== snapshot.version || last?.phase !== snapshot.phase || last?.turnIndex !== snapshot.turnIndex) {
+  if (replaySnapshotMeaningfulKey(last) !== replaySnapshotMeaningfulKey(snapshot)) {
     state.replaySnapshots.push(snapshot);
     if (state.replaySnapshots.length > HAND_REPLAY_SNAPSHOT_LIMIT) state.replaySnapshots.splice(0, state.replaySnapshots.length - HAND_REPLAY_SNAPSHOT_LIMIT);
   }
   if (isTsumoLossless3maState(state)) {
     state.hanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
     const lastHanchan = state.hanchanReplaySnapshots.at(-1);
-    if (lastHanchan?.version !== snapshot.version || lastHanchan?.phase !== snapshot.phase || lastHanchan?.turnIndex !== snapshot.turnIndex) {
+    if (replaySnapshotMeaningfulKey(lastHanchan) !== replaySnapshotMeaningfulKey(snapshot)) {
       state.hanchanReplaySnapshots.push(snapshot);
-      if (state.hanchanReplaySnapshots.length > HANCHAN_REPLAY_SNAPSHOT_LIMIT) state.hanchanReplaySnapshots.splice(0, state.hanchanReplaySnapshots.length - HANCHAN_REPLAY_SNAPSHOT_LIMIT);
+      if (state.hanchanReplaySnapshots.length > HANCHAN_REPLAY_SNAPSHOT_LIMIT) {
+        state.hanchanReplaySnapshots = pickReplaySnapshotsForLimit(state.hanchanReplaySnapshots, HANCHAN_REPLAY_SNAPSHOT_LIMIT);
+      }
     }
   }
 };
@@ -2066,20 +2115,27 @@ const syncReplayEffects = async (room) => {
     if (!result) return;
     if (isTsumoLossless3maState(state)) {
       if (state.phase !== "gameEnded" || !state.finalResult) return;
+      const replayRoom = {
+        ...room,
+        state: clone(state),
+        events: clone(asArray(room.events)),
+      };
+      const replayState = replayRoom.state;
       const hanchanReplayKey = [
-        room.gameId || room.tableId || "game",
+        replayRoom.gameId || replayRoom.tableId || "game",
         "hanchanReplay",
-        state.hanchanReplayInitialState?.handLog?.handId || state.hanchanReplaySnapshots?.[0]?.handLog?.handId || state.handLog?.handId || state.finalResult?.createdAt || state.finalResult?.reason || "current",
+        replayState.hanchanReplayInitialState?.handLog?.handId || replayState.hanchanReplaySnapshots?.[0]?.handLog?.handId || replayState.handLog?.handId || replayState.finalResult?.createdAt || replayState.finalResult?.reason || "current",
       ].join(":");
-      await saveReplayToDb(room, hanchanReplayKey, "hanchan", {
-        initialState: state.hanchanReplayInitialState || state.replayInitialState || state,
-        snapshots: state.hanchanReplaySnapshots?.length ? state.hanchanReplaySnapshots : state.replaySnapshots,
-        result: state.finalResult,
+      await saveReplayToDb(replayRoom, hanchanReplayKey, "hanchan", {
+        initialState: replayState.hanchanReplayInitialState || replayState.replayInitialState || replayState,
+        snapshots: replayState.hanchanReplaySnapshots?.length ? replayState.hanchanReplaySnapshots : replayState.replaySnapshots,
+        result: replayState.finalResult,
         summary: {
           resultLabel: "全赤三麻 半荘牌譜",
-          finalResult: state.finalResult,
+          finalResult: replayState.finalResult,
         },
       });
+      room.state.replayDbSync = replayRoom.state.replayDbSync;
       return;
     }
     if (!["handEnded", "exhaustiveDraw", "gameEnded"].includes(state.phase)) return;
@@ -2230,6 +2286,28 @@ const safeSyncClubPointEffects = (room, reason = "unspecified") => {
     });
     return null;
   }
+};
+const queueResultSideEffectsOnce = (room, resultId, reason = "resultOk") => {
+  if (!room?.state || !resultId) return false;
+  room.resultSideEffectQueuedIds ??= new Set();
+  if (room.resultSideEffectQueuedIds.has(resultId)) return false;
+  room.resultSideEffectQueuedIds.add(resultId);
+  room.resultPointSyncResultId = resultId;
+  setTimeout(() => {
+    try {
+      queueReplayEffectsSnapshot(room);
+      safeSyncClubPointEffects(room, reason);
+    } catch (error) {
+      console.error("[ResultOk] side effects queue failed", {
+        reason,
+        tableId: room?.tableId,
+        gameId: room?.gameId,
+        resultId,
+        error: error?.message || String(error),
+      });
+    }
+  }, 0);
+  return true;
 };
 
 const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand", "assistSettings"]);
@@ -4766,6 +4844,14 @@ const startNextServerHand = (state) => {
   if (isTsumoLossless) {
     state.hanchanReplayInitialState ??= clone(state);
     state.hanchanReplaySnapshots ??= [clone(state)];
+    const handStartSnapshot = compactStateForReplay(state);
+    const lastHanchanSnapshot = state.hanchanReplaySnapshots.at(-1);
+    if (replaySnapshotMeaningfulKey(lastHanchanSnapshot) !== replaySnapshotMeaningfulKey(handStartSnapshot)) {
+      state.hanchanReplaySnapshots.push(handStartSnapshot);
+      if (state.hanchanReplaySnapshots.length > HANCHAN_REPLAY_SNAPSHOT_LIMIT) {
+        state.hanchanReplaySnapshots = pickReplaySnapshotsForLimit(state.hanchanReplaySnapshots, HANCHAN_REPLAY_SNAPSHOT_LIMIT);
+      }
+    }
   }
   enterCurrentTurnOnServer(state);
   advanceServerCpuTurns(state);
@@ -5171,11 +5257,7 @@ const scheduleRoomResultTimeout = (room) => {
         scheduleRoomResultTimeout(room);
         return;
       }
-      if (timerResultId && room.resultPointSyncResultId !== timerResultId) {
-        room.resultPointSyncResultId = timerResultId;
-        queueReplayEffectsSnapshot(room);
-        safeSyncClubPointEffects(room, "resultOkAuto");
-      }
+      queueResultSideEffectsOnce(room, timerResultId, "resultOkAuto");
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
         return;
@@ -5195,9 +5277,6 @@ const scheduleRoomResultTimeout = (room) => {
       syncDeclaredLastHandLeaves(room);
       syncDisconnectedLastHandLeaves(room);
       broadcastState(room);
-      if (shouldSyncRoomDbEffects(room.state)) {
-        safeSyncClubPointEffects(room, "resultOkAutoAfterApply");
-      }
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
@@ -5538,17 +5617,15 @@ io.on("connection", (socket) => {
       if (!ACTION_TYPES.has(actionType)) throw new Error("未対応の操作です");
       if (actionType === "resultOk") {
         if (room.state?.phase === "gameEnded") {
+          const endedResultId = getCurrentResultId(room.state) || room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || "gameEnded";
+          queueResultSideEffectsOnce(room, endedResultId, "resultOkAlreadyGameEnded");
           ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
           return;
         }
       }
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         const resultSyncId = getCurrentResultId(room.state);
-        if (resultSyncId && room.resultPointSyncResultId !== resultSyncId) {
-          room.resultPointSyncResultId = resultSyncId;
-          queueReplayEffectsSnapshot(room);
-          safeSyncClubPointEffects(room, "resultOk");
-        }
+        queueResultSideEffectsOnce(room, resultSyncId, "resultOk");
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
@@ -5599,6 +5676,14 @@ io.on("connection", (socket) => {
       room.state = nextState;
       room.updatedAt = now();
       room.actionInFlight = null;
+      if (actionType === "resultOk" && room.state?.phase === "gameEnded") {
+        const finalSyncId = [
+          room.gameId || room.tableId || "game",
+          "gameEnded",
+          room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || getCurrentResultId(room.state) || "final",
+        ].join(":");
+        queueResultSideEffectsOnce(room, finalSyncId, "resultOkGameEnded");
+      }
       persistRoom(room);
       if (requestId) {
         room.processedRequestIds.add(requestId);
@@ -5612,9 +5697,6 @@ io.on("connection", (socket) => {
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
       scheduleDisconnectedTimeouts(room);
-      if (actionType === "resultOk" && shouldSyncRoomDbEffects(room.state)) {
-        safeSyncClubPointEffects(room, "resultOkAfterApply");
-      }
       if (ACTION_DEBUG_LOGS) {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }

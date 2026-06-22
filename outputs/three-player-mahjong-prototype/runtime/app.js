@@ -19,7 +19,7 @@ const installResultOkClickBridge = () => {
     if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 0) return;
     const resultId = resultOk.dataset?.resultId || "";
     const nowMs = Date.now();
-    if (resultId && resultId === lastHandledResultId && nowMs - lastHandledAt < 250) {
+    if (resultId && resultId === lastHandledResultId && nowMs - lastHandledAt < 1200) {
       event.preventDefault();
       event.stopImmediatePropagation?.();
       event.stopPropagation();
@@ -3481,6 +3481,7 @@ class GameController {
       this.state.resultAutoCloseHandledResultId = "";
       this.state.resultOkSubmitted = false;
       this.state.resultOkSubmittedAt = null;
+      this.state.resultOkSubmittedResultId = "";
     }
     this.state.resultCountdownStartedAt ??= Date.now();
     this.state.resultCountdownSeconds ??= RESULT_COUNTDOWN_SECONDS;
@@ -3500,6 +3501,7 @@ class GameController {
     if (nextSeconds <= 0 && !alreadyAutoHandled && (isSocketAuthoritativeGame() || !this.state.resultAutoCloseHandled || canRetrySubmittedOk)) {
       if (canRetrySubmittedOk) {
         this.state.resultOkSubmitted = false;
+        this.state.resultOkSubmittedResultId = "";
         this.state.resultAutoCloseHandled = false;
       }
       this.state.resultAutoCloseHandled = true;
@@ -4014,6 +4016,7 @@ class GameController {
       next.resultAutoCloseHandledResultId = "";
       next.resultOkSubmitted = false;
       next.resultOkSubmittedAt = null;
+      next.resultOkSubmittedResultId = "";
     }
     if (!next.handLog?.result) {
       this.lastDisplayedResultKey = "";
@@ -4839,7 +4842,7 @@ class GameController {
     this.state.settings.ruleId = ruleId;
     this.state.settings.gameType = this.state.settings.gameType || ruleId;
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkPlayerIds: [], log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkSubmittedResultId: "", resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.riichiStickCount = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
@@ -4919,10 +4922,16 @@ class GameController {
     if (isSocketAuthoritativeGame()) {
       const localPlayerId = getLocalHumanPlayerId(this.state);
       if (!localPlayerId) return;
-      if (this.state.resultOkSubmitted && Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 800) return;
+      const currentResultId = result.resultId || "";
+      if (
+        this.state.resultOkSubmitted &&
+        this.state.resultOkSubmittedResultId === currentResultId &&
+        Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 6000
+      ) return;
       const requestId = `result-ok-${result.resultId || "result"}-${localPlayerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.state.resultOkSubmitted = true;
       this.state.resultOkSubmittedAt = Date.now();
+      this.state.resultOkSubmittedResultId = currentResultId;
       this.state.resultAutoCloseHandled = true;
       this.state.resultOkPlayerIds = [...new Set([...(this.state.resultOkPlayerIds || []), localPlayerId])];
       if (this.state.handLog?.result) {
@@ -4932,6 +4941,7 @@ class GameController {
       submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 8000 }).then(async (response) => {
         if (response?.state?.phase !== "gameEnded") {
           this.state.resultOkSubmitted = false;
+          this.state.resultOkSubmittedResultId = "";
           this.emit();
           return;
         }
@@ -4952,10 +4962,12 @@ class GameController {
           return;
         }
         this.state.resultOkSubmitted = false;
+        this.state.resultOkSubmittedResultId = "";
         this.state.resultAutoCloseHandled = false;
         this.emit();
       }).catch((error) => {
         this.state.resultOkSubmitted = false;
+        this.state.resultOkSubmittedResultId = "";
         this.state.resultAutoCloseHandled = false;
         this.state.resultOkPlayerIds = (this.state.resultOkPlayerIds || []).filter((id) => id !== localPlayerId);
         if (this.state.handLog?.result?.resultId === result.resultId) {
@@ -5433,6 +5445,7 @@ class GameController {
     this.state.resultOkPlayerIds = [];
     this.state.resultOkSubmitted = false;
     this.state.resultOkSubmittedAt = null;
+    this.state.resultOkSubmittedResultId = "";
     this.state.pendingAction = null;
     this.state.phase = "showingWinAnnouncement";
     const announcement = input.winType === "tsumo" ? "ツモ" : "ロン";
@@ -5912,6 +5925,7 @@ class GameController {
       this.state.resultOkPlayerIds = [];
       this.state.resultOkSubmitted = false;
       this.state.resultOkSubmittedAt = null;
+      this.state.resultOkSubmittedResultId = "";
       appendReplaySnapshot(this.state);
       this.saveReplayForCurrentHand();
       this.emit();
@@ -5945,6 +5959,7 @@ class GameController {
     this.state.resultOkPlayerIds = [];
     this.state.resultOkSubmitted = false;
     this.state.resultOkSubmittedAt = null;
+    this.state.resultOkSubmittedResultId = "";
     appendReplaySnapshot(this.state);
     this.saveReplayForCurrentHand();
     this.state.lastScoreResult = null;
