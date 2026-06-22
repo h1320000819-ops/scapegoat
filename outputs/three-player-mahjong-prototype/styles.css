@@ -10,6 +10,7 @@
   --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7 + 16px);
   --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2 + 31px);
   --river-center-gap: 4px;
+  --river-x-offset: calc(var(--discard-tile-width) + var(--discard-gap));
   --center-y-offset: 6px;
 }
 
@@ -682,13 +683,13 @@ button:hover {
 .discard-bottom {
   left: 50%;
   top: calc(50% + var(--center-y-offset) + (var(--center-info-height) / 2) + var(--river-center-gap));
-  transform: translateX(-50%) rotate(0deg);
+  transform: translateX(calc(-50% + var(--river-x-offset))) rotate(0deg);
 }
 
 .discard-top {
   left: 50%;
   top: calc(50% + var(--center-y-offset) - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
-  transform: translateX(-50%) rotate(180deg);
+  transform: translateX(calc(-50% + var(--river-x-offset))) rotate(180deg);
 }
 
 .discard-right {
@@ -2322,13 +2323,13 @@ button:hover {
   .discard-bottom {
     left: 50%;
     top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap));
-    transform: translateX(-50%) rotate(0deg);
+    transform: translateX(calc(-50% + var(--river-x-offset))) rotate(0deg);
   }
 
   .discard-top {
     left: 50%;
     top: calc(40% - (var(--center-info-height) / 2) - var(--river-height) - var(--river-center-gap));
-    transform: translateX(-50%) rotate(180deg);
+    transform: translateX(calc(-50% + var(--river-x-offset))) rotate(180deg);
   }
 
   .discard-right {

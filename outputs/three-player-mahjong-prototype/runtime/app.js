@@ -538,14 +538,20 @@ const onlineDebugReplayListUrl = (clubId = "") => {
 };
 const goToOnlineDebugLobby = (clubId = "", replace = false) => {
   const currentState = globalThis.__anmikaController?.getState?.();
-  const shouldOpenReplayList = Boolean(currentState?.screen === "replayViewer" || currentState?.selectedReplayId || globalThis.location?.pathname?.includes("/replay"));
+  const shouldOpenReplayList = Boolean(currentState?.screen === "replayViewer" || currentState?.screen === "replayList" || currentState?.selectedReplayId || globalThis.location?.pathname?.includes("/replay"));
   const target = shouldOpenReplayList ? onlineDebugReplayListUrl(clubId) : onlineDebugLobbyUrl(clubId);
+  if (replace) globalThis.location?.replace?.(target);
+  else if (globalThis.location) globalThis.location.href = target;
+};
+const goToOnlineDebugReplayList = (clubId = "", replace = true) => {
+  const target = onlineDebugReplayListUrl(clubId);
   if (replace) globalThis.location?.replace?.(target);
   else if (globalThis.location) globalThis.location.href = target;
 };
 const normalizeOnlineDebugReturnUrl = (returnUrl, clubId = "", leftTableId = "") => {
   const value = String(returnUrl || "");
-  const base = value.includes("/online-debug") ? value : onlineDebugLobbyUrl(clubId);
+  const shouldOpenReplayList = value.includes("/replay") || value.includes("settings=replays") || value.includes("open=replays");
+  const base = value.includes("/online-debug") ? value : (shouldOpenReplayList ? onlineDebugReplayListUrl(clubId) : onlineDebugLobbyUrl(clubId));
   leftTableId = sourceTableIdFromLocalDebugId(leftTableId);
   if (!leftTableId) return base;
   try {
@@ -1442,7 +1448,15 @@ const applySimpleReplayEvent = (state, event) => {
   if (event.type === "draw" && player) {
     const source = replayDrawSourceForEvent(state, event);
     const previous = previousReplayEvent(state);
-    if (player.drawnTile && source === "rinshanWall" && previous?.type === "nukiDora" && sameTileKind(player.drawnTile, event.tile)) {
+    const isReplacementDrawAlreadyApplied = source === "rinshanWall"
+      && previous?.type === "nukiDora"
+      && player.drawnTile
+      && (
+        player.drawnTile.id === event.tile?.id
+        || previous.replacementTile?.id === event.tile?.id
+        || (previous.replacementTile && sameTileKind(previous.replacementTile, event.tile) && sameTileKind(player.drawnTile, event.tile))
+      );
+    if (isReplacementDrawAlreadyApplied) {
       state.lastDrawnTile = player.drawnTile;
       state.phase = "waitingForHumanDiscard";
       setReplayActivePlayer(state, player.id);
@@ -1645,7 +1659,7 @@ const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
   if (event.type === "draw") return true;
   if (event.type === "skipAction") return true;
-  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichi", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "nukiDora"].includes(event.type)) return true;
+  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichi", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "feverForcedDiscard", "nukiDora"].includes(event.type)) return true;
   return false;
 };
 const getReplayVisibleSnapshotIndexes = (replay) => {
@@ -1715,7 +1729,13 @@ function compactReplayForStorage(replay, maxSnapshots = 120) {
 }
 const filterActionOptionsByAssistSettings = (options, player) => {
   if (!player?.assistSettings?.noCall) return options;
-  return options.filter((option) => !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan")));
+  return options.filter((option) => !(option.type === "pon" || option.type === "kan"));
+};
+const getKakanActionOption = (state, player) => {
+  if (!state || !player || player.isRiichi || !canDeclareKanNow(state)) return null;
+  const concealed = [...(player.hand ?? []), ...(player.drawnTile ? [player.drawnTile] : [])];
+  const canKakan = (player.melds ?? []).some((meld) => meld.type === "pon" && concealed.some((tile) => sameTileKind(tile, meld.tiles?.[0])));
+  return canKakan ? { type: "kan", playerId: player.id, options: { kanType: "kakan" } } : null;
 };
 const formatTile = (tile) => {
   if (tile.suit === "honor") return tile.kind === "white" && tile.pochiColor ? pochiText[tile.pochiColor] : honorText[tile.kind];
@@ -2137,8 +2157,9 @@ const renderResultOkButton = (state) => {
   const okIds = getResultOkPlayerIds(state);
   const requiredIds = getResultRequiredOkPlayerIds(state);
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
+  const isSubmitting = Boolean(state.resultOkSubmitted && !isConfirmed);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
-  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}">${isConfirmed ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}">${isConfirmed ? `OK済み (${countdown}秒)${countText}` : isSubmitting ? `OK送信中 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
 };
 const renderAgariYameButton = (state) => {
   if (!canLocalPlayerAgariYame(state)) return "";
@@ -3115,6 +3136,29 @@ const hasFeverRiichiTriplet = (player) => (
   isPureClosedTriplet(player.hand ?? [], "pinzu-7") ||
   isPureClosedTriplet(player.hand ?? [], "souzu-7")
 );
+const FEVER_RIICHI_KEYS = new Set(["pinzu-7", "souzu-7"]);
+const hasClosedFeverTripletInHand13 = (player, hand13) =>
+  [...FEVER_RIICHI_KEYS].some((key) =>
+    hand13.filter((tile) => tileKindKey(tile) === key).length >= 3 ||
+    (player.melds ?? []).some((meld) => meld.type === "ankan" && (meld.tiles ?? []).some((tile) => tileKindKey(tile) === key))
+  );
+const winningShapeKeepsFeverTriplet = (tiles14, melds = []) => {
+  const filtered = tiles14.filter((tile) => !isFlowerTile(tile));
+  const fixedAnkanMelds = (melds ?? [])
+    .filter((meld) => meld.type === "ankan" && meld.tiles?.[0])
+    .map((meld) => ({ type: "triplet", key: tileKindKey(meld.tiles[0]), source: "ankan" }));
+  const neededMelds = 4 - (melds ?? []).length;
+  if (filtered.length + (melds ?? []).length * 3 !== 14 || neededMelds < 0) return false;
+  const counts = countTiles(filtered);
+  return explicitFindStandardShapes(counts, neededMelds).some((shape) =>
+    [...shape.melds, ...fixedAnkanMelds].some((meld) => meld.type === "triplet" && FEVER_RIICHI_KEYS.has(meld.key))
+  );
+};
+const isFeverRiichiEligibleAfterDiscard = (state, player, hand13) => {
+  if (!state?.settings?.ruleConfig?.feverRiichiEnabled || !player || !hasClosedFeverTripletInHand13(player, hand13)) return false;
+  const waits = getWinningTilesForTenpai(hand13, player.melds ?? []);
+  return waits.length > 0 && waits.every((wait) => winningShapeKeepsFeverTriplet([...hand13, wait], player.melds ?? []));
+};
 const getActiveFeverRiichiPlayer = (state) => state.players.find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
 
 class GameController {
@@ -3494,12 +3538,14 @@ class GameController {
       clearTimeout(this.replayAutoListTimer);
       this.replayAutoListTimer = null;
     }
+    if (screen === "replayList") {
+      const clubId = this.state.selectedClubId || this.state.activeClubId || localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || "";
+      goToOnlineDebugReplayList(clubId, true);
+      return;
+    }
     this.refreshStoredData();
     if (!this.state.currentUser && screen !== "auth" && screen !== "replayViewer") screen = "auth";
     this.state.screen = screen;
-    if (screen === "replayList") {
-      this.refreshReplaysFromSupabase().catch((error) => console.warn("[Replay] Supabase牌譜の取得に失敗しました", error));
-    }
     if (screen !== "replayViewer" && (globalThis.location?.hash?.startsWith("#/replay/") || /\/replay\/[^/]+$/.test(globalThis.location?.pathname ?? ""))) {
       const target = onlineDebugReplayListUrl(this.state.selectedClubId || this.state.activeClubId || "");
       try { globalThis.history?.replaceState?.(null, "", target); } catch {}
@@ -4535,23 +4581,15 @@ class GameController {
   stepReplay(delta) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
     const max = Math.max(0, getReplaySnapshots(replay).length - 1);
-    const previousIndex = this.state.replayIndex;
-    const nextIndex = Math.max(0, Math.min(max, previousIndex + delta));
-    if (delta > 0 && previousIndex >= max) {
-      this.navigate("replayList");
-      return;
+    const visible = getReplayVisibleSnapshotIndexes(replay);
+    if (visible.length) {
+      const { position } = getReplayVisiblePosition(replay, this.state.replayIndex);
+      const nextPosition = Math.max(0, Math.min(visible.length - 1, position + delta));
+      this.state.replayIndex = visible[nextPosition] ?? this.state.replayIndex;
+    } else {
+      this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     }
-    this.state.replayIndex = nextIndex;
     this.emit();
-    if (delta > 0 && previousIndex < max && nextIndex >= max) {
-      const replayId = this.state.selectedReplayId;
-      if (this.replayAutoListTimer) clearTimeout(this.replayAutoListTimer);
-      this.replayAutoListTimer = setTimeout(() => {
-        if (this.state.screen === "replayViewer" && this.state.selectedReplayId === replayId && this.state.replayIndex >= max) {
-          this.navigate("replayList");
-        }
-      }, 900);
-    }
   }
   setReplayIndex(index) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
@@ -4759,7 +4797,10 @@ class GameController {
       this.state.round.dealerPlayerId = this.state.players[0]?.id ?? "";
     }
     const startingScore = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
-    for (const player of this.state.players) Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0 });
+    for (const player of this.state.players) {
+      const assistSettings = { autoWin: Boolean(player.assistSettings?.autoWin), noCall: false };
+      Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0, assistSettings });
+    }
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
     this.state.handLog = {
@@ -5044,12 +5085,20 @@ class GameController {
     player.assistSettings = { autoWin: false, noCall: false, ...(player.assistSettings ?? {}), ...partial };
     if (this.state.pendingAction?.playerId === playerId && partial.noCall) {
       const remainingOptions = getActionOptions(this.state.pendingAction).filter((option) =>
-        !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan"))
+        !(option.type === "pon" || option.type === "kan")
       );
       if (remainingOptions.length) this.state.pendingAction = { ...this.state.pendingAction, options: remainingOptions };
       else {
         const fromPlayerId = getActionOptions(this.state.pendingAction).find((option) => option.fromPlayerId)?.fromPlayerId || null;
         this.continueAfterDiscardCallWindow(fromPlayerId);
+      }
+    }
+    if (partial.noCall === false && getCurrentPlayer(this.state)?.id === playerId) {
+      const kakanOption = getKakanActionOption(this.state, player);
+      if (kakanOption) {
+        const currentOptions = this.state.pendingAction?.playerId === playerId ? getActionOptions(this.state.pendingAction) : [];
+        const hasKakan = currentOptions.some((option) => option.type === "kan" && option.options?.kanType === "kakan");
+        if (!hasKakan) this.setPendingActions(playerId, [...currentOptions, kakanOption]);
       }
     }
     if (isSocketAuthoritativeGame()) {
@@ -5096,6 +5145,10 @@ class GameController {
   discardTile(tileId, { isCpuAction = false, suppressEmit = false, suppressCpuAutoProgress = false } = {}) {
     const clickedAt = performance.now?.() ?? Date.now();
     const player = getCurrentPlayer(this.state);
+    const activeFever = getActiveFeverRiichiPlayer(this.state);
+    if (activeFever && activeFever.id !== player?.id && player?.drawnTile) {
+      tileId = player.drawnTile.id;
+    }
     const viewerPlayerId = isCpuAction ? player?.id : (isSocketAuthoritativeGame() ? loadOnlineSync()?.userId : getLocalHumanPlayerId(this.state));
     const discardStatus = isCpuAction ? { can: true, reason: "" } : getDiscardStatus(this.state, viewerPlayerId, tileId);
     const syncForLog = loadOnlineSync();
@@ -5207,8 +5260,7 @@ class GameController {
       player.ippatsu = true;
       player.riichiTurnIndex = this.state.turnIndex;
       player.ippatsuOwnDrawStarted = false;
-      const feverEnabled = Boolean(this.state.settings?.ruleConfig?.feverRiichiEnabled);
-      player.feverRiichiActive = feverEnabled && hasFeverRiichiTriplet(player);
+      player.feverRiichiActive = isFeverRiichiEligibleAfterDiscard(this.state, player, player.hand.filter((tile) => !isFlowerTile(tile)));
       player.feverWinCount = 0;
       appendHandLogEvent(this.state.handLog, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: this.state.turnIndex });
       this.state.log.unshift(player.feverRiichiActive ? `${player.name} フィーバーリーチ` : `${player.name} リーチ`);
@@ -5344,6 +5396,7 @@ class GameController {
         this.finishHand({ winnerId: feverPlayer.id, winType: "ron", discarderId: fromPlayerId, yaku: ron.yaku ?? [], winningTiles: [...feverPlayer.hand, tile], selectedWait: tile, isRiichi: feverPlayer.isRiichi, isIppatsu: feverPlayer.ippatsu });
         return true;
       }
+      return false;
     }
     const human = this.state.players.find((p) => p.type === "human" && p.id !== fromPlayerId);
     if (!human) return false;
@@ -5680,15 +5733,6 @@ class GameController {
     }
     if (!player.drawnTile) this.drawTile({ suppressEmit: true });
     if (this.state.phase === "exhaustiveDraw") return;
-    if (this.maybeAnnounceFlowerForCurrentTurn()) return;
-    this.autoNukiDoraForCurrentTurn();
-    if (player.drawnTile && player.feverRiichiActive) {
-      const tsumo = this.ruleEngine.canWin(this.state, player, player.drawnTile);
-      if (tsumo.canWin) {
-        this.finishHand({ winnerId: player.id, winType: "tsumo", yaku: tsumo.yaku ?? [], winningTiles: player.hand, selectedWait: player.drawnTile, drawnTile: player.drawnTile, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
-        return;
-      }
-    }
     const activeFever = getActiveFeverRiichiPlayer(this.state);
     if (activeFever && activeFever.id !== player.id && player.drawnTile) {
       const tsumogiriTileId = player.drawnTile.id;
@@ -5700,6 +5744,15 @@ class GameController {
         }
       }, 800);
       return;
+    }
+    if (this.maybeAnnounceFlowerForCurrentTurn()) return;
+    this.autoNukiDoraForCurrentTurn();
+    if (player.drawnTile && player.feverRiichiActive) {
+      const tsumo = this.ruleEngine.canWin(this.state, player, player.drawnTile);
+      if (tsumo.canWin) {
+        this.finishHand({ winnerId: player.id, winType: "tsumo", yaku: tsumo.yaku ?? [], winningTiles: player.hand, selectedWait: player.drawnTile, drawnTile: player.drawnTile, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
+        return;
+      }
     }
     if (player.type === "human") {
       if (player.drawnTile || player.hand.length === 14) this.queueTsumoKanRiichiDiscard(player.id);
@@ -6587,13 +6640,16 @@ class GameView {
     const current = getCurrentPlayer(displayState);
     const dealer = displayState.players.find((player) => player.id === displayState.round.dealerPlayerId);
     const replayBackUrl = onlineDebugReplayListUrl(state.selectedClubId || state.activeClubId || replay.summary?.clubId || "");
+    const visibleReplayPosition = getReplayVisiblePosition(replay, index);
+    const isReplayFirstStep = visibleReplayPosition.position <= 0;
+    const isReplayLastStep = visibleReplayPosition.position >= Math.max(0, visibleReplayPosition.visible.length - 1);
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
         <a class="button-link" href="${replayBackUrl}">牌譜一覧へ戻る</a>
-        <button type="button" data-replay-step="-1" ${index <= 0 ? "disabled" : ""}>前へ</button>
+        <button type="button" data-replay-step="-1" ${isReplayFirstStep ? "disabled" : ""}>前へ</button>
         <strong>${index + 1} / ${snapshots.length}</strong>
-        <button type="button" data-replay-step="1" ${index >= snapshots.length - 1 ? "disabled" : ""}>次へ</button>
+        <button type="button" data-replay-step="1" ${isReplayLastStep ? "disabled" : ""}>次へ</button>
         ${handSelect}
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>

@@ -2477,7 +2477,7 @@ const setServerPendingActions = (state, playerId, options, source = null) => {
   if (!playerId || !ensureArray(options).length) return false;
   const player = findPlayer(state, playerId);
   const filteredOptions = player?.assistSettings?.noCall
-    ? ensureArray(options).filter((option) => !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan")))
+    ? ensureArray(options).filter((option) => !(option.type === "pon" || option.type === "kan"))
     : ensureArray(options);
   if (!filteredOptions.length) return false;
   state.pendingAction = { playerId, options: filteredOptions, source };
@@ -3230,6 +3230,29 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
 };
 const hasServerFeverRiichiTriplet = (player) =>
   hasServerPureClosedTriplet(player, "pinzu", 7) || hasServerPureClosedTriplet(player, "souzu", 7);
+const SERVER_FEVER_RIICHI_KEYS = new Set(["pinzu:7", "souzu:7"]);
+const hasServerClosedFeverTripletInHand13 = (player, hand13) =>
+  [...SERVER_FEVER_RIICHI_KEYS].some((key) =>
+    ensureArray(hand13).filter((tile) => tileKindKey(tile) === key).length >= 3 ||
+    ensureArray(player?.melds).some((meld) => meld?.type === "ankan" && ensureArray(meld.tiles).some((tile) => tileKindKey(tile) === key))
+  );
+const serverWinningShapeKeepsFeverTriplet = (tiles14, melds = []) => {
+  const filtered = ensureArray(tiles14).filter((tile) => !isFlowerTile(tile));
+  const fixedAnkanMelds = ensureArray(melds)
+    .filter((meld) => meld?.type === "ankan" && meld.tiles?.[0])
+    .map((meld) => ({ type: "triplet", key: tileKindKey(meld.tiles[0]), source: "ankan" }));
+  const neededMelds = 4 - ensureArray(melds).length;
+  if (filtered.length + ensureArray(melds).length * 3 !== 14 || neededMelds < 0) return false;
+  const counts = countTilesForShape(filtered);
+  return serverFindStandardShapes(counts, neededMelds).some((shape) =>
+    [...shape.melds, ...fixedAnkanMelds].some((meld) => meld.type === "triplet" && SERVER_FEVER_RIICHI_KEYS.has(meld.key))
+  );
+};
+const isServerFeverRiichiEligibleAfterDiscard = (state, player, hand13) => {
+  if (!state?.settings?.ruleConfig?.feverRiichiEnabled || !player || !hasServerClosedFeverTripletInHand13(player, hand13)) return false;
+  const waits = getWinningTilesForServerTenpai({ ...player, hand: hand13, drawnTile: null });
+  return waits.length > 0 && waits.every((wait) => serverWinningShapeKeepsFeverTriplet([...ensureArray(hand13), wait], player.melds));
+};
 const clearServerIppatsu = (state, reason, exceptPlayerId = null) => {
   let changed = false;
   for (const player of ensureArray(state?.players)) {
@@ -3362,7 +3385,13 @@ const applyServerFlowerEffect = (state) => {
 };
 const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
   const feverPlayer = ensureArray(state.players).find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
-  if (feverPlayer && feverPlayer.id !== fromPlayerId) return false;
+  if (feverPlayer && feverPlayer.id !== fromPlayerId) {
+    if (canServerRon(state, feverPlayer, sourceTile)) {
+      applyServerAction(state, { playerId: feverPlayer.id, actionType: "ron", payload: { action: { type: "ron", playerId: feverPlayer.id, fromPlayerId, sourceTile }, fromPlayerId, sourceTile } });
+      return true;
+    }
+    return false;
+  }
   const canCallAfterDiscard = hasLiveWallAfterCurrentDraw(state);
   const canCallKanAfterDiscard = canCallAfterDiscard && canServerDeclareKanNow(state);
   const candidates = ensureArray(state.players).filter((player) => player.id !== fromPlayerId && player.type !== "cpu");
@@ -3416,8 +3445,6 @@ const enterCurrentTurnOnServer = (state) => {
     appendHandEvent(state, { type: "exhaustiveDraw", turnIndex: state.turnIndex ?? 0, reason: "liveWallEmpty" });
     return;
   }
-  const flower = findAutoFlowerTile(player);
-  if (flower && beginServerFlowerAnnouncement(state, player, flower)) return;
   const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
   if (feverPlayer && feverPlayer.id !== player.id) {
     state.phase = "riichiAutoDiscard";
@@ -3433,6 +3460,8 @@ const enterCurrentTurnOnServer = (state) => {
     appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
     return;
   }
+  const flower = findAutoFlowerTile(player);
+  if (flower && beginServerFlowerAnnouncement(state, player, flower)) return;
   if (queueServerSelfDrawOptions(state, player)) return;
 };
 const discardForServer = (state, player, tileId, { isRiichiDiscard = false, resolveAfterDiscard = true } = {}) => {
@@ -3563,12 +3592,21 @@ const applyServerAction = (state, event) => {
     const requiredOkPlayerIds = ensureArray(state.players).filter((p) => p.type !== "cpu").map((p) => p.id);
     const agariYameOpportunity = isTsumoLosslessAgariYameOpportunity(state, state.handLog?.result);
     const dealerId = state.round?.dealerPlayerId || "";
-    const autoOkPlayerIds = agariYameOpportunity && player.id !== dealerId ? [] : requiredOkPlayerIds;
-    if (asArray(state.resultOkPlayerIds).includes(player.id) && !autoOkPlayerIds.length) return state;
+    const resultId = getCurrentResultId(state);
+    const startedAt = Number(state.resultCountdownStartedAt || 0);
+    const isTimedOut = Boolean(resultId && state.resultCountdownResultId === resultId && startedAt && now() - startedAt >= RESULT_AUTO_OK_DELAY_MS);
+    const timedOutAutoOkPlayerIds = payload.autoAllResultOk && isTimedOut && !(agariYameOpportunity && player.id !== dealerId)
+      ? requiredOkPlayerIds
+      : [];
+    const serverAutoOkPlayerIds = isTimedOut
+      ? ensureArray(payload.serverAutoOkPlayerIds).filter((id) => requiredOkPlayerIds.includes(id))
+      : [];
+    const extraOkPlayerIds = [...new Set([...timedOutAutoOkPlayerIds, ...serverAutoOkPlayerIds])];
+    if (asArray(state.resultOkPlayerIds).includes(player.id) && !extraOkPlayerIds.length) return state;
     state.resultOkPlayerIds = [...new Set([
       ...(state.resultOkPlayerIds ?? []),
       player.id,
-      ...autoOkPlayerIds,
+      ...extraOkPlayerIds,
       ...ensureArray(state.players).filter((p) => p.type === "cpu").map((p) => p.id),
     ])];
     state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
@@ -3612,7 +3650,7 @@ const applyServerAction = (state, event) => {
     };
     if (state.pendingAction?.playerId === player.id && player.assistSettings.noCall) {
       const options = ensureArray(state.pendingAction.options).filter((option) =>
-        !(option.type === "pon" || (option.type === "kan" && option.options?.kanType === "minkan"))
+        !(option.type === "pon" || option.type === "kan")
       );
       if (options.length) state.pendingAction = { ...state.pendingAction, options };
       else {
@@ -3624,6 +3662,19 @@ const applyServerAction = (state, event) => {
           if (fromIndex >= 0) state.currentPlayerIndex = fromIndex;
           advanceTurn(state);
           enterCurrentTurnOnServer(state);
+        }
+      }
+    }
+    if (payload.partial?.noCall === false && currentPlayer(state)?.id === player.id && !player.isRiichi && canServerDeclareKanNow(state)) {
+      const kakan = findServerKakanCandidate(player);
+      if (kakan) {
+        const currentOptions = state.pendingAction?.playerId === player.id ? ensureArray(state.pendingAction.options) : [];
+        const hasKakan = currentOptions.some((option) => option.type === "kan" && option.options?.kanType === "kakan");
+        if (!hasKakan) {
+          setServerPendingActions(state, player.id, [
+            ...currentOptions,
+            { type: "kan", playerId: player.id, sourceTile: kakan.tile, tile: kakan.tile, options: { kanType: "kakan", meldTile: kakan.meld?.tiles?.[0] } },
+          ], { type: "selfDraw" });
         }
       }
     }
@@ -3639,11 +3690,25 @@ const applyServerAction = (state, event) => {
   if (action === "kan" && !isCallKan && active?.id !== player.id) {
     throw new Error("現在の手番ではありません");
   }
+  const activeFeverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+  if (activeFeverPlayer && activeFeverPlayer.id !== player.id && ["ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"].includes(action)) {
+    throw new Error("フィーバーリーチ中の他家はツモ切りのみです");
+  }
 
   if (action === "draw") {
     if (player.drawnTile) throw new Error("すでにツモ牌があります");
     drawFromWall(state, player, "liveWall");
     state.phase = "waitingForHumanDiscard";
+    const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+    if (feverPlayer && feverPlayer.id !== player.id) {
+      state.phase = "riichiAutoDiscard";
+      state.isWaitingForHumanAction = false;
+      state.activeClockPlayerId = null;
+      state.clockStartedAt = null;
+      state.pendingServerEffect = { type: "riichiAutoDiscard", playerId: player.id, resumeAt: Date.now() + 850, reason: "feverRiichiForcedDiscard" };
+      appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+      return state;
+    }
     const flower = findAutoFlowerTile(player);
     if (flower && beginServerFlowerAnnouncement(state, player, flower)) return state;
     if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
@@ -3651,7 +3716,9 @@ const applyServerAction = (state, event) => {
   }
 
   if (action === "discard") {
-    const tileId = payload.tileId || payload.tile?.id;
+    const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+    const forcedTsumogiri = Boolean(feverPlayer && feverPlayer.id !== player.id && player.drawnTile);
+    const tileId = forcedTsumogiri ? player.drawnTile.id : (payload.tileId || payload.tile?.id);
     if (!tileId) throw new Error("打牌する牌が指定されていません");
     const isRiichiChoiceDiscard = state.pendingAction?.playerId === player.id &&
       ensureArray(state.pendingAction?.options).some((option) => option.type === "riichi") &&
@@ -3660,7 +3727,7 @@ const applyServerAction = (state, event) => {
       player.riichiDiscardTileIds = [];
     }
     state.pendingAction = null;
-    discardForServer(state, player, tileId, { isRiichiDiscard: state.phase === "waitingForRiichiDiscard" });
+    discardForServer(state, player, tileId, { isRiichiDiscard: state.phase === "waitingForRiichiDiscard" && !forcedTsumogiri });
     return state;
   }
 
@@ -3686,8 +3753,7 @@ const applyServerAction = (state, event) => {
         riichiStickPoints = 1000;
       }
       const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== payload.tileId);
-      const feverCheckPlayer = { ...player, hand: afterRiichiDiscardTiles, drawnTile: null };
-      player.feverRiichiActive = Boolean(state.settings?.ruleConfig?.feverRiichiEnabled && hasServerFeverRiichiTriplet(feverCheckPlayer));
+      player.feverRiichiActive = isServerFeverRiichiEligibleAfterDiscard(state, player, afterRiichiDiscardTiles);
       discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
       appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, riichiStickPoints, turnIndex: state.turnIndex ?? 0 });
       player.riichiDiscardTileIds = [];
@@ -3753,7 +3819,7 @@ const applyServerAction = (state, event) => {
     if (!canServerDeclareKanNow(state)) {
       throw new Error("最終ツモまたは嶺上牌がない局面ではカンできません");
     }
-    if (isMinkan && player.assistSettings?.noCall) throw new Error("鳴きなし中は明槓できません");
+    if (player.assistSettings?.noCall) throw new Error("鳴きなし中はカンできません");
     if (kanType === "kakan") {
       const targetMeld = ensureArray(player.melds).find((meld) => meld?.type === "pon" && meld?.tiles?.[0] && sameTileKind(meld.tiles[0], baseTile));
       if (!targetMeld) throw new Error("加槓できるポンがありません");
@@ -3987,7 +4053,8 @@ const applyServerRiichiAutoDiscardEffect = (state) => {
   if (!effect || effect.type !== "riichiAutoDiscard") return false;
   const player = findPlayer(state, effect.playerId);
   state.pendingServerEffect = null;
-  if (!player || !player.isRiichi) {
+  const isFeverForcedDiscard = effect.reason === "feverRiichiForcedDiscard";
+  if (!player || (!player.isRiichi && !isFeverForcedDiscard)) {
     state.phase = "playing";
     return false;
   }
@@ -3996,7 +4063,7 @@ const applyServerRiichiAutoDiscardEffect = (state) => {
     return false;
   }
   state.phase = "playing";
-  appendHandEvent(state, { type: "riichiAutoDiscard", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+  appendHandEvent(state, { type: isFeverForcedDiscard ? "feverForcedDiscard" : "riichiAutoDiscard", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
   return Boolean(discardForServer(state, player, player.drawnTile.id));
 };
 
@@ -4304,6 +4371,7 @@ const startNextServerHand = (state) => {
   state.round.hanchanRoundIndex = nextRoundIndex;
   state.round.dealerPlayerId = nextDealerId;
   for (const player of ensureArray(state.players)) {
+    const assistSettings = { autoWin: Boolean(player.assistSettings?.autoWin), noCall: false };
     Object.assign(player, {
       hand: [],
       drawnTile: null,
@@ -4320,6 +4388,7 @@ const startNextServerHand = (state) => {
       riichiStickPaid: false,
       feverRiichiActive: false,
       feverWinCount: 0,
+      assistSettings,
     });
   }
   for (let i = 0; i < 13; i++) {
