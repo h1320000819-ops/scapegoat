@@ -1709,26 +1709,60 @@ button:hover {
 }
 
 .kan-announcement > div {
+  animation: kanImpact 0.34s ease-out 2 alternate;
   color: #ffe7a8;
-  font-size: clamp(62px, 11vw, 124px);
-  text-shadow: 0 7px 0 #7a3b06, 0 0 30px rgba(255, 183, 65, 0.82), 0 18px 42px rgba(0, 0, 0, 0.76);
+  font-size: clamp(72px, 12vw, 144px);
+  text-shadow: 0 8px 0 #7a3b06, 0 0 20px rgba(255, 255, 255, 0.9), 0 0 42px rgba(255, 183, 65, 0.95), 0 18px 42px rgba(0, 0, 0, 0.76);
+}
+
+.kan-announcement {
+  background:
+    radial-gradient(circle at center, rgba(255, 244, 167, 0.34), rgba(255, 122, 35, 0.18) 34%, rgba(0, 0, 0, 0.32) 64%),
+    rgba(0, 0, 0, 0.22);
 }
 
 .fever-announcement > div {
-  animation: feverAnnounce 0.42s ease-in-out infinite alternate;
-  color: #fff1a8;
-  font-size: clamp(48px, 9vw, 104px);
-  text-shadow: 0 6px 0 #9a1a12, 0 0 24px rgba(255, 226, 58, 0.95), 0 0 52px rgba(255, 67, 67, 0.85), 0 18px 42px rgba(0, 0, 0, 0.78);
+  animation: feverAnnounce 0.3s ease-in-out infinite alternate;
+  color: #fff8b8;
+  font-size: clamp(64px, 11vw, 132px);
+  text-shadow: 0 8px 0 #9a1a12, 0 0 18px rgba(255, 255, 255, 0.9), 0 0 38px rgba(255, 226, 58, 1), 0 0 72px rgba(255, 67, 67, 0.96), 0 0 108px rgba(255, 30, 188, 0.8), 0 18px 42px rgba(0, 0, 0, 0.78);
+}
+
+.fever-announcement {
+  animation: feverBackdrop 0.52s ease-in-out infinite alternate;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(255, 242, 96, 0.38), rgba(255, 55, 55, 0.24) 36%, rgba(93, 16, 92, 0.34) 68%),
+    rgba(0, 0, 0, 0.24);
+}
+
+@keyframes kanImpact {
+  from {
+    filter: brightness(1);
+    transform: scale(0.9);
+  }
+  to {
+    filter: brightness(1.45);
+    transform: scale(1.12);
+  }
 }
 
 @keyframes feverAnnounce {
   from {
-    transform: scale(0.96) rotate(-1deg);
+    transform: scale(0.94) rotate(-2deg);
     filter: brightness(1);
   }
   to {
-    transform: scale(1.06) rotate(1deg);
-    filter: brightness(1.35);
+    transform: scale(1.1) rotate(2deg);
+    filter: brightness(1.55) saturate(1.25);
+  }
+}
+
+@keyframes feverBackdrop {
+  from {
+    filter: hue-rotate(0deg) brightness(1);
+  }
+  to {
+    filter: hue-rotate(16deg) brightness(1.2);
   }
 }
 

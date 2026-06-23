@@ -2537,6 +2537,15 @@ const applyTsumoLosslessRoundAdvance = (state, result) => {
   else state.round.honba = 0;
   if (!dealerContinues) state.round.hanchanRoundIndex = getTsumoLosslessRoundIndex(state) + 1;
 };
+const applyAnmikaRoundAdvance = (state, result) => {
+  if (!state || isTsumoLossless3maState(state)) return;
+  state.round ??= {};
+  const dealerId = state.round.dealerPlayerId || ensureArray(state.players)[0]?.id || "";
+  const winnerIds = result?.type === "win" ? [result.winnerId, ...ensureArray(result.winners)].filter(Boolean) : [];
+  const dealerWon = winnerIds.includes(dealerId);
+  const isDraw = result?.type === "exhaustiveDraw";
+  state.round.honba = dealerWon || isDraw ? Number(state.round.honba || 0) + 1 : 0;
+};
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
   const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
   const riichiStickPoints = awardTsumoLosslessRiichiSticks(state, riichiStickWinnerId);
@@ -3466,6 +3475,11 @@ const hasServerPureClosedTriplet = (player, suit, rank) => {
 const hasServerFeverRiichiTriplet = (player) =>
   hasServerPureClosedTriplet(player, "pinzu", 7) || hasServerPureClosedTriplet(player, "souzu", 7);
 const SERVER_FEVER_RIICHI_KEYS = new Set(["pinzu:7", "souzu:7"]);
+const hasServerFeverAnkan = (player) =>
+  ensureArray(player?.melds).some((meld) =>
+    meld?.type === "ankan" &&
+    ensureArray(meld.tiles).some((tile) => SERVER_FEVER_RIICHI_KEYS.has(tileKindKey(tile)))
+  );
 const hasServerClosedFeverTripletInHand13 = (player, hand13) =>
   [...SERVER_FEVER_RIICHI_KEYS].some((key) =>
     ensureArray(hand13).filter((tile) => tileKindKey(tile) === key).length >= 3 ||
@@ -3486,6 +3500,7 @@ const serverWinningShapeKeepsFeverTriplet = (tiles14, melds = []) => {
 const isServerFeverRiichiEligibleAfterDiscard = (state, player, hand13) => {
   if (!state?.settings?.ruleConfig?.feverRiichiEnabled || !player || !hasServerClosedFeverTripletInHand13(player, hand13)) return false;
   const waits = getWinningTilesForServerTenpai({ ...player, hand: hand13, drawnTile: null });
+  if (hasServerFeverAnkan(player)) return waits.length > 0;
   return waits.length > 0 && waits.every((wait) => serverWinningShapeKeepsFeverTriplet([...ensureArray(hand13), wait], player.melds));
 };
 const clearServerIppatsu = (state, reason, exceptPlayerId = null) => {
@@ -4042,6 +4057,7 @@ const applyServerAction = (state, event) => {
       state.clockStartedAt = null;
       return state;
     }
+    applyAnmikaRoundAdvance(state, state.handLog?.result);
     return startNextServerHand(state);
   }
 
@@ -4061,19 +4077,25 @@ const applyServerAction = (state, event) => {
       ...(payload.partial || {}),
     };
     if (state.pendingAction?.playerId === player.id && player.assistSettings.noCall) {
+      const previousOptions = ensureArray(state.pendingAction.options);
       const options = ensureArray(state.pendingAction.options).filter((option) =>
         !(option.type === "pon" || option.type === "kan")
       );
       if (options.length) state.pendingAction = { ...state.pendingAction, options };
       else {
         const source = state.pendingAction.source || {};
+        const fromPlayerId = previousOptions.find((option) => option.fromPlayerId)?.fromPlayerId || source.fromPlayerId || null;
         state.pendingAction = null;
-        if (source.type === "afterDiscard") {
+        if (source.type === "afterDiscard" || fromPlayerId) {
           state.phase = "playing";
-          const fromIndex = ensureArray(state.players).findIndex((p) => p.id === source.fromPlayerId);
+          const fromIndex = ensureArray(state.players).findIndex((p) => p.id === fromPlayerId);
           if (fromIndex >= 0) state.currentPlayerIndex = fromIndex;
           advanceTurn(state);
           enterCurrentTurnOnServer(state);
+        } else if (currentPlayer(state)?.id === player.id) {
+          state.phase = "waitingForHumanDiscard";
+          state.isWaitingForHumanAction = true;
+          startServerClockForPlayer(state, player);
         }
       }
     }
@@ -4276,7 +4298,7 @@ const applyServerAction = (state, event) => {
     if (tiles.length < 4) throw new Error("カンに必要な4枚がありません");
     player.melds ??= [];
     player.melds.push({ type: isMinkan ? "minkan" : "ankan", tiles, calledTile: isMinkan ? tiles[0] : undefined, fromPlayerId: isMinkan ? fromPlayerId : undefined });
-    appendHandEvent(state, { type: "kan", playerId: player.id, fromPlayerId: isMinkan ? fromPlayerId : undefined, tiles, turnIndex: state.turnIndex ?? 0 });
+    appendHandEvent(state, { type: "kan", playerId: player.id, fromPlayerId: isMinkan ? fromPlayerId : undefined, tiles, kanType: isMinkan ? "minkan" : "ankan", turnIndex: state.turnIndex ?? 0 });
     clearServerIppatsu(state, "kan");
     addDoraAfterKan(state);
     if (!isMinkan && player.drawnTile) {
@@ -5229,6 +5251,7 @@ const applyAutoResultOk = (state) => {
     state.clockStartedAt = null;
     return true;
   }
+  applyAnmikaRoundAdvance(state, state.handLog?.result);
   startNextServerHand(state);
   return true;
 };

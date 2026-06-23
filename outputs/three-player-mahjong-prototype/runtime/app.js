@@ -3166,6 +3166,11 @@ const hasFeverRiichiTriplet = (player) => (
   isPureClosedTriplet(player.hand ?? [], "souzu-7")
 );
 const FEVER_RIICHI_KEYS = new Set(["pinzu-7", "souzu-7"]);
+const hasFeverAnkan = (player) =>
+  (player.melds ?? []).some((meld) =>
+    meld.type === "ankan" &&
+    (meld.tiles ?? []).some((tile) => FEVER_RIICHI_KEYS.has(tileKindKey(tile)))
+  );
 const hasClosedFeverTripletInHand13 = (player, hand13) =>
   [...FEVER_RIICHI_KEYS].some((key) =>
     hand13.filter((tile) => tileKindKey(tile) === key).length >= 3 ||
@@ -3186,6 +3191,7 @@ const winningShapeKeepsFeverTriplet = (tiles14, melds = []) => {
 const isFeverRiichiEligibleAfterDiscard = (state, player, hand13) => {
   if (!state?.settings?.ruleConfig?.feverRiichiEnabled || !player || !hasClosedFeverTripletInHand13(player, hand13)) return false;
   const waits = getWinningTilesForTenpai(hand13, player.melds ?? []);
+  if (hasFeverAnkan(player)) return waits.length > 0;
   return waits.length > 0 && waits.every((wait) => winningShapeKeepsFeverTriplet([...hand13, wait], player.melds ?? []));
 };
 const getActiveFeverRiichiPlayer = (state) => state.players.find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
@@ -3240,6 +3246,11 @@ class GameController {
     }, durationMs);
     if (emit) this.emit();
     return true;
+  }
+  showLatestCallAnnouncement(events, { targetState = this.state } = {}) {
+    const callEvent = [...(events ?? [])].reverse().find((event) => event?.type === "pon" || event?.type === "kan");
+    if (!callEvent) return false;
+    return this.showActionAnnouncement(callEvent, { targetState, durationMs: callEvent.type === "kan" ? 1250 : 850 });
   }
   setOnlineLoadingMessage(message) {
     const text = String(message || "");
@@ -4004,9 +4015,7 @@ class GameController {
         }, latestEvent.feverRiichiActive ? 1800 : 1000);
       }
     }
-    if (latestEvent?.type === "pon" || latestEvent?.type === "kan") {
-      this.showActionAnnouncement(latestEvent, { targetState: next, durationMs: latestEvent.type === "kan" ? 1050 : 850 });
-    }
+    this.showLatestCallAnnouncement(next.handLog?.events?.slice?.(-8) ?? [], { targetState: next });
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Number(next.resultCountdownStartedAt || 0) || Date.now();
@@ -5160,13 +5169,23 @@ class GameController {
     const player = this.getPlayer(playerId);
     player.assistSettings = { autoWin: false, noCall: false, ...(player.assistSettings ?? {}), ...partial };
     if (this.state.pendingAction?.playerId === playerId && partial.noCall) {
+      const previousOptions = getActionOptions(this.state.pendingAction);
       const remainingOptions = getActionOptions(this.state.pendingAction).filter((option) =>
         !(option.type === "pon" || option.type === "kan")
       );
       if (remainingOptions.length) this.state.pendingAction = { ...this.state.pendingAction, options: remainingOptions };
       else {
-        const fromPlayerId = getActionOptions(this.state.pendingAction).find((option) => option.fromPlayerId)?.fromPlayerId || null;
-        this.continueAfterDiscardCallWindow(fromPlayerId);
+        const fromPlayerId = previousOptions.find((option) => option.fromPlayerId)?.fromPlayerId || null;
+        if (fromPlayerId) {
+          this.continueAfterDiscardCallWindow(fromPlayerId);
+        } else if (getCurrentPlayer(this.state)?.id === playerId) {
+          this.state.pendingAction = null;
+          this.state.phase = "waitingForHumanDiscard";
+          this.state.isWaitingForHumanAction = true;
+          this.startClockForPlayer(playerId);
+        } else {
+          this.state.pendingAction = null;
+        }
       }
     }
     if (partial.noCall === false && getCurrentPlayer(this.state)?.id === playerId) {
