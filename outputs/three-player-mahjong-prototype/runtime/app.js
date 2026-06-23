@@ -1352,6 +1352,14 @@ const getCurrentReplaySnapshot = (replay, index) => {
 const getSimpleReplayPayload = (replay) => {
   const payload = replay?.simpleReplay || replay?.summary?.simpleReplay;
   if (payload?.format === "anmika-simple-replay-v1") return payload;
+  if ((replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) && replay?.initialState && Array.isArray(replay?.events)) {
+    return {
+      format: "event-log-v1",
+      initialState: replay.initialState,
+      events: replay.events,
+      result: replay.summary?.finalResult || replay.initialState?.handLog?.result || null,
+    };
+  }
   if (!replay?.snapshots?.length && replay?.initialState && Array.isArray(replay?.events)) {
     return {
       format: "anmika-simple-replay-v1",
@@ -1453,6 +1461,13 @@ const applySimpleReplayEvent = (state, event) => {
   if (!state || !event?.type) return state;
   state.handLog ??= createEmptyHandLog();
   state.handLog.events ??= [];
+  if (event.type === "handStart" && event.initialState) {
+    const next = cloneReplayState(event.initialState);
+    next.handLog = { ...(next.handLog || createEmptyHandLog()), events: [...state.handLog.events], result: null };
+    next.replaySnapshots = undefined;
+    next.replayInitialState = undefined;
+    return next;
+  }
   const player = replayPlayerForEvent(state, event);
   if (event.type === "doraReveal") {
     state.doraIndicators = event.doraIndicators || [...(state.doraIndicators || []), event.tile].filter(Boolean);
@@ -1600,14 +1615,14 @@ const applySimpleReplayEvent = (state, event) => {
 const buildSimpleReplaySnapshots = (replay) => {
   const simple = getSimpleReplayPayload(replay);
   if (!simple?.initialState) return [];
-  const state = cloneReplayState(simple.initialState);
+  let state = cloneReplayState(simple.initialState);
   state.handLog = { ...(state.handLog || createEmptyHandLog()), events: [], result: null };
   state.replaySnapshots = undefined;
   state.replayInitialState = undefined;
   const snapshots = [cloneReplayState(state)];
   for (const event of simple.events || []) {
     state.handLog.events.push(event);
-    applySimpleReplayEvent(state, event);
+    state = applySimpleReplayEvent(state, event) || state;
     snapshots.push(cloneReplayState(state));
   }
   if (simple.result && !state.handLog.result) {
@@ -1617,11 +1632,11 @@ const buildSimpleReplaySnapshots = (replay) => {
   return snapshots;
 };
 const getReplaySnapshots = (replay) => {
+  const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
+  if (simpleSnapshots.length) return simpleSnapshots;
   const isHanchanReplay = replay?.summary?.scope === "hanchan"
     || (replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && (replay?.summary?.handMarkers?.length ?? 0) > 1);
   if (isHanchanReplay && replay?.snapshots?.length) return replay.snapshots;
-  const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
-  if (simpleSnapshots.length) return simpleSnapshots;
   if (replay?.snapshots?.length) return replay.snapshots;
   if (!replay?.initialState) return [];
   const events = replay.events ?? [];
@@ -1732,7 +1747,8 @@ function compactSnapshotForStorage(snapshot) {
 }
 function compactReplayForStorage(replay, maxSnapshots = 120) {
   const snapshots = pickReplaySnapshots(replay.snapshots?.length ? replay.snapshots : [replay.initialState].filter(Boolean), maxSnapshots).map(compactSnapshotForStorage);
-  const events = maxSnapshots < 20 ? (replay.events ?? []).slice(-Math.max(0, maxSnapshots - 1)) : (replay.events ?? []);
+  const isEventLogPrimary = replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary;
+  const events = isEventLogPrimary ? (replay.events ?? []) : maxSnapshots < 20 ? (replay.events ?? []).slice(-Math.max(0, maxSnapshots - 1)) : (replay.events ?? []);
   return {
     ...replay,
     initialState: compactSnapshotForStorage(replay.initialState ?? snapshots[0]),
@@ -2736,9 +2752,6 @@ const evaluateWinExplicit = (state, player, tile) => {
   }
   const shapes = explicitFindStandardShapes(concealedCounts, 4 - meldCount);
   if (shapes.length === 0) {
-    if (isTsumoLossless3maState(state) && canFormWinningShape(concealedTiles, player.melds ?? [])) {
-      return { canWin: true, handType: "standard", yaku: [{ name: "全赤三麻和了", han: 0 }], han: 0, fallbackShape: true };
-    }
     return { canWin: false, reason: "和了形ではありません" };
   }
   const candidates = shapes.map((shape) => {
@@ -2776,8 +2789,7 @@ const evaluateWinExplicit = (state, player, tile) => {
     return { yaku, han: yaku.reduce((sum, item) => sum + item.han, 0) };
   });
   const best = candidates.sort((a, b) => b.han - a.han)[0];
-  if (!best?.yaku.length && !isTsumoLossless3maState(state)) return { canWin: false, reason: "和了形ですが役がありません" };
-  if (!best?.yaku.length && isTsumoLossless3maState(state)) best.yaku = [{ name: "全赤三麻和了", han: 0 }];
+  if (!best?.yaku.length) return { canWin: false, reason: "和了形ですが役がありません" };
   if (!canWinByRiichiRequirement({ state, yaku: best.yaku, player, isClosed })) return { canWin: false, reason: "門前ダマテン和了は禁止です" };
   return { canWin: true, handType: "standard", yaku: best.yaku, han: best.han };
 };
@@ -4588,10 +4600,13 @@ class GameController {
         players: this.state.players.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })),
         resultLabel: result.type === "win" ? `${getPlayerNameById(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}` : "流局",
         resultSummary: replayResultSummaryFromState(this.state, result),
+        replayFormat: "event-log-v1",
+        eventLogIsPrimary: true,
+        eventCount: this.state.handLog.events.length,
       },
       initialState: this.state.replayInitialState ?? cloneSnapshot(this.state),
       events: [...this.state.handLog.events],
-      snapshots: [...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)],
+      snapshots: pickReplaySnapshots([...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)], 40),
     };
     replayRepository.saveReplay(replay);
     this.state.lastSavedReplayId = this.state.handLog.handId;

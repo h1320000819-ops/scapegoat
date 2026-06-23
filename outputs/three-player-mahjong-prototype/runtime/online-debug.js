@@ -1279,6 +1279,30 @@
     }
     render();
   };
+  const restoreStoredSession = async () => {
+    if (!sanitizeStoredSession()) return false;
+    if (!state.accessToken && state.refreshToken) {
+      await refreshSession().catch((error) => {
+        invalidateBrokenSession("stored refresh failed");
+        throw error;
+      });
+    }
+    if (!state.accessToken) return false;
+    const authUser = await request("/auth/v1/user").catch(async (error) => {
+      const raw = rawErrorText(error);
+      if (state.refreshToken && (raw.includes("JWT expired") || raw.includes("invalid JWT") || raw.includes("PGRST303") || raw.includes("401"))) {
+        await refreshSession();
+        return request("/auth/v1/user");
+      }
+      throw error;
+    });
+    if (!authUser?.id) return false;
+    if (!state.user || state.user.id !== authUser.id) {
+      const profile = await ensureProfileForAuthUser(authUser);
+      saveSession({ access_token: state.accessToken, refresh_token: state.refreshToken }, profile);
+    }
+    return true;
+  };
   const requireUser = () => {
     if (!state.user || !state.accessToken) throw new Error(JA_MESSAGES.signInRequired);
     return state.user;
@@ -1414,16 +1438,9 @@
     startClubPolling();
   };
   const signOut = async () => {
-    const token = state.accessToken;
     clearInterval(state.pollTimer);
     clearInterval(state.clubPollTimer);
-    if (token && isLikelyJwt(token) && isByteStringHeaderValue(token)) {
-      await request("/auth/v1/logout", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + token },
-        auth: false,
-      }).catch((error) => log("Supabaseログアウト通知に失敗しました。ローカル状態は削除します。", rawErrorText(error)));
-    }
+    log("この端末だけログアウトしました。別ブラウザ・別端末の同一アカウントログインは維持されます。");
     clearStoredSession();
     render();
   };
@@ -4716,7 +4733,30 @@
       }
     }, LOBBY_AUTO_REFRESH_MS);
   };
+  const captureScrollPosition = () => ({
+    x: window.scrollX || document.documentElement.scrollLeft || 0,
+    y: window.scrollY || document.documentElement.scrollTop || 0,
+    screen: document.body.dataset.screen || "",
+    activeClubId: state.activeClubId || "",
+    activeTableId: state.activeTableId || "",
+  });
+  const restoreScrollPositionAfterRender = (snapshot) => {
+    if (!snapshot) return;
+    const sameView =
+      snapshot.screen === (document.body.dataset.screen || "") &&
+      snapshot.activeClubId === (state.activeClubId || "") &&
+      snapshot.activeTableId === (state.activeTableId || "");
+    if (!sameView || snapshot.y <= 0) return;
+    requestAnimationFrame(() => {
+      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const targetY = Math.min(snapshot.y, maxY);
+      if (Math.abs((window.scrollY || 0) - targetY) > 2) {
+        window.scrollTo({ left: snapshot.x, top: targetY, behavior: "auto" });
+      }
+    });
+  };
   const render = () => {
+    const scrollSnapshot = captureScrollPosition();
     clearRecentlyLeftTableIfExpired();
     if (state.activeTableId && isRecentlyLeftTable(state.activeTableId)) {
       clearLocalUserSeatsForTable(state.activeTableId);
@@ -4961,6 +5001,7 @@
     updateRangeLabels();
     scheduleAutoStartFromVisibleTables();
     renderDebug();
+    restoreScrollPositionAfterRender(scrollSnapshot);
   };
   const renderDebug = (realtimeStatus) => {
     if (!has("debugSummary")) return;
@@ -5044,8 +5085,12 @@
     });
   };
   const init = async () => {
+    if ("scrollRestoration" in history) history.scrollRestoration = "manual";
     sanitizeStoredSession();
     await completeOAuthRedirectIfNeeded().catch((error) => showError("外部ログイン処理に失敗しました", error));
+    if (state.accessToken || state.refreshToken) {
+      await restoreStoredSession().catch((error) => showError("ログイン状態の復元に失敗しました", error));
+    }
     showLanHint();
     ensureTsumoLossless3maCreateUi();
     $("configStatus").textContent = config.url && config.anonKey ? "Supabase接続: OK" : "Supabase設定が不足しています。";
@@ -5175,6 +5220,18 @@
       if (document.visibilityState !== "visible") return;
       renderDebug();
       probeGameServer().catch(() => {});
+    });
+    window.addEventListener("storage", (event) => {
+      if (!["anmikaAccessToken", "anmikaRefreshToken", "anmikaDebugUser"].includes(event.key || "")) return;
+      state.accessToken = localStorage.getItem("anmikaAccessToken") || "";
+      state.refreshToken = localStorage.getItem("anmikaRefreshToken") || "";
+      try {
+        state.user = JSON.parse(localStorage.getItem("anmikaDebugUser") || "null");
+      } catch {
+        state.user = null;
+      }
+      if (!state.accessToken || !state.user) document.body.dataset.screen = "auth";
+      render();
     });
   };
   init().catch((error) => showError(JA_MESSAGES.actionFailed, error));

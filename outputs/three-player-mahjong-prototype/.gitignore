@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.local
+server/game-state-store/
+outputs/three-player-mahjong-prototype/node_modules/
+outputs/three-player-mahjong-prototype/server/game-state-store/

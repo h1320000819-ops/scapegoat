@@ -1689,15 +1689,71 @@ const pickReplaySnapshotsForLimit = (snapshots, limit) => {
 const compactReplaySnapshotList = (snapshots, limit) => pickReplaySnapshotsForLimit(snapshots, limit).map(compactStateForReplay);
 const HAND_REPLAY_SNAPSHOT_LIMIT = 260;
 const HANCHAN_REPLAY_SNAPSHOT_LIMIT = 12000;
+const REPLAY_ANCHOR_SNAPSHOT_LIMIT = 80;
+const REPLAY_PAYLOAD_WARNING_BYTES = 2 * 1024 * 1024;
+const replayEventTypeForDb = (event = {}) => ({
+  draw: "draw",
+  discard: "discard",
+  riichi: event.feverRiichiActive ? "fever_riichi" : "riichi",
+  pon: "pon",
+  kan: event.kanType === "ankan" ? "closed_kan" : event.kanType === "kakan" ? "added_kan" : "kan",
+  nukiDora: "nuki",
+  flowerAnnouncement: "flower",
+  ron: "ron",
+  tsumo: "tsumo",
+  exhaustiveDraw: "exhaustive_draw",
+  doraReveal: "dora_reveal",
+  resultOk: "result_ok",
+  resultOkAuto: "result_ok",
+  handStart: "hand_start",
+  feverContinuation: "fever_continuation",
+})[event?.type] || event?.type || "event";
+const replayEventRowsForDb = (replayId, events = []) => ensureArray(events)
+  .filter((event) => event && event.type)
+  .map((event, index) => ({
+    replay_id: replayId,
+    sequence: index + 1,
+    event_type: replayEventTypeForDb(event),
+    actor_player_id: isUuid(event.playerId) ? event.playerId : null,
+    payload: event,
+  }));
+const saveReplayEventsToDb = async (replayId, events = []) => {
+  const rows = replayEventRowsForDb(replayId, events);
+  if (!rows.length) return false;
+  try {
+    for (let index = 0; index < rows.length; index += 500) {
+      await supabaseRest("/replay_events", {
+        method: "POST",
+        prefer: "return=minimal",
+        body: rows.slice(index, index + 500),
+      });
+    }
+    console.log("[Replay] replay_events saved", { replayId, eventCount: rows.length });
+    return true;
+  } catch (error) {
+    console.warn("[Replay] replay_events skipped. Run supabase/patch_replay_events_event_log.sql if the table is missing.", {
+      replayId,
+      eventCount: rows.length,
+      error: error?.message || String(error),
+    });
+    return false;
+  }
+};
 const buildRoomReplayPayload = (room) => {
   const state = room?.state;
   if (!room?.tableId || !state?.handLog?.handId) return null;
-  const replaySnapshots = compactReplaySnapshotList(state.replaySnapshots, HAND_REPLAY_SNAPSHOT_LIMIT);
-  const hanchanReplaySnapshots = compactReplaySnapshotList(state.hanchanReplaySnapshots, HANCHAN_REPLAY_SNAPSHOT_LIMIT);
+  const sourceReplaySnapshots = asArray(state.replaySnapshots);
+  const sourceHanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
+  const replaySnapshots = compactReplaySnapshotList(sourceReplaySnapshots, REPLAY_ANCHOR_SNAPSHOT_LIMIT);
+  const hanchanReplaySnapshots = compactReplaySnapshotList(sourceHanchanReplaySnapshots, REPLAY_ANCHOR_SNAPSHOT_LIMIT);
   if (!replaySnapshots.length && !hanchanReplaySnapshots.length) return null;
   const isAllRedHanchanReplay = isTsumoLossless3maState(state) && hanchanReplaySnapshots.length > replaySnapshots.length;
+  const events = isAllRedHanchanReplay
+    ? replayEventsFromSnapshots(sourceHanchanReplaySnapshots)
+    : asArray(state.handLog?.events);
   return {
     schemaVersion: 1,
+    replayFormat: "event-log-v1",
     tableId: String(room.tableId),
     gameId: room.gameId || state.gameId || "",
     handId: state.handLog.handId,
@@ -1709,6 +1765,8 @@ const buildRoomReplayPayload = (room) => {
       ? compactStateForReplay(state.hanchanReplayInitialState)
       : hanchanReplaySnapshots[0] || null,
     hanchanReplaySnapshots,
+    events,
+    eventCount: events.length,
     simpleReplay: isAllRedHanchanReplay ? null : buildSimpleReplayPayload(room),
     updatedAt: now(),
   };
@@ -1851,7 +1909,12 @@ const replayEventsFromSnapshots = (snapshots) => {
     const previousEvents = asArray(previous?.handLog?.events);
     const currentEvents = asArray(current?.handLog?.events);
     if (currentHandId && previousHandId && currentHandId !== previousHandId) {
-      events.push({ type: "handStart", handId: currentHandId, roundLabel: current?.handLog?.roundLabel || "" });
+      events.push({
+        type: "handStart",
+        handId: currentHandId,
+        roundLabel: current?.handLog?.roundLabel || "",
+        initialState: compactStateForReplay(current),
+      });
       continue;
     }
     events.push(currentEvents.length > previousEvents.length
@@ -2033,48 +2096,84 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
     };
     return false;
   }
-  const compactSnapshots = asArray(snapshots).map(compactStateForReplay);
   const isHanchanReplay = scope === "hanchan";
-  const simpleReplay = isHanchanReplay ? null : buildSimpleReplayPayload(room, {
-    scope,
-    initialState: initialState || compactSnapshots[0] || room.state,
-    events: room.state?.handLog?.events,
-    result,
-  });
-  const replayEvents = simpleReplay?.events || (isHanchanReplay ? replayEventsFromSnapshots(compactSnapshots) : asArray(room.events));
+  const sourceSnapshots = asArray(snapshots);
+  const replayEvents = isHanchanReplay
+    ? replayEventsFromSnapshots(sourceSnapshots)
+    : asArray(room.state?.handLog?.events).length
+      ? asArray(room.state.handLog.events)
+      : asArray(room.events);
+  let compactSnapshots = compactReplaySnapshotList(sourceSnapshots, isHanchanReplay ? REPLAY_ANCHOR_SNAPSHOT_LIMIT : 40);
   const replayId = randomUUID();
-  const replaySummary = {
-    replayId,
-    clubId: table.club_id,
-    tableId: table.table_id,
-    gameId: room.gameId,
-    ruleId: room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket",
-    scope,
-    startedAt: compactSnapshots[0]?.handLog?.handId || room.state.handLog?.handId || now(),
-    endedAt: now(),
-    resultLabel: result?.type === "exhaustiveDraw" ? "流局" : result?.type === "win" ? "和了" : scope === "hanchan" ? "半荘牌譜" : "牌譜",
-    ruleName: replayRuleName(room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket"),
-    resultSummary: replayResultSummary(room.state, result),
-    players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
-    handMarkers: handMarkersFromSnapshots(compactSnapshots),
-    replayFormat: simpleReplay?.format || "snapshot-v1",
-    snapshotCount: compactSnapshots.length,
-    ...summary,
-  };
-  await supabaseRest("/replays", {
-    method: "POST",
-    prefer: "return=minimal",
-    body: {
+  const replayBodyForSnapshots = (snapshotList, retryReason = "") => {
+    const simpleReplay = isHanchanReplay ? null : buildSimpleReplayPayload(room, {
+      scope,
+      initialState: initialState || snapshotList[0] || room.state,
+      events: room.state?.handLog?.events,
+      result,
+    });
+    const replaySummary = {
+      replayId,
+      clubId: table.club_id,
+      tableId: table.table_id,
+      gameId: room.gameId,
+      ruleId: room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket",
+      scope,
+      startedAt: snapshotList[0]?.handLog?.handId || room.state.handLog?.handId || now(),
+      endedAt: now(),
+      resultLabel: result?.type === "exhaustiveDraw" ? "流局" : result?.type === "win" ? "和了" : scope === "hanchan" ? "半荘牌譜" : "牌譜",
+      ruleName: replayRuleName(room.state.settings?.ruleId || room.state.settings?.gameType || "anmika-rocket"),
+      resultSummary: replayResultSummary(room.state, result),
+      players: asArray(room.state.players).map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score, type: player.type })),
+      handMarkers: handMarkersFromSnapshots(sourceSnapshots.length ? sourceSnapshots : snapshotList),
+      replayFormat: "event-log-v1",
+      snapshotCount: snapshotList.length,
+      eventCount: replayEvents.length,
+      eventLogIsPrimary: true,
+      ...(retryReason ? { compactedRetry: true, compactedRetryReason: retryReason } : {}),
+      ...summary,
+    };
+    return {
       replay_id: replayId,
       club_id: table.club_id,
       table_id: table.table_id,
       game_id: isUuid(room.gameId) ? room.gameId : null,
       summary: replaySummary,
-      initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || compactSnapshots[0] || room.state),
+      initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || snapshotList[0] || room.state),
       events: replayEvents,
-      snapshots: isHanchanReplay ? compactSnapshots : [],
-    },
-  });
+      snapshots: snapshotList,
+    };
+  };
+  let replayBody = replayBodyForSnapshots(compactSnapshots);
+  const replayPayloadBytes = Buffer.byteLength(JSON.stringify(replayBody));
+  console.log("[Replay] event count", { replayId, tableId: room.tableId, gameId: room.gameId, scope, events: replayEvents.length, anchorSnapshots: compactSnapshots.length });
+  console.log("[Replay] replay size", { replayId, bytes: replayPayloadBytes });
+  if (replayPayloadBytes > REPLAY_PAYLOAD_WARNING_BYTES) {
+    console.warn("[Replay] warning: replay payload too large", { replayId, bytes: replayPayloadBytes, events: replayEvents.length, anchorSnapshots: compactSnapshots.length });
+  }
+  try {
+    await supabaseRest("/replays", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: replayBody,
+    });
+  } catch (error) {
+    if (!isHanchanReplay || compactSnapshots.length <= 10) throw error;
+    console.warn("[ReplaySync] full hanchan replay save failed; retrying compact payload", {
+      tableId: room.tableId,
+      gameId: room.gameId,
+      snapshots: compactSnapshots.length,
+      error: error?.message || String(error),
+    });
+    compactSnapshots = compactReplaySnapshotList(compactSnapshots, 10);
+    replayBody = replayBodyForSnapshots(compactSnapshots, error?.message || "full payload failed");
+    await supabaseRest("/replays", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: replayBody,
+    });
+  }
+  await saveReplayEventsToDb(replayId, replayEvents);
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
   markReplaySyncApplied(room.state, key, replayId);
   serverDiagnostics.lastReplaySave = {
@@ -2293,9 +2392,9 @@ const queueResultSideEffectsOnce = (room, resultId, reason = "resultOk") => {
   if (room.resultSideEffectQueuedIds.has(resultId)) return false;
   room.resultSideEffectQueuedIds.add(resultId);
   room.resultPointSyncResultId = resultId;
+  queueReplayEffectsSnapshot(room);
   setTimeout(() => {
     try {
-      queueReplayEffectsSnapshot(room);
       safeSyncClubPointEffects(room, reason);
     } catch (error) {
       console.error("[ResultOk] side effects queue failed", {
@@ -2598,6 +2697,13 @@ const appendHandEvent = (state, event) => {
     } : {}),
   };
   state.handLog.events.push(enriched);
+  console.log("[Replay] event recorded", {
+    type: enriched.type,
+    playerId: enriched.playerId || "",
+    handId: state.handLog.handId || "",
+    turnIndex: enriched.turnIndex ?? state.turnIndex ?? 0,
+    eventCount: state.handLog.events.length,
+  });
 };
 const drawFromWall = (state, player, source = "liveWall") => {
   const wall = source === "rinshanWall" ? state.rinshanWall : state.liveWall;
@@ -3154,9 +3260,6 @@ const evaluateServerWin = (state, player, tile, winType) => {
 
   const shapes = serverFindStandardShapes(counts, 4 - meldCount);
   if (shapes.length === 0) {
-    if (isTsumoLossless3maState(state) && isWinningShapeServer(concealedTiles, melds)) {
-      return { canWin: true, yaku: [{ name: "全赤三麻和了", han: 0 }], winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1), fallbackShape: true };
-    }
     return { canWin: false, reason: "和了形ではありません" };
   }
   const candidates = shapes.map((shape) => {
@@ -3194,8 +3297,7 @@ const evaluateServerWin = (state, player, tile, winType) => {
     return { yaku, han: yaku.reduce((sum, item) => sum + Number(item.han || 0), 0) };
   });
   const best = candidates.sort((a, b) => b.han - a.han)[0];
-  if (!best?.yaku.length && !isTsumoLossless3maState(state)) return { canWin: false, reason: "和了形ですが役がありません" };
-  if (!best?.yaku.length && isTsumoLossless3maState(state)) best.yaku = [{ name: "全赤三麻和了", han: 0 }];
+  if (!best?.yaku.length) return { canWin: false, reason: "和了形ですが役がありません" };
   const riichiError = rejectByRiichiRequirement(best.yaku);
   if (riichiError) return riichiError;
   return { canWin: true, yaku: best.yaku, winningTiles: allTiles, selectedWait: winningTile || allTiles.at(-1) };
@@ -5788,6 +5890,12 @@ io.on("connection", (socket) => {
         ack?.({ ok: true, advanced: false, ...publicRoomState(room, viewerId) });
         return;
       }
+      const finalSyncId = [
+        room.gameId || room.tableId || "game",
+        "gameEnded",
+        room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || getCurrentResultId(room.state) || "final",
+      ].join(":");
+      queueResultSideEffectsOnce(room, finalSyncId, "finalResultOk");
       const hasDeclaredLeaver = asArray(room.state.lastHandDeclaredBy).filter(Boolean).length > 0;
       const advanced = await startNextTsumoLosslessHanchanIfReady(room);
       ack?.({ ok: true, advanced, hasDeclaredLeaver, ...publicRoomState(room, viewerId) });

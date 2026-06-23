@@ -116,6 +116,16 @@ const handleReplayApi = async (request, response, replayId) => {
       sendJson(response, 403, { ok: false, error: "この牌譜を再生する権限がありません。" });
       return;
     }
+    const eventRows = await supabaseServerRest(`/replay_events?select=sequence,event_type,actor_player_id,payload&replay_id=eq.${encodeURIComponent(replayId)}&order=sequence.asc`).catch(() => []);
+    if (Array.isArray(eventRows) && eventRows.length) {
+      replay.events = eventRows.map((row) => row.payload || { type: row.event_type, playerId: row.actor_player_id || null });
+      replay.summary = {
+        ...(replay.summary || {}),
+        replayFormat: "event-log-v1",
+        eventLogIsPrimary: true,
+        eventCount: replay.events.length,
+      };
+    }
     sendJson(response, 200, { ok: true, replay });
   } catch (error) {
     console.error("[ReplayApi] failed", { replayId, error: error?.message || String(error) });
