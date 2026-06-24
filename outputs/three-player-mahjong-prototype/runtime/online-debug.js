@@ -5412,15 +5412,6 @@
     const mobileUrl = buildAppUrl("/online-debug");
     if (has("pcDebugUrl")) $("pcDebugUrl").textContent = pcUrl;
     if (has("mobileDebugUrl")) $("mobileDebugUrl").textContent = mobileUrl;
-    if (isPublicOrigin()) {
-      $("lanHint").textContent = "公開URLで動作中です。スマホや別端末でもこのURLを開けます。";
-    } else if (location.protocol === "file:") {
-      $("lanHint").textContent = "fileで開いている画面はスマホ共有できません。PCで npm run dev を起動し、スマホでは下のスマホ用URLを開いてください。";
-    } else if (isLocalHostName(location.hostname)) {
-      $("lanHint").textContent = "スマホで開く場合は、PCとスマホを同じWi-Fiに接続してください。localhost のURLはスマホでは使えません。";
-    } else {
-      $("lanHint").textContent = "別端末では下のスマホ用URLを開いてください。";
-    }
   };
   const bind = (id, handler) => {
     if (!has(id)) return;
@@ -5439,8 +5430,6 @@
     }
     showLanHint();
     ensureTsumoLossless3maCreateUi();
-    $("configStatus").textContent = config.url && config.anonKey ? "Supabase接続: OK" : "Supabase設定が不足しています。";
-    $("configStatus").className = config.url && config.anonKey ? "ok" : "warn";
     bind("signUpButton", signUp);
     bind("signInButton", signInWithEmail);
     bind("debugSignInButton", createDebugAccount);
