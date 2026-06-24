@@ -79,7 +79,6 @@
     lobbyRefreshInFlight: false,
     lobbyRefreshPending: false,
     tablePostRefreshInFlight: false,
-    pendingSignupEmail: localStorage.getItem("anmikaPendingSignupEmail") || "",
     authNotice: "",
     authNoticeType: "info",
   };
@@ -591,7 +590,7 @@
     if (!message) return "詳細不明のエラーです。";
     if (message.includes("invalid input syntax for type uuid")) return "空のIDが送信されました。クラブまたは卓を選択してから操作してください。";
     if (message.includes("invalid_grant") || message.includes("Invalid login credentials")) return JA_MESSAGES.invalidLogin;
-    if (message.includes("Email not confirmed")) return "メール確認が完了していません。確認メールのリンクを開いてからログインしてください。";
+    if (message.includes("Email not confirmed")) return "Supabase Authentication の Confirm email をOFFにしてください。";
     if (message.includes("Unable to validate email address") || message.includes("invalid format")) return "メールアドレスまたはログインIDを確認してください。";
     if (message.includes("no empty seat")) return "空席がありません。";
     if (message.includes("not club member")) return "クラブに所属していないため着席できません。";
@@ -890,18 +889,10 @@
   const rest = (path, options = {}) => request("/rest/v1" + path, options);
   const auth = (path, options = {}) => request("/auth/v1" + path, { ...options, auth: false });
   const supabaseAuth = {
-    signUp: ({ email, password, options = {}, data = {} }) => {
-      const redirectTo = options.emailRedirectTo || authRedirectUrl();
-      return auth(`/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
+    signUp: ({ email, password, data = {} }) => {
+      return auth("/signup", {
         method: "POST",
-        body: JSON.stringify({ email, password, data, options: { emailRedirectTo: redirectTo } }),
-      });
-    },
-    resend: ({ type, email, options = {} }) => {
-      const redirectTo = options.emailRedirectTo || authRedirectUrl();
-      return auth(`/resend?redirect_to=${encodeURIComponent(redirectTo)}`, {
-        method: "POST",
-        body: JSON.stringify({ type, email, options: { emailRedirectTo: redirectTo } }),
+        body: JSON.stringify({ email, password, data }),
       });
     },
   };
@@ -1417,7 +1408,7 @@
     const authError = hash.get("error_description") || hash.get("error") || query.get("error_description") || query.get("error");
     if (authError) {
       clearStoredSession();
-      setAuthNotice("メール認証が完了していません。確認メールのリンクを開いてからログインしてください。", "warn");
+      setAuthNotice("外部ログインに失敗しました。ログイン画面からもう一度試してください。", "warn");
       history.replaceState(null, "", "/online-debug/index.html");
       return false;
     }
@@ -1425,7 +1416,7 @@
     if (!accessToken) {
       if (isAuthCallback) {
         clearStoredSession();
-        setAuthNotice("メール認証が完了していません。ログイン画面からもう一度確認してください。", "warn");
+        setAuthNotice("ログイン情報を取得できませんでした。ログイン画面からもう一度試してください。", "warn");
         history.replaceState(null, "", "/online-debug/index.html");
       }
       return false;
@@ -1438,11 +1429,9 @@
     const authUser = await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser);
     saveSession(session, profile);
-    localStorage.removeItem("anmikaPendingSignupEmail");
-    state.pendingSignupEmail = "";
-    setAuthNotice("メール認証が完了しました。ログインしました。", "ok");
+    setAuthNotice("ログインしました。", "ok");
     history.replaceState(null, "", "/online-debug/index.html");
-    log(isAuthCallback ? "メール認証が完了しました。" : "外部アカウントでログインしました。", profile);
+    log(isAuthCallback ? "外部ログインが完了しました。" : "外部アカウントでログインしました。", profile);
     await loadClubs().catch(() => {});
     startClubPolling();
     return true;
@@ -1466,42 +1455,31 @@
     if (!email.includes("@")) throw new Error("アカウント作成時はメールアドレスを入力してください。ログインIDは作成後に自動発行されます。");
     try {
       clearStoredSession();
-      const redirectTo = authRedirectUrl();
       const normalizedEmail = normalizeLoginInput(email).toLowerCase();
-      await supabaseAuth.signUp({
+      const signUpData = await supabaseAuth.signUp({
         email: normalizedEmail,
         password,
         data: { display_name: displayName },
-        options: { emailRedirectTo: redirectTo },
       });
-      state.pendingSignupEmail = normalizedEmail;
-      localStorage.setItem("anmikaPendingSignupEmail", normalizedEmail);
+      if (!signUpData?.access_token || !signUpData?.user?.id) {
+        throw new Error("アカウント作成後のログイン情報を取得できませんでした。Supabase Authentication の Confirm email をOFFにしてください。");
+      }
+      saveSession(signUpData, null);
+      const profile = await ensureProfileForAuthUser(signUpData.user, displayName);
+      saveSession(signUpData, profile);
       if (has("email")) $("email").value = normalizedEmail;
-      console.log("[Auth] signup confirmation mail sent", { email: maskEmailForLog(normalizedEmail), redirectTo });
-      log("確認メールを送信しました。", { email: maskEmailForLog(normalizedEmail), redirectTo });
-      setAuthNotice("確認メールを送信しました。メール内のリンクを押して認証を完了してください。", "ok");
+      console.log("[Auth] account created", { email: maskEmailForLog(normalizedEmail), userId: profile.user_id });
+      log("アカウントを作成してログインしました。", { email: maskEmailForLog(normalizedEmail), loginId: profile.login_id });
+      setAuthNotice("アカウントを作成してログインしました。", "ok");
+      document.body.dataset.screen = "clubs";
+      await loadClubs().catch(() => {});
+      startClubPolling();
       render();
     } catch (error) {
       console.error("[Auth] create account failed", error);
       log("アカウント作成に失敗しました。", rawErrorText(error));
       throw error;
     }
-  };
-  const resendSignupConfirmation = async () => {
-    const rawEmail = normalizeLoginInput((has("email") && $("email").value) || state.pendingSignupEmail || "");
-    if (!rawEmail || !rawEmail.includes("@")) throw new Error("確認メールを再送するメールアドレスを入力してください。");
-    const email = rawEmail.toLowerCase();
-    const redirectTo = authRedirectUrl();
-    await supabaseAuth.resend({
-      type: "signup",
-      email,
-      options: { emailRedirectTo: redirectTo },
-    });
-    state.pendingSignupEmail = email;
-    localStorage.setItem("anmikaPendingSignupEmail", email);
-    setAuthNotice("確認メールを再送しました。メール内のリンクを押して認証を完了してください。", "ok");
-    log("確認メールを再送しました。", { email: maskEmailForLog(email), redirectTo });
-    render();
   };
   // DEBUG ACCOUNT START: 本番前に削除しやすいよう、このブロックと debugSignInButton だけで完結させる。
   const createDebugAccount = async () => {
@@ -1559,8 +1537,6 @@
     const authUser = session.user || await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");
     saveSession(session, profile);
-    localStorage.removeItem("anmikaPendingSignupEmail");
-    state.pendingSignupEmail = "";
     setAuthNotice("", "info");
     log("ログインしました", state.user);
     await loadClubs();
@@ -3137,7 +3113,7 @@
     }).catch((error) => log("プロフィール側メール更新に失敗しました。Auth側の変更は送信済みです。", rawErrorText(error)));
     const profile = await getProfile(user.id).catch(() => state.profile);
     saveSession({ access_token: state.accessToken, refresh_token: state.refreshToken }, profile);
-    log("メールアドレス変更を送信しました。確認メールが必要な設定の場合は、メール内のリンクを開いてください。");
+    log("メールアドレス変更を送信しました。");
     render();
     return profile;
   };
@@ -5130,10 +5106,6 @@
     $("currentUser").textContent = state.user ? `${state.user.displayName} / ${state.user.loginId || state.user.id}` : "未ログイン";
     if (has("loginIdDisplay")) $("loginIdDisplay").textContent = state.user ? state.user.loginId || state.user.id : "未設定";
     if (state.user && has("userId")) $("userId").value = state.user.loginId || state.user.id;
-    if (!state.authNotice && state.pendingSignupEmail && !state.user) {
-      state.authNotice = "確認メールを送信しました。メール内のリンクを押して認証を完了してください。";
-      state.authNoticeType = "ok";
-    }
     if (has("authNotice")) {
       $("authNotice").textContent = state.authNotice || "";
       $("authNotice").className = `auth-notice ${state.authNoticeType || "info"}`;
@@ -5474,7 +5446,6 @@
     $("configStatus").className = config.url && config.anonKey ? "ok" : "warn";
     bind("signUpButton", signUp);
     bind("signInButton", signInWithEmail);
-    bind("resendConfirmationButton", resendSignupConfirmation);
     bind("debugSignInButton", createDebugAccount);
     bind("signOutButton", async () => {
       if (confirm("本当にログアウトしますか？")) await signOut();

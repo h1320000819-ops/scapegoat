@@ -1,4 +1,4 @@
-const CACHE_NAME = "anmika-pwa-20260624-action-buttons-pos-a";
+const CACHE_NAME = "anmika-pwa-20260624-disable-email-confirm-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v1";
 const APP_SHELL = [
   "/",
@@ -7,7 +7,7 @@ const APP_SHELL = [
   "/replay.html",
   "/styles.css?v=20260624-action-buttons-pos-a",
   "/runtime/app.js?v=20260624-replay-effects-a",
-  "/runtime/online-debug.js?v=20260624-rake-check-fix-a",
+  "/runtime/online-debug.js?v=20260624-disable-email-confirm-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",

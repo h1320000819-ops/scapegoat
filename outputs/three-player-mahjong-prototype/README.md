@@ -155,9 +155,9 @@ CPU手牌などの裏向き牌は `tile_back.png` を参照し、指定フォル
 
 5筒、5索は `黒黒金青` の構成です。
 白4枚はすべて白ぽっちで、赤・黄・緑・青の4種類です。
-## Supabase Auth メール本人確認
+## Supabase Auth メール登録
 
-メールアドレスでアカウント登録する場合は、Supabase Dashboard の Authentication > Providers > Email で Confirm Email を有効にしてください。
+現在はメール本人確認を使わない運用です。Supabase Dashboard の Authentication > Providers > Email で Confirm Email をOFFにしてください。
 
 本番環境では Authentication > URL Configuration に以下を登録します。
 
@@ -174,4 +174,4 @@ https://scapegoat-iiiq.onrender.com
 https://scapegoat-iiiq.onrender.com/**
 ```
 
-登録画面では Supabase Auth の signup に `emailRedirectTo` として `/auth/callback` を渡します。登録直後はログイン済みにせず、確認メール内のリンクを開いて Supabase セッションが確認できた場合だけログイン完了としてクラブ選択画面へ進みます。
+登録画面では Supabase Auth の signup 後、セッションが返った場合にそのままプロフィールを作成してログイン済みにします。確認メール再送や `/auth/callback` によるメール本人確認は使いません。
