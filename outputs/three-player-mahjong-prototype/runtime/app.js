@@ -1938,7 +1938,7 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", baiba: "baiba.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
 const soundFileNamesForType = (type) => {
   const files = GAME_SOUND_FILES[type];
@@ -1985,6 +1985,7 @@ const replayAnnouncementForEvent = (event) => {
 };
 const announcementClassForKind = (kind) => (
   kind === "double-ron" ? "double-ron-announcement" :
+  kind === "baiba-start" ? "baiba-announcement" :
   kind === "fever-riichi" ? "fever-announcement" :
   kind === "riichi" ? "riichi-announcement" :
   kind === "call-pon" ? "pon-announcement" :
@@ -2049,6 +2050,7 @@ const getTileImagePath = (tile, faceDown = false) => {
   if (tile.suit === "pinzu" && tile.color === "turquoise") return tileAssetPath(`pin${tile.rank}_turquoise.jpg`);
   if (tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}${colorSuffix(tile)}.png`);
   if (tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}${colorSuffix(tile)}.png`);
+  if (tile.suit === "flower" && tile.color === "blue") return tileAssetPath("flower_rocket.png");
   if (tile.suit === "flower") return tileAssetPath(`flower${colorSuffix(tile)}.png`);
   if (tile.kind === "white" && tile.pochiColor) return tileAssetPath(`haku_${tile.pochiColor}.png`);
   return tileAssetPath(`${{ east: "east", south: "south", west: "west", north: "north", white: "haku", green: "hatsu", red: "chun" }[tile.kind]}.png`);
@@ -2082,6 +2084,7 @@ const buildAllTileAssetNames = () => {
   for (const color of ["red", "blue", "gold"]) paths.push(`pin5_${color}.png`, `sou5_${color}.png`);
   paths.push("pin5_turquoise.jpg");
   for (const color of ["red", "blue"]) paths.push(`flower_${color}.png`);
+  paths.push("flower_rocket.png");
   for (const color of ["red", "yellow", "green", "blue"]) paths.push(`haku_${color}.png`);
   return paths;
 };
@@ -3424,6 +3427,7 @@ class GameController {
     this.replayEffectQueueTimer = null;
     this.lastDisplayedResultKey = "";
     this.lastDisplayedAnnouncementKey = "";
+    this.lastDisplayedBaibaHandId = "";
     this.announcementClearTimer = null;
     this.setupGlobalResultOkHandler();
     document.addEventListener("anmika-result-ok", (event) => {
@@ -3448,6 +3452,26 @@ class GameController {
         this.emit();
       }
     }, durationMs);
+    if (emit) this.emit();
+    return true;
+  }
+  showBaibaStartAnnouncement(targetState = this.state, { emit = false } = {}) {
+    if (!targetState || targetState.handLog?.result) return false;
+    const handId = targetState.handLog?.handId || `${targetState.round?.handNumber || ""}:${targetState.round?.honba || ""}:${targetState.turnIndex || 0}`;
+    const announcementKey = `baiba:${handId}`;
+    if (!handId || announcementKey === this.lastDisplayedBaibaHandId) return false;
+    const details = getVisibleBaibaMultiplierDetails(targetState);
+    if (!details.labels.includes("倍場")) return false;
+    this.lastDisplayedBaibaHandId = announcementKey;
+    targetState.serverAnnouncement = { text: "倍場", kind: "baiba-start", playerId: "" };
+    playGameSound("baiba", { key: announcementKey });
+    if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
+    this.announcementClearTimer = setTimeout(() => {
+      if (this.state.serverAnnouncement?.kind === "baiba-start") {
+        this.state.serverAnnouncement = null;
+        this.emit();
+      }
+    }, 1500);
     if (emit) this.emit();
     return true;
   }
@@ -4257,6 +4281,9 @@ class GameController {
       this.lastDisplayedResultKey = "";
       next.resultCountdownResultId = "";
       next.resultAutoCloseHandledResultId = "";
+    }
+    if (!next.handLog?.result && next.phase !== "showingWinAnnouncement" && Number(next.turnIndex || 0) <= 1) {
+      this.showBaibaStartAnnouncement(next);
     }
     if (next.activeClockPlayerId && next.activeClockPlayerId === currentUserId) {
       next.playerClocks ??= this.state.playerClocks ?? createPlayerClocks(next.players, next.settings?.initialClockMs ?? INITIAL_TIME_MS);
@@ -5200,6 +5227,7 @@ class GameController {
     this.state.replayInitialState = cloneSnapshot(this.state);
     this.state.replaySnapshots = [this.state.replayInitialState];
     this.state.lastSavedReplayId = null;
+    this.showBaibaStartAnnouncement(this.state);
     this.advanceUntilHumanAction();
     this.emit();
   }
@@ -7300,7 +7328,7 @@ class GameView {
         (state.onlineLoadingMessageStartedAt && Date.now() - state.onlineLoadingMessageStartedAt >= ONLINE_LOADING_DISPLAY_DELAY_MS)
       )
     );
-    return `<section class="mahjong-table" style="${UI_ASSETS.tableBackground ? `background-image:url('${UI_ASSETS.tableBackground}')` : ""}">
+    return `<section class="mahjong-table">
       <div class="table-frame"></div>
       ${this.centerInfoClean(state, dealer)}
       ${this.discardAreaClean(seats.bottom, "bottom")}
