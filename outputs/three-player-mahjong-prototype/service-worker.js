@@ -1,5 +1,5 @@
 const CACHE_NAME = "anmika-pwa-20260624-right-river-closer-a";
-const TILE_CACHE_NAME = "anmika-tile-assets-v3";
+const TILE_CACHE_NAME = "anmika-tile-assets-v4";
 const APP_SHELL = [
   "/",
   "/index.html",
