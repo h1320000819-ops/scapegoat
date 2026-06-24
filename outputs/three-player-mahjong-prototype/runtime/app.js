@@ -7289,7 +7289,8 @@ class GameView {
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
-    const exposedArea = this.exposedAreaClean(player, true);
+    const reserveExposedSpace = seat === "top" || seat === "right";
+    const exposedArea = this.exposedAreaClean(player, true, reserveExposedSpace);
     const exposedBeforeHand = seat === "top" || seat === "right" ? exposedArea : "";
     const exposedAfterHand = seat === "bottom" ? exposedArea : "";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
@@ -7317,13 +7318,13 @@ class GameView {
       <div class="discard-grid">${discardRows.map((row) => `<div class="discard-row">${row.map(renderDiscard).join("")}</div>`).join("")}</div>
     </section>`;
   }
-  exposedAreaClean(player, inline = false) {
+  exposedAreaClean(player, inline = false, reserveSpace = false) {
     player = player.player ?? player;
     const state = this.currentStateForClock;
     const melds = [...player.melds].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
     const nuki = player.nukiDoraTiles.map((tile) => renderTileView({ tile })).join("");
-    if (!melds && !nuki) return "";
-    return `<div class="exposed-row ${inline ? "inline-exposed-row" : ""}">
+    if (!melds && !nuki && !reserveSpace) return "";
+    return `<div class="exposed-row ${inline ? "inline-exposed-row" : ""} ${reserveSpace ? "reserved-exposed-row" : ""} ${!melds && !nuki ? "empty-exposed-row" : ""}">
       <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
       <div class="meld-area"><div class="exposed-tiles">${melds}</div></div>
     </div>`;

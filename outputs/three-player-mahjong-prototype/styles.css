@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color: #f6f8f7;
   background: #071018;
   font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
@@ -120,7 +120,7 @@ button:hover {
   left: 50%;
   pointer-events: none;
   position: absolute;
-  top: 50%;
+  top: 28%;
   transform: translate(-50%, -50%);
   width: min(calc((100dvh - 88px) * var(--table-surface-aspect)), calc(100vw - 168px));
 }
@@ -315,7 +315,7 @@ button:hover {
 
 .seat-right {
   right: clamp(56px, calc((100vw - (100dvh * var(--table-surface-aspect))) / 2 + 72px), 340px);
-  top: 50%;
+  top: 28%;
   transform: translateY(-50%);
   width: 168px;
 }
@@ -539,10 +539,17 @@ button:hover {
 
 .seat-top .hand-row > .inline-exposed-row {
   margin-right: auto;
+  min-width: calc(var(--discard-tile-width) * 2 + 42px);
 }
 
 .seat-right .hand-row > .inline-exposed-row {
   margin-bottom: auto;
+  min-height: calc(var(--discard-tile-height) * 2 + 42px);
+}
+
+.hand-row > .inline-exposed-row.empty-exposed-row {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .seat-top .hand-row {
@@ -562,12 +569,12 @@ button:hover {
   width: 58px;
 }
 
-.seat-right .hand-row > .tile,
-.seat-right .hand-row > .tile-button,
+.seat-right .concealed-hand-tiles > .tile,
+.seat-right .concealed-hand-tiles > .tile-button,
 .seat-right .drawn-tile > .tile,
 .seat-right .drawn-tile > .tile-button {
   margin-block: -6px;
-  transform: rotate(90deg);
+  transform: rotate(-90deg);
   transform-origin: center;
 }
 
@@ -1403,7 +1410,7 @@ button:hover {
   opacity: 0.94;
   padding: 8px;
   position: fixed;
-  top: 50%;
+  top: 28%;
   transform: translateY(-50%);
   z-index: 26;
 }
@@ -2889,7 +2896,7 @@ button:hover {
     gap: 5px;
     left: max(4px, env(safe-area-inset-left));
     padding: 5px;
-    top: 46%;
+    top: 24%;
   }
 
   .assist-controls label {
