@@ -1408,12 +1408,12 @@ button:hover {
   display: grid;
   font-size: 14px;
   gap: 6px;
-  left: clamp(10px, 2vw, 24px);
+  left: calc(50% - (var(--center-info-width) / 2) - 122px);
   margin: 0;
   opacity: 0.94;
   padding: 8px;
   position: fixed;
-  top: 18%;
+  top: calc(50% + var(--center-y-offset));
   transform: translateY(-50%);
   z-index: 26;
 }
@@ -2529,6 +2529,7 @@ button:hover {
   }
 
   .seat-top {
+    left: 43%;
     max-width: 620px;
     top: 12px;
     width: min(78vw, 620px);
@@ -2536,6 +2537,7 @@ button:hover {
 
   .seat-right {
     right: 116px;
+    top: 42%;
     width: 126px;
   }
 
@@ -2606,6 +2608,7 @@ button:hover {
     min-height: 29px;
     overflow: visible;
     padding: 1px;
+    transform: translateX(-58px);
   }
 
   .drawn-tile {
@@ -2960,9 +2963,9 @@ button:hover {
   .assist-controls {
     font-size: 12px;
     gap: 5px;
-    left: max(4px, env(safe-area-inset-left));
+    left: calc(50% - (var(--center-info-width) / 2) - 84px);
     padding: 5px;
-    top: 14%;
+    top: 42%;
   }
 
   .assist-controls label {
@@ -3574,14 +3577,25 @@ button:hover {
 }
 
 .seat-bottom .hand-row > .meld-area,
+.seat-bottom .hand-row > .nuki-dora-area {
+  justify-content: flex-end;
+}
+
+.seat-bottom .hand-row > .meld-area .exposed-tiles {
+  justify-content: flex-end !important;
+}
+
+.seat-bottom .hand-row > .meld-area,
 .seat-bottom .hand-row > .nuki-dora-area,
 .seat-bottom .hand-row > .drawn-tile-slot {
   align-self: end;
 }
 
-.seat-bottom .hand-row.has-melds > .drawn-tile-slot {
-  transform: translateX(-10px);
-}
+.seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(0); }
+.seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(-114px); }
+.seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(-228px); }
+.seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(-342px); }
+.seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(-456px); }
 
 .seat-top .hand-row {
   grid-template-areas: "nuki meld draw hand";
@@ -3610,8 +3624,13 @@ button:hover {
 }
 
 .seat-top .hand-row.has-melds > .drawn-tile-slot {
-  transform: translateX(10px);
+  transform: translateX(0);
 }
+
+.seat-top .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(84px); }
+.seat-top .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(168px); }
+.seat-top .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(252px); }
+.seat-top .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(336px); }
 
 .seat-right .hand-row {
   grid-template-areas:
@@ -3635,8 +3654,13 @@ button:hover {
 }
 
 .seat-right .hand-row.has-melds > .drawn-tile-slot {
-  transform: translateY(10px);
+  transform: translateY(0);
 }
+
+.seat-right .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateY(84px); }
+.seat-right .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateY(168px); }
+.seat-right .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateY(252px); }
+.seat-right .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateY(336px); }
 
 .seat-right .concealed-hand-tiles {
   align-items: flex-end !important;
@@ -3698,7 +3722,34 @@ button:hover {
     width: var(--exposed-slot-width) !important;
   }
 
+  .seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(-126px); }
+  .seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(-252px); }
+  .seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(-378px); }
+  .seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(-504px); }
+
+  .seat-top .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(60px); }
+  .seat-top .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(120px); }
+  .seat-top .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(180px); }
+  .seat-top .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(240px); }
+
+  .seat-right .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateY(60px); }
+  .seat-right .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateY(120px); }
+  .seat-right .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateY(180px); }
+  .seat-right .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateY(240px); }
+
   .seat-right .concealed-hand-tiles {
     min-height: 220px;
+  }
+
+  .seat-top {
+    left: 41% !important;
+  }
+
+  .seat-top .hand-row {
+    transform: translate(-78px, -8px) !important;
+  }
+
+  .seat-right {
+    top: 36% !important;
   }
 }

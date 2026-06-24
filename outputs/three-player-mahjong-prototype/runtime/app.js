@@ -4158,10 +4158,18 @@ class GameController {
         turnIndex: next.turnIndex,
       })
       : "";
-    const latestEvent = next.handLog?.events?.at?.(-1);
-    if (latestEvent?.type === "discard") {
-      playGameSound("discard", { key: `discard:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.tileId || latestEvent.tile?.id || ""}` });
+    for (const nextPlayer of next.players ?? []) {
+      const previousPlayer = this.state.players?.find?.((player) => player.id === nextPlayer.id);
+      const previousDiscards = previousPlayer?.discardedTiles ?? [];
+      const nextDiscards = nextPlayer.discardedTiles ?? [];
+      if (nextDiscards.length > previousDiscards.length) {
+        for (let index = previousDiscards.length; index < nextDiscards.length; index++) {
+          const discard = nextDiscards[index];
+          playGameSound("discard", { key: `discard:${nextPlayer.id}:${index}:${discard?.turnIndex ?? ""}:${discard?.tile?.id || ""}` });
+        }
+      }
     }
+    const latestEvent = next.handLog?.events?.at?.(-1);
     if (latestEvent?.type === "riichi") {
       const announcementKey = `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}`;
       if (announcementKey !== this.lastDisplayedAnnouncementKey) {
@@ -7340,6 +7348,8 @@ class GameView {
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
     const hasMelds = (player.melds ?? []).length > 0;
+    const handCount = Math.max(0, Math.min(13, handTiles.length));
+    const handCountBucket = handCount <= 1 ? 1 : handCount <= 4 ? 4 : handCount <= 7 ? 7 : handCount <= 10 ? 10 : 13;
     const handRegion = `<span class="concealed-hand-tiles hand-region-slot">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}</span>`;
     const drawnRegion = `<span class="drawn-tile-slot ${drawnTile ? "" : "empty-tile-slot"}">${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>`;
     const meldRegion = this.meldAreaClean(player, true);
@@ -7349,7 +7359,7 @@ class GameView {
       : [nukiRegion, meldRegion, drawnRegion, handRegion];
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""}">${layoutParts.join("")}</div></div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""} hand-count-${handCountBucket}" style="--hand-count:${handCount};">${layoutParts.join("")}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }

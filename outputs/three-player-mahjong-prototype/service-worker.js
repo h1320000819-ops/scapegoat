@@ -1,12 +1,12 @@
-const CACHE_NAME = "anmika-pwa-20260624-minkan-column-a";
+const CACHE_NAME = "anmika-pwa-20260624-discard-all-mobile-seats-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v3";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-minkan-column-a",
-  "/runtime/app.js?v=20260624-minkan-column-a",
+  "/styles.css?v=20260624-discard-all-mobile-seats-a",
+  "/runtime/app.js?v=20260624-discard-all-mobile-seats-a",
   "/runtime/online-debug.js?v=20260624-reseat-reset-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
