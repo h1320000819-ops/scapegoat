@@ -1907,10 +1907,14 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: "discard.m4a" };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: ["discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
+const soundFileNamesForType = (type) => {
+  const files = GAME_SOUND_FILES[type];
+  return Array.isArray(files) ? files : files ? [files] : [];
+};
 const getGameSoundAudio = (type) => {
-  const fileName = GAME_SOUND_FILES[type];
+  const fileName = soundFileNamesForType(type)[0];
   if (!fileName || typeof Audio === "undefined") return null;
   if (!gameSoundCache.has(type)) {
     const audio = new Audio(soundAssetPath(fileName));
@@ -1933,37 +1937,45 @@ const soundTypeForEvent = (event) => {
 };
 const replayAnnouncementForEvent = (event) => {
   if (!event?.type) return null;
-  if (event.type === "pon") return { text: "ポン", kind: "call-pon" };
-  if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return { text: "カン", kind: "call-kan" };
-  if (event.type === "ron") return { text: "ロン", kind: "ron" };
-  if (event.type === "tsumo") return { text: "ツモ", kind: "tsumo" };
+  const playerId = event.playerId || event.winnerId || event.actorPlayerId || "";
+  if (event.type === "pon") return { text: "ポン", kind: "call-pon", playerId };
+  if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return { text: "カン", kind: "call-kan", playerId };
+  if (event.type === "ron") return { text: "ロン", kind: "ron", playerId };
+  if (event.type === "tsumo") return { text: "ツモ", kind: "tsumo", playerId };
   if (event.type === "win") {
-    if (event.winType === "tsumo") return { text: "ツモ", kind: "tsumo" };
-    if (event.winType === "ron") return { text: "ロン", kind: "ron" };
+    if (event.winType === "tsumo") return { text: "ツモ", kind: "tsumo", playerId };
+    if (event.winType === "ron") return { text: "ロン", kind: "ron", playerId };
   }
   if (event.type === "riichi" || event.type === "fever_riichi") {
     const isFever = event.feverRiichiActive || event.type === "fever_riichi";
-    return { text: isFever ? "フィーバーリーチ" : "リーチ", kind: isFever ? "fever-riichi" : "riichi" };
+    return { text: isFever ? "フィーバーリーチ" : "リーチ", kind: isFever ? "fever-riichi" : "riichi", playerId };
   }
   return null;
 };
+const playAudioFile = (fileName, volume = 0.92) => {
+  const audio = new Audio(soundAssetPath(fileName));
+  audio.preload = "auto";
+  audio.volume = volume;
+  audio.currentTime = 0;
+  return audio.play();
+};
 const playGameSound = (type, { key = "" } = {}) => {
-  const fileName = GAME_SOUND_FILES[type];
-  if (!fileName || typeof Audio === "undefined") return;
+  const fileNames = soundFileNamesForType(type);
+  if (!fileNames.length || typeof Audio === "undefined") return;
   const nowMs = Date.now();
   const cacheKey = key || `${type}:${nowMs}`;
   globalThis.__anmikaSoundHistory ??= {};
-  if (type !== "discard") {
-    if (key && globalThis.__anmikaSoundHistory[cacheKey]) return;
-    if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
-    globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
-  }
+  if (key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < (type === "discard" ? 180 : 1200)) return;
+  if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
+  globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
   try {
     const baseAudio = getGameSoundAudio(type);
-    const audio = baseAudio?.cloneNode ? baseAudio.cloneNode(true) : new Audio(soundAssetPath(fileName));
+    const audio = baseAudio?.cloneNode ? baseAudio.cloneNode(true) : new Audio(soundAssetPath(fileNames[0]));
     audio.volume = 0.92;
     audio.currentTime = 0;
-    audio.play()?.catch?.(() => {});
+    audio.play()?.catch?.(() => {
+      if (fileNames[1]) playAudioFile(fileNames[1]).catch?.(() => {});
+    });
   } catch {}
 };
 const rocketAssetExtension = (rank) => (rank === 1 || rank === 5 || rank === 9) ? "png" : "jpg";
@@ -3382,7 +3394,7 @@ class GameController {
     const announcementKey = `${event.type}:${event.playerId || ""}:${event.turnIndex ?? ""}:${event.kanType || ""}:${event.tile?.id || event.tiles?.map?.((tile) => tile?.id).join(",") || ""}`;
     if (announcementKey === this.lastDisplayedAnnouncementKey) return false;
     this.lastDisplayedAnnouncementKey = announcementKey;
-    targetState.serverAnnouncement = { text: label, kind: event.type === "pao" ? "pao" : `call-${event.type}` };
+    targetState.serverAnnouncement = { text: label, kind: event.type === "pao" ? "pao" : `call-${event.type}`, playerId: event.playerId || event.actorPlayerId || "" };
     playGameSound(soundTypeForEvent(event), { key: `call:${announcementKey}` });
     if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
     this.announcementClearTimer = setTimeout(() => {
@@ -4155,6 +4167,7 @@ class GameController {
         next.serverAnnouncement = {
           text: latestEvent.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
           kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
+          playerId: latestEvent.playerId || "",
         };
         playGameSound(latestEvent.feverRiichiActive ? "feverRiichi" : "riichi", { key: `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}` });
         if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
@@ -5557,6 +5570,7 @@ class GameController {
       const requestId = `discard-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const uiBefore = performance.now?.() ?? Date.now();
       console.log("[DiscardClick] optimistic update");
+      playGameSound("discard", { key: `click-discard:${requestId}` });
       this.applyOptimisticDiscard(tileId, requestId, { isRiichiDiscard: isRiichiDiscardPhase });
       console.log("[DiscardPerf] クリック → UI反映", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
       console.log("[DiscardAction] sent", { onlineActionType, tileId, requestId, version: loadOnlineSync()?.version });
@@ -5635,6 +5649,7 @@ class GameController {
       this.state.serverAnnouncement = {
         text: player.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
         kind: player.feverRiichiActive ? "fever-riichi" : "riichi",
+        playerId: player.id,
       };
       if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
       const riichiAnnouncementKind = this.state.serverAnnouncement.kind;
@@ -5758,6 +5773,7 @@ class GameController {
     this.state.phase = "showingWinAnnouncement";
     const announcement = input.winType === "tsumo" ? "ツモ" : "ロン";
     this.state.winAnnouncement = announcement;
+    this.state.serverAnnouncement = { text: announcement, kind: input.winType, playerId: winner.id };
     this.state.isWaitingForHumanAction = false;
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
@@ -6377,39 +6393,35 @@ const calledTileIndexForMeld = (state, ownerId, fromPlayerId, tileCount) => {
   return tileCount === 4 ? 1 : Math.floor(tileCount / 2);
 };
 const meldRotationClass = (rotation) => rotation ? `meld-rotate-${rotation}` : "";
-const topSeatMeldSpec = (fromSeat, tileCount) => {
-  if (fromSeat === "right") {
-    return {
-      calledIndex: tileCount - 1,
-      rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "cw90" : "180"),
-    };
-  }
-  if (fromSeat === "bottom") {
-    const calledIndex = tileCount === 4 ? 2 : 1;
-    return {
-      calledIndex,
-      rotations: Array.from({ length: tileCount }, (_, index) => index === calledIndex ? "cw90" : "180"),
-    };
-  }
-  return null;
+const MELD_ROTATION_DEGREES = { "": 0, "0": 0, ccw90: 270, "180": 180, cw90: 90 };
+const meldRotationTokenFromDegrees = (degrees) => {
+  const normalized = ((Number(degrees || 0) % 360) + 360) % 360;
+  if (normalized === 90) return "cw90";
+  if (normalized === 180) return "180";
+  if (normalized === 270) return "ccw90";
+  return "0";
+};
+const composeMeldRotation = (...rotations) => meldRotationTokenFromDegrees(
+  rotations.reduce((sum, rotation) => sum + (MELD_ROTATION_DEGREES[rotation] ?? 0), 0)
+);
+const ownerMeldRotation = (ownerSeat) => {
+  if (ownerSeat === "right") return "ccw90";
+  if (ownerSeat === "top") return "180";
+  return "0";
 };
 const meldDisplaySpec = (state, ownerId, meld, tileCount) => {
   const ownerSeat = seatPositionForPlayer(state, ownerId);
-  const fromSeat = seatPositionForPlayer(state, meld?.fromPlayerId);
-  if (!fromSeat || meld?.type === "ankan") {
-    const calledIndex = meld?.type === "ankan" ? -1 : calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount);
-    return { calledIndex, rotations: [] };
-  }
-  if (ownerSeat === "right" && fromSeat === "top") {
-    return { calledIndex: 0, rotations: Array.from({ length: tileCount }, (_, index) => index === 0 ? "0" : "ccw90") };
-  }
-  if (ownerSeat === "right" && fromSeat === "bottom") {
-    return { calledIndex: tileCount - 1, rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "180" : "ccw90") };
-  }
-  if (ownerSeat === "top") return topSeatMeldSpec(fromSeat, tileCount) || { calledIndex: calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount), rotations: [] };
-  return { calledIndex: calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount), rotations: [] };
+  const seatRotation = ownerMeldRotation(ownerSeat);
+  const calledIndex = meld?.type === "ankan" ? -1 : calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount);
+  return {
+    calledIndex,
+    setRotation: seatRotation,
+    rotations: Array.from({ length: tileCount }, (_, index) =>
+      index === calledIndex ? "cw90" : "0"
+    ),
+  };
 };
-const renderMeldSet = (state, ownerId, meld) => {
+const renderMeldSet = (state, ownerId, meld, extraClass = "") => {
   const calledTile = meld.calledTile ?? (meld.fromPlayerId ? meld.tiles.at(-1) : null);
   const tileCount = meld.type === "minkan" ? 4 : 3;
   const displaySpec = meldDisplaySpec(state, ownerId, meld, tileCount);
@@ -6427,8 +6439,10 @@ const renderMeldSet = (state, ownerId, meld) => {
     return `<span class="meld-tile ${sideways ? "sideways called-tile" : ""} ${rotationClass}">${renderTileView({ tile })}</span>`;
   }).join("");
   const added = meld.type === "kakan" ? (meld.addedTile ?? meld.tiles.at(-1)) : null;
-  return `<span class="meld-set meld-${meld.type}" style="--called-index:${Math.max(0, sidewaysIndex)}">
-    ${added ? `<span class="kakan-added">${renderTileView({ tile: added })}</span>` : ""}
+  const addedRotationClass = meldRotationClass(sidewaysIndex >= 0 ? displaySpec.rotations[sidewaysIndex] : "");
+  const setRotationClass = `meld-set-rotate-${displaySpec.setRotation || "0"}`;
+  return `<span class="meld-set meld-${meld.type} ${setRotationClass} ${extraClass}" style="--called-index:${Math.max(0, sidewaysIndex)}">
+    ${added ? `<span class="kakan-added ${addedRotationClass}">${renderTileView({ tile: added })}</span>` : ""}
     <span class="meld-tiles">${tiles}</span>
   </span>`;
 };
@@ -7174,17 +7188,26 @@ class GameView {
   winAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
+    const playerId = announcement.playerId || state.handLog?.result?.winnerId || state.handLog?.result?.winners?.[0]?.winnerId || "";
+    const seatClass = this.announcementSeatClass(state, playerId);
     if (lines.length > 1) {
-      return `<div class="win-announcement double-ron-announcement"><div>${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div></div>`;
+      return `<div class="win-announcement double-ron-announcement ${seatClass}"><div>${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div></div>`;
     }
-    return `<div class="win-announcement"><div>${escapeHtml(state.winAnnouncement ?? "")}</div></div>`;
+    return `<div class="win-announcement ${seatClass}"><div>${escapeHtml(state.winAnnouncement ?? "")}</div></div>`;
   }
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
     const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : announcement.kind === "pao" ? "pao-announcement" : announcement.kind === "ron" ? "ron-announcement" : announcement.kind === "tsumo" ? "tsumo-announcement" : "";
+    const seatClass = this.announcementSeatClass(state, announcement.playerId || announcement.winnerId || "");
     const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
-    return `<div class="win-announcement ${className}"><div>${content}</div></div>`;
+    return `<div class="win-announcement ${className} ${seatClass}"><div>${content}</div></div>`;
+  }
+  announcementSeatClass(state, playerId) {
+    const seat = seatPositionForPlayer(state, playerId);
+    if (seat === "right") return "announcement-seat-right";
+    if (seat === "top") return "announcement-seat-top";
+    return "";
   }
   flowerAnnouncement(state) {
     return `<div class="win-announcement flower-announcement"><div>${state.flowerAnnouncement ?? "華"}</div></div>`;
@@ -7289,7 +7312,8 @@ class GameView {
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
-    const handRegion = `<span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}</span>`;
+    const hasMelds = (player.melds ?? []).length > 0;
+    const handRegion = `<span class="concealed-hand-tiles hand-region-slot">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}</span>`;
     const drawnRegion = `<span class="drawn-tile-slot ${drawnTile ? "" : "empty-tile-slot"}">${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>`;
     const meldRegion = this.meldAreaClean(player, true);
     const nukiRegion = this.nukiAreaClean(player, true);
@@ -7298,7 +7322,7 @@ class GameView {
       : [nukiRegion, meldRegion, drawnRegion, handRegion];
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${layoutParts.join("")}</div></div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""}">${layoutParts.join("")}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }
@@ -7333,7 +7357,15 @@ class GameView {
   meldAreaClean(player, reserveSpace = false) {
     player = player.player ?? player;
     const state = this.currentStateForClock;
-    const melds = [...(player.melds ?? [])].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
+    const melds = [...(player.melds ?? [])]
+      .map((meld, meldIndex) => ({ meld, meldIndex }))
+      .reverse()
+      .map(({ meld, meldIndex }, displayIndex) => {
+        const orderClass = displayIndex === 0 ? "newest-meld" : meldIndex === 0 ? "oldest-meld" : "";
+        return state
+          ? renderMeldSet(state, player.id, meld, orderClass)
+          : `<span class="meld-set ${orderClass}">${meld.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`;
+      }).join("");
     if (!melds && !reserveSpace) return "";
     return `<div class="meld-area hand-region ${!melds ? "empty-hand-region" : ""}"><div class="exposed-tiles">${melds}</div></div>`;
   }

@@ -5336,14 +5336,13 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     }
   }
   if (room && resetRoom && room.state && !isFinalEndedRoomState(room.state)) {
-    console.warn("[AnmikaGameServer] ignore resetRoom for active room", {
+    console.warn("[AnmikaGameServer] reset active room by explicit resetRoom request", {
       tableId: key,
       gameId: room.gameId,
       requestedGameId: gameId || "",
       phase: room.state.phase,
       version: room.version,
     });
-    resetRoom = false;
   }
   if (room && resetRoom) {
     console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
@@ -5355,22 +5354,6 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     room = null;
     gameRooms.delete(key);
     deletePersistedRoom(key, "reset existing memory room");
-  }
-  if (!room && resetRoom) {
-    const persisted = loadPersistedRoom(key, "");
-    if (persisted?.state && !isFinalEndedRoomState(persisted.state)) {
-      console.warn("[AnmikaGameServer] protect active persisted room from reset request", {
-        tableId: key,
-        persistedGameId: persisted.gameId,
-        requestedGameId: gameId || "",
-        phase: persisted.state.phase,
-        version: persisted.version,
-      });
-      room = persisted;
-      room.skipDbHydration = false;
-      gameRooms.set(key, room);
-      resetRoom = false;
-    }
   }
   if (!room && resetRoom) {
     deletePersistedRoom(key, "reset without memory room");

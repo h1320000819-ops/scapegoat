@@ -2339,7 +2339,16 @@
     if (table.status === "playing") {
       table.is_debug = isDebugTable;
       table.table_seats = seats;
-      await openPlayingTableIfNeeded(table, seats, { navigate: true, forceOpen: forceNewGame });
+      if (forceNewGame) {
+        await deactivateTableActiveGameState(tableId, "再着席後の新規対局開始前").catch(() => {});
+        const onlineGameState = { game_id: newSocketGameId(tableId, { fresh: true }), version: 0, resetRoom: true };
+        clearAutoStartFailedTable(tableId);
+        clearLocalUserLastHandFlagForTable(tableId);
+        clearOwnLastHandFlag(tableId).catch((error) => log("再着席後のラス半解除をスキップしました。", rawErrorText(error)));
+        await openPlayingTableIfNeeded(table, seats, { navigate: true, onlineGameState, forceOpen: true });
+        return onlineGameState;
+      }
+      await openPlayingTableIfNeeded(table, seats, { navigate: true, forceOpen: false });
       return state.activeGameState;
     }
 
@@ -2826,9 +2835,39 @@
   const leave = async (tableId = selectedTableId()) => {
     tableId = requireTableId(tableId, "退席");
     setActiveTableId(tableId);
+    const userId = requireUser().id;
+    markRecentlyLeftTable(tableId);
+    clearLocalUserSeatsForTable(tableId, userId);
+    state.autoOpenedPlayingTableIds.delete(tableId);
+    state.autoStartingTableIds.delete(tableId);
+    clearAutoOpenedTable(tableId);
+    clearAutoStartFailedTable(tableId);
+    clearLaunchingTable();
+    state.onlineGameOpened = false;
+    state.activeGameState = null;
+    state.activeGameEvents = [];
+    sessionStorage.removeItem("anmikaOnlineDebugActiveTableId");
     try {
       await clearOwnLastHandFlag(tableId);
       await rest("/rpc/leave_table", { method: "POST", body: JSON.stringify({ p_table_id: tableId }) });
+      await rest(
+        "/table_seats?table_id=eq." + encodeURIComponent(tableId) + "&user_id=eq." + encodeURIComponent(userId),
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            user_id: null,
+            player_type: "empty",
+            display_name: null,
+            is_last_hand_declared: false,
+          }),
+        }
+      ).catch((error) => log("退席後の座席クリア確認に失敗しました。", rawErrorText(error)));
+      await deactivateTableActiveGameState(tableId, "退席後の古いGameState停止").catch(() => {});
+      await rest("/games?table_id=eq." + encodeURIComponent(tableId) + "&status=eq.playing", {
+        method: "PATCH",
+        body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
+      }).catch(() => {});
+      await markTableWaitingIfNoActiveGame(tableId).catch(() => false);
       await loadTables();
       await loadSeats().catch(() => {});
     } catch (error) {

@@ -1413,7 +1413,7 @@ button:hover {
   opacity: 0.94;
   padding: 8px;
   position: fixed;
-  top: 28%;
+  top: 18%;
   transform: translateY(-50%);
   z-index: 26;
 }
@@ -1576,6 +1576,27 @@ button:hover {
   white-space: nowrap;
 }
 
+.meld-set-rotate-0 {
+  transform: rotate(0deg) !important;
+}
+
+.meld-set-rotate-ccw90 {
+  margin: 15px 5px;
+  transform: rotate(-90deg) !important;
+  transform-origin: center;
+}
+
+.meld-set-rotate-180 {
+  transform: rotate(180deg) !important;
+  transform-origin: center;
+}
+
+.meld-set-rotate-cw90 {
+  margin: 15px 5px;
+  transform: rotate(90deg) !important;
+  transform-origin: center;
+}
+
 .meld-tiles {
   align-items: center;
   display: inline-flex;
@@ -1622,6 +1643,22 @@ button:hover {
   top: 0;
   transform: translateX(-50%) rotate(90deg);
   z-index: 2;
+}
+
+.kakan-added.meld-rotate-0 {
+  transform: translateX(-50%) rotate(0deg) !important;
+}
+
+.kakan-added.meld-rotate-ccw90 {
+  transform: translateX(-50%) rotate(-90deg) !important;
+}
+
+.kakan-added.meld-rotate-180 {
+  transform: translateX(-50%) rotate(180deg) !important;
+}
+
+.kakan-added.meld-rotate-cw90 {
+  transform: translateX(-50%) rotate(90deg) !important;
 }
 
 .exposed-tiles small {
@@ -1868,7 +1905,16 @@ button:hover {
   justify-content: center;
   pointer-events: none;
   position: absolute;
+  transform-origin: center;
   z-index: 31;
+}
+
+.win-announcement.announcement-seat-right {
+  transform: rotate(-90deg);
+}
+
+.win-announcement.announcement-seat-top {
+  transform: rotate(180deg);
 }
 
 .win-announcement > div {
@@ -2902,7 +2948,7 @@ button:hover {
     gap: 5px;
     left: max(4px, env(safe-area-inset-left));
     padding: 5px;
-    top: 24%;
+    top: 14%;
   }
 
   .assist-controls label {
@@ -3412,4 +3458,206 @@ button:hover {
   justify-content: flex-end;
   min-height: calc(var(--discard-tile-height) * 2 + 2px);
   min-width: calc(var(--discard-tile-width) * 2 + 2px);
+}
+
+.player-seat .hand-row {
+  --draw-slot-width: 44px;
+  --exposed-slot-width: 184px;
+  --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 4px);
+  --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 4px);
+  --other-hand-slot-width: 310px;
+  --self-hand-slot-width: min(58vw, 545px);
+  align-items: stretch !important;
+  display: grid !important;
+  overflow: visible !important;
+}
+
+.player-seat .hand-row > .hand-region-slot {
+  grid-area: hand;
+  min-width: 0;
+  overflow: visible;
+}
+
+.player-seat .hand-row > .drawn-tile-slot {
+  grid-area: draw;
+  margin: 0 !important;
+  min-height: 54px;
+  min-width: var(--draw-slot-width);
+}
+
+.player-seat .hand-row > .meld-area {
+  grid-area: meld;
+  justify-content: flex-start;
+  min-height: 54px;
+  min-width: var(--exposed-slot-width);
+  overflow: visible;
+}
+
+.player-seat .hand-row > .nuki-dora-area {
+  grid-area: nuki;
+  min-height: var(--nuki-slot-height);
+  min-width: var(--nuki-slot-width);
+  overflow: visible;
+}
+
+.player-seat .drawn-tile {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.player-seat .drawn-tile::before {
+  display: none !important;
+}
+
+.player-seat .hand-row > .meld-area .exposed-tiles,
+.player-seat .hand-row > .meld-area .meld-set,
+.player-seat .hand-row > .meld-area .meld-tiles {
+  align-items: center !important;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 1px;
+  justify-content: flex-start !important;
+  white-space: nowrap;
+}
+
+.player-seat .hand-row > .meld-area .exposed-tiles {
+  direction: ltr;
+}
+
+.player-seat .hand-row > .meld-area .meld-set {
+  order: 0;
+}
+
+.player-seat .hand-row > .meld-area .newest-meld {
+  order: -10;
+}
+
+.player-seat .hand-row > .meld-area .oldest-meld {
+  order: 10;
+}
+
+.player-seat .hand-row > .nuki-dora-area .exposed-tiles {
+  align-content: center !important;
+  align-items: center !important;
+  display: grid !important;
+  gap: 2px;
+  grid-template-columns: repeat(2, var(--discard-tile-width));
+  grid-template-rows: repeat(2, var(--discard-tile-height));
+  justify-content: center !important;
+}
+
+.seat-bottom .hand-row {
+  grid-template-areas: "hand draw meld nuki";
+  grid-template-columns: var(--self-hand-slot-width) var(--draw-slot-width) var(--exposed-slot-width) var(--nuki-slot-width);
+  justify-content: start !important;
+  width: 100%;
+}
+
+.seat-bottom .concealed-hand-tiles {
+  align-items: flex-end;
+  justify-content: flex-start !important;
+}
+
+.seat-bottom .hand-row > .meld-area,
+.seat-bottom .hand-row > .nuki-dora-area,
+.seat-bottom .hand-row > .drawn-tile-slot {
+  align-self: end;
+}
+
+.seat-bottom .hand-row.has-melds > .drawn-tile-slot {
+  transform: translateX(-10px);
+}
+
+.seat-top .hand-row {
+  grid-template-areas: "nuki meld draw hand";
+  grid-template-columns: var(--nuki-slot-width) var(--exposed-slot-width) var(--draw-slot-width) var(--other-hand-slot-width);
+  justify-content: end !important;
+  width: 100%;
+}
+
+.seat-top .concealed-hand-tiles {
+  align-items: flex-start;
+  justify-content: flex-end !important;
+}
+
+.seat-top .hand-row > .nuki-dora-area,
+.seat-top .hand-row > .meld-area,
+.seat-top .hand-row > .drawn-tile-slot {
+  align-self: start;
+}
+
+.seat-top .hand-row > .nuki-dora-area {
+  justify-content: flex-start;
+}
+
+.seat-top .hand-row > .meld-area {
+  justify-content: flex-start;
+}
+
+.seat-top .hand-row.has-melds > .drawn-tile-slot {
+  transform: translateX(10px);
+}
+
+.seat-right .hand-row {
+  grid-template-areas:
+    "nuki"
+    "meld"
+    "draw"
+    "hand";
+  grid-template-columns: var(--exposed-slot-width);
+  grid-template-rows: var(--nuki-slot-height) 58px var(--draw-slot-width) minmax(360px, 1fr);
+  justify-content: end !important;
+  justify-items: end;
+  min-height: 560px;
+  width: var(--exposed-slot-width) !important;
+}
+
+.seat-right .hand-row > .nuki-dora-area,
+.seat-right .hand-row > .meld-area,
+.seat-right .hand-row > .drawn-tile-slot {
+  justify-self: end;
+}
+
+.seat-right .hand-row.has-melds > .drawn-tile-slot {
+  transform: translateY(10px);
+}
+
+.seat-right .concealed-hand-tiles {
+  align-items: flex-end !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  justify-self: end;
+  min-height: 360px;
+}
+
+.seat-right .hand-row > .meld-area .exposed-tiles,
+.seat-right .hand-row > .meld-area .meld-set,
+.seat-right .hand-row > .meld-area .meld-tiles {
+  flex-direction: row !important;
+}
+
+.seat-right .hand-row > .nuki-dora-area {
+  justify-content: flex-end;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .player-seat .hand-row {
+    --draw-slot-width: 29px;
+    --exposed-slot-width: 112px;
+    --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 4px);
+    --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 4px);
+    --other-hand-slot-width: 150px;
+    --self-hand-slot-width: min(58vw, 500px);
+  }
+
+  .seat-right .hand-row {
+    grid-template-rows: var(--nuki-slot-height) 34px var(--draw-slot-width) minmax(220px, 1fr);
+    min-height: 328px;
+    width: var(--exposed-slot-width) !important;
+  }
+
+  .seat-right .concealed-hand-tiles {
+    min-height: 220px;
+  }
 }
