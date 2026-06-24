@@ -1,10 +1,10 @@
-const CACHE_NAME = "anmika-pwa-20260624-login-400-detail-a";
+const CACHE_NAME = "anmika-pwa-20260624-mobile-discard-b";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-login-400-detail-a",
+  "/styles.css?v=20260624-mobile-discard-b",
   "/runtime/app.js?v=20260624-login-400-detail-a",
   "/runtime/online-debug.js?v=20260624-login-400-detail-a",
   "/runtime/pwa.js?v=20260624-login-400-detail-a",
