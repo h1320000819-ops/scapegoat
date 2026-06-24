@@ -43,6 +43,18 @@ const colorText = { normal: "", red: "赤", gold: "金", blue: "青", turquoise:
 const suitText = { man: "萬", pin: "筒", sou: "索", manzu: "萬", pinzu: "筒", souzu: "索", honor: "字", flower: "華" };
 const honorText = { east: "東", south: "南", west: "西", north: "北", white: "白", green: "發", red: "中" };
 const pochiText = { red: "赤ぽっち", yellow: "黄ぽっち", green: "緑ぽっち", blue: "青ぽっち" };
+const pochiTsumoAnnouncementText = {
+  blue: "めちゃくちゃ陽気なツモ",
+  green: "陽気なツモ",
+  yellow: "悲しそうなツモ",
+  red: "超悲しそうなツモ",
+};
+const pochiTsumoAnnouncement = (scoreResult) => {
+  const color = scoreResult?.pochiActivated ? scoreResult?.pochiColor : null;
+  return color && pochiTsumoAnnouncementText[color]
+    ? { text: pochiTsumoAnnouncementText[color], kind: `pochi-tsumo-${color}` }
+    : null;
+};
 const TERMINAL_HONOR = new Set(["manzu-1", "manzu-9", "pinzu-1", "pinzu-9", "souzu-1", "souzu-9", "honor-east", "honor-south", "honor-west", "honor-north", "honor-white", "honor-green", "honor-red"]);
 const UI_ASSETS = {
   avatars: {
@@ -1941,9 +1953,9 @@ const replayAnnouncementForEvent = (event) => {
   if (event.type === "pon") return { text: "ポン", kind: "call-pon", playerId };
   if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return { text: "カン", kind: "call-kan", playerId };
   if (event.type === "ron") return { text: "ロン", kind: "ron", playerId };
-  if (event.type === "tsumo") return { text: "ツモ", kind: "tsumo", playerId };
+  if (event.type === "tsumo") return { ...(pochiTsumoAnnouncement(event.scoreResult) || { text: "ツモ", kind: "tsumo" }), playerId };
   if (event.type === "win") {
-    if (event.winType === "tsumo") return { text: "ツモ", kind: "tsumo", playerId };
+    if (event.winType === "tsumo") return { ...(pochiTsumoAnnouncement(event.scoreResult) || { text: "ツモ", kind: "tsumo" }), playerId };
     if (event.winType === "ron") return { text: "ロン", kind: "ron", playerId };
   }
   if (event.type === "riichi" || event.type === "fever_riichi") {
@@ -1952,6 +1964,18 @@ const replayAnnouncementForEvent = (event) => {
   }
   return null;
 };
+const announcementClassForKind = (kind) => (
+  kind === "double-ron" ? "double-ron-announcement" :
+  kind === "fever-riichi" ? "fever-announcement" :
+  kind === "riichi" ? "riichi-announcement" :
+  kind === "call-pon" ? "pon-announcement" :
+  kind === "call-kan" ? "kan-announcement" :
+  kind === "pao" ? "pao-announcement" :
+  kind === "ron" ? "ron-announcement" :
+  kind === "tsumo" ? "tsumo-announcement" :
+  String(kind || "").startsWith("pochi-tsumo-") ? `tsumo-announcement pochi-tsumo-announcement ${kind}-announcement` :
+  ""
+);
 const playAudioFile = (fileName, volume = 0.92) => {
   const audio = new Audio(soundAssetPath(fileName));
   audio.preload = "auto";
@@ -4192,8 +4216,9 @@ class GameController {
     const announcementKind = next.phase === "showingWinAnnouncement"
       ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
       : "";
-    if (announcementKind === "tsumo" || announcementKind === "ron" || announcementKind === "double-ron") {
-      playGameSound(announcementKind === "tsumo" ? "tsumo" : "ron", {
+    const isPochiTsumoAnnouncement = String(announcementKind || "").startsWith("pochi-tsumo-");
+    if (announcementKind === "tsumo" || isPochiTsumoAnnouncement || announcementKind === "ron" || announcementKind === "double-ron") {
+      playGameSound(announcementKind === "tsumo" || isPochiTsumoAnnouncement ? "tsumo" : "ron", {
         key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
       });
     }
@@ -5781,9 +5806,10 @@ class GameController {
     this.state.resultOkSubmittedResultId = "";
     this.state.pendingAction = null;
     this.state.phase = "showingWinAnnouncement";
-    const announcement = input.winType === "tsumo" ? "ツモ" : "ロン";
+    const pochiAnnouncement = input.winType === "tsumo" ? pochiTsumoAnnouncement(score) : null;
+    const announcement = pochiAnnouncement?.text || (input.winType === "tsumo" ? "ツモ" : "ロン");
     this.state.winAnnouncement = announcement;
-    this.state.serverAnnouncement = { text: announcement, kind: input.winType, playerId: winner.id };
+    this.state.serverAnnouncement = { text: announcement, kind: pochiAnnouncement?.kind || input.winType, playerId: winner.id };
     this.state.isWaitingForHumanAction = false;
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
@@ -7228,12 +7254,13 @@ class GameView {
     if (lines.length > 1) {
       return `<div class="win-announcement double-ron-announcement ${seatClass}"><div>${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}</div></div>`;
     }
-    return `<div class="win-announcement ${seatClass}"><div>${escapeHtml(state.winAnnouncement ?? "")}</div></div>`;
+    const className = announcementClassForKind(announcement.kind);
+    return `<div class="win-announcement ${className} ${seatClass}"><div>${escapeHtml(state.winAnnouncement ?? "")}</div></div>`;
   }
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
-    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : announcement.kind === "pao" ? "pao-announcement" : announcement.kind === "ron" ? "ron-announcement" : announcement.kind === "tsumo" ? "tsumo-announcement" : "";
+    const className = announcementClassForKind(announcement.kind);
     const seatClass = this.announcementSeatClass(state, announcement.playerId || announcement.winnerId || "");
     const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
     return `<div class="win-announcement ${className} ${seatClass}"><div>${content}</div></div>`;

@@ -46,6 +46,18 @@ const serverDiagnostics = {
 
 const now = () => Date.now();
 const isoNow = () => new Date().toISOString();
+const pochiTsumoAnnouncementText = {
+  blue: "めちゃくちゃ陽気なツモ",
+  green: "陽気なツモ",
+  yellow: "悲しそうなツモ",
+  red: "超悲しそうなツモ",
+};
+const pochiTsumoAnnouncement = (scoreResult) => {
+  const color = scoreResult?.pochiActivated ? scoreResult?.pochiColor : null;
+  return color && pochiTsumoAnnouncementText[color]
+    ? { text: pochiTsumoAnnouncementText[color], kind: `pochi-tsumo-${color}` }
+    : null;
+};
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
 const makeRoomKey = (tableId) => String(tableId || "");
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -3846,11 +3858,12 @@ const scheduleServerFeverForcedDiscard = (state, player, feverPlayer) => {
   appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
   return true;
 };
-const beginServerWinAnnouncement = (state, player, winType) => {
-  const label = winType === "tsumo" ? "ツモ" : "ロン";
+const beginServerWinAnnouncement = (state, player, winType, scoreResult = null) => {
+  const pochiAnnouncement = winType === "tsumo" ? pochiTsumoAnnouncement(scoreResult) : null;
+  const label = pochiAnnouncement?.text || (winType === "tsumo" ? "ツモ" : "ロン");
   state.phase = "showingWinAnnouncement";
   state.winAnnouncement = label;
-  state.serverAnnouncement = { text: state.winAnnouncement, kind: winType === "tsumo" ? "tsumo" : "ron" };
+  state.serverAnnouncement = { text: state.winAnnouncement, kind: pochiAnnouncement?.kind || (winType === "tsumo" ? "tsumo" : "ron"), playerId: player?.id || "" };
   state.activeClockPlayerId = null;
   state.clockStartedAt = null;
   state.pendingServerEffect = {
@@ -3962,7 +3975,7 @@ const finalizeServerRonWins = (state, winEntries, loserId, sourceTile) => {
     appendHandEvent(state, { type: "ron", playerId: entry.winnerId, fromPlayerId: loserId, tile: entry.winningTile || sourceTile, scoringTile: entry.scoringWinningTile || sourceTile, scoreResult: entry.scoreResult, isDoubleRon: orderedEntries.length > 1, primaryWinnerId: primary.winnerId, turnIndex: state.turnIndex ?? 0 });
   }
   const primaryPlayer = findPlayer(state, primary.winnerId);
-  beginServerWinAnnouncement(state, primaryPlayer || { id: primary.winnerId }, "ron");
+  beginServerWinAnnouncement(state, primaryPlayer || { id: primary.winnerId }, "ron", primary.scoreResult);
   if (orderedEntries.length > 1) {
     state.winAnnouncement = "ダブロン";
     state.serverAnnouncement = {
@@ -4724,7 +4737,7 @@ const applyServerAction = (state, event) => {
     if (action === "ron") console.log("[Ron] accepted", { tableId: state.tableId, playerId: player.id, fromPlayerId: loserId, version: state.version });
     scoreResult.displayWinningTile ??= displayWinningTile;
     appendHandEvent(state, { type: action, playerId: player.id, fromPlayerId: loserId, tile: displayWinningTile, scoringTile: effectiveWinningTile, originalTile: winningTile, scoreResult, turnIndex: state.turnIndex ?? 0 });
-    beginServerWinAnnouncement(state, player, action);
+    beginServerWinAnnouncement(state, player, action, scoreResult);
     return state;
   }
 
