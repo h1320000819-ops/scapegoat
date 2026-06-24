@@ -154,9 +154,11 @@ const handleClubRakeApi = async (request, response, clubId) => {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
     const from = url.searchParams.get("from") || "";
     const to = url.searchParams.get("to") || "";
+    const userId = url.searchParams.get("userId") || "";
     const dateFilter = [
       from ? `&created_at=gte.${encodeURIComponent(from)}` : "",
       to ? `&created_at=lt.${encodeURIComponent(to)}` : "",
+      userId ? `&user_id=eq.${encodeURIComponent(userId)}` : "",
     ].join("");
     const rows = await supabaseServerRest(`/club_rake_logs?select=*&club_id=eq.${encodeURIComponent(clubId)}${dateFilter}&order=created_at.desc&limit=1000`);
     sendJson(response, 200, { ok: true, isAdmin, rows: Array.isArray(rows) ? rows : [] });

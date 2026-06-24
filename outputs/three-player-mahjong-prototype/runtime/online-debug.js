@@ -72,6 +72,7 @@
     searchedClub: null,
     historyDateFrom: "",
     historyDateTo: "",
+    rakePlayerId: "",
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
     clubPollTimer: 0,
@@ -3468,13 +3469,14 @@
     }
   };
   const rakeAmountOf = (row) => roundToTenth(row?.rake_amount ?? row?.amount ?? 0);
-  const fetchClubRakeRows = async (clubId, { range = null } = {}) => {
+  const fetchClubRakeRows = async (clubId, { range = null, userId = "" } = {}) => {
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     if (!isAdmin()) return [];
     const activeRange = range || getHistoryDateRange();
     const params = new URLSearchParams();
     if (activeRange.fromIso) params.set("from", activeRange.fromIso);
     if (activeRange.toExclusiveIso) params.set("to", activeRange.toExclusiveIso);
+    if (userId) params.set("userId", userId);
     const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}${params.toString() ? `?${params}` : ""}`;
     const response = await fetch(apiUrl, {
       headers: buildSafeAuthHeaders(),
@@ -3488,7 +3490,8 @@
       const data = await response.json().catch(() => ({}));
       throw new Error(data?.error || "レーキ履歴の取得に失敗しました。");
     }
-    return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + dateRangeQuery(activeRange) + "&order=created_at.desc");
+    const userFilter = userId ? "&user_id=eq." + encodeURIComponent(userId) : "";
+    return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + userFilter + dateRangeQuery(activeRange) + "&order=created_at.desc");
   };
   const rakeTotalsByUser = (rows = []) => rows.reduce((totals, row) => {
     const userId = row.user_id || row.userId;
@@ -3564,6 +3567,95 @@
     const total = roundToTenth(rows.reduce((sum, row) => sum + rakeAmountOf(row), 0));
     $("rakeSummary").textContent = "レーキ総額: " + formatPoint(total) + " pt";
     $("rakeHistory").textContent = JSON.stringify(rows, null, 2);
+  };
+  const rakeMemberLabel = (member = {}) => {
+    const user = member.users || {};
+    return member.display_name || user.display_name || member.login_id || user.login_id || member.user_name || member.user_id || user.user_id || "不明";
+  };
+  const rakeRowUserId = (row = {}) => String(row.user_id || row.userId || "");
+  const renderRakeCheckPage = async (body) => {
+    const clubId = selectedClubId();
+    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+    if (!isAdmin()) {
+      body.innerHTML = `<p class="muted">権限がありません。支払ったレーキを確認できるのは管理者だけです。</p>`;
+      return;
+    }
+    const range = getHistoryDateRange();
+    const [members, rows] = await Promise.all([
+      loadClubMembersForView(clubId),
+      fetchClubRakeRows(clubId, { range, userId: state.rakePlayerId || "" }),
+    ]);
+    if (!rows) {
+      body.innerHTML = `<p class="muted">${clubRakeLogsMissingMessage}</p>`;
+      return;
+    }
+    const memberOptions = [
+      `<option value="">全員</option>`,
+      ...members.map((member) => {
+        const userId = member.user_id || member.users?.user_id || "";
+        const selected = String(state.rakePlayerId || "") === String(userId) ? "selected" : "";
+        return `<option value="${escapeHtml(userId)}" ${selected}>${escapeHtml(rakeMemberLabel(member))}</option>`;
+      }),
+    ].join("");
+    const filteredRows = rows.filter((row) => !state.rakePlayerId || rakeRowUserId(row) === String(state.rakePlayerId));
+    const total = roundToTenth(filteredRows.reduce((sum, row) => sum + rakeAmountOf(row), 0));
+    const totalsByUser = rakeTotalsByUser(filteredRows);
+    const memberById = new Map(members.map((member) => [String(member.user_id || member.users?.user_id || ""), member]));
+    const summaryRows = Object.entries(totalsByUser)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .map(([userId, amount]) => {
+        const member = memberById.get(String(userId));
+        const name = member ? rakeMemberLabel(member) : (filteredRows.find((row) => rakeRowUserId(row) === String(userId))?.user_name || userId);
+        return `<tr><td>${escapeHtml(name)}</td><td>${formatPoint(amount)} pt</td></tr>`;
+      }).join("");
+    const detailRows = filteredRows.slice(0, 300).map((row) => {
+      const userId = rakeRowUserId(row);
+      const member = memberById.get(String(userId));
+      const name = member ? rakeMemberLabel(member) : (row.user_name || userId || "不明");
+      return `<tr>
+        <td>${escapeHtml(new Date(row.created_at || row.createdAt || Date.now()).toLocaleString("ja-JP"))}</td>
+        <td>${escapeHtml(name)}</td>
+        <td>${formatPoint(rakeAmountOf(row))} pt</td>
+        <td>${escapeHtml(rakeLogLabel(row))}</td>
+        <td>${formatPoint(row.original_gain || 0)} / ${formatPoint(row.rake_percent || 0)}%</td>
+      </tr>`;
+    }).join("");
+    body.innerHTML = `
+      <section class="card">
+        <h4>レーキ確認</h4>
+        <p class="muted">管理者のみ確認できます。プレイヤーと日付で支払ったレーキを絞り込めます。</p>
+        <div class="row">
+          <label>プレイヤー
+            <select id="rakePlayerFilter">${memberOptions}</select>
+          </label>
+          <label>開始日 <input id="rakeDateFrom" type="date" value="${escapeHtml(range.from)}" /></label>
+          <label>終了日 <input id="rakeDateTo" type="date" value="${escapeHtml(range.to)}" /></label>
+          <button type="button" id="applyRakeFilter">適用</button>
+          <button type="button" id="clearRakeFilter" class="secondary">解除</button>
+        </div>
+      </section>
+      <section class="card">
+        <h4>集計</h4>
+        <div class="point-summary"><strong>合計: ${formatPoint(total)} pt</strong><span>対象件数: ${filteredRows.length}件</span></div>
+        <table class="point-history-table"><thead><tr><th>プレイヤー</th><th>支払レーキ</th></tr></thead><tbody>${summaryRows || `<tr><td colspan="2">対象データなし</td></tr>`}</tbody></table>
+      </section>
+      <section class="card">
+        <h4>明細</h4>
+        <table class="point-history-table"><thead><tr><th>日時</th><th>プレイヤー</th><th>支払レーキ</th><th>内容</th><th>元収入 / 率</th></tr></thead><tbody>${detailRows || `<tr><td colspan="5">対象データなし</td></tr>`}</tbody></table>
+        ${filteredRows.length > 300 ? `<p class="muted">表示は直近300件までです。日付を絞り込んでください。</p>` : ""}
+      </section>`;
+    body.querySelector("#applyRakeFilter")?.addEventListener("click", () => {
+      state.rakePlayerId = body.querySelector("#rakePlayerFilter")?.value || "";
+      state.historyDateFrom = normalizeDateInput(body.querySelector("#rakeDateFrom")?.value || "");
+      state.historyDateTo = normalizeDateInput(body.querySelector("#rakeDateTo")?.value || "");
+      renderRakeCheckPage(body).catch((error) => showError("レーキ確認に失敗しました", error));
+    });
+    body.querySelector("#clearRakeFilter")?.addEventListener("click", () => {
+      state.rakePlayerId = "";
+      state.historyDateFrom = "";
+      state.historyDateTo = "";
+      renderRakeCheckPage(body).catch((error) => showError("レーキ確認の解除に失敗しました", error));
+    });
   };
   const ensureTsumoLossless3maCreateUi = () => {
     if (!has("ruleId")) return;
@@ -4728,6 +4820,12 @@
       await renderPointHistoryPage(body);
       return;
     }
+    if (page === "rakeCheck") {
+      title.textContent = "レーキ確認";
+      body.innerHTML = `<p class="muted">レーキ履歴を読み込み中...</p>`;
+      await renderRakeCheckPage(body);
+      return;
+    }
     if (page === "stats") {
       title.textContent = "スタッツ";
       body.innerHTML = `<p class="muted">スタッツを集計中...</p>`;
@@ -5056,6 +5154,11 @@
     if (clubSettingsMenuButton) {
       clubSettingsMenuButton.style.display = isAdmin() ? "" : "none";
       clubSettingsMenuButton.disabled = !isAdmin();
+    }
+    const rakeCheckMenuButton = document.querySelector('[data-settings-page="rakeCheck"]');
+    if (rakeCheckMenuButton) {
+      rakeCheckMenuButton.style.display = isAdmin() ? "" : "none";
+      rakeCheckMenuButton.disabled = !isAdmin();
     }
     $("clubSelect").innerHTML = "";
     if (has("clubCards")) $("clubCards").innerHTML = "";

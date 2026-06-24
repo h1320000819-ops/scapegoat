@@ -311,7 +311,7 @@ button:hover {
 }
 
 .seat-right {
-  right: 84px;
+  right: 150px;
   top: 50%;
   transform: translateY(-50%);
   width: 190px;
@@ -1302,7 +1302,7 @@ button:hover {
 
 .seat-top .nuki-dora-area .exposed-tiles {
   align-items: center;
-  flex-direction: column;
+  flex-direction: row;
   flex-wrap: nowrap;
   gap: 4px;
 }
@@ -2193,7 +2193,7 @@ button:hover {
   }
 
   .seat-right {
-    right: 76px;
+    right: 132px;
     width: 150px;
   }
 
@@ -2311,7 +2311,7 @@ button:hover {
   }
 
   .seat-right {
-    right: 62px;
+    right: 116px;
     width: 126px;
   }
 
@@ -2624,7 +2624,7 @@ button:hover {
 
   .seat-top .nuki-dora-area .exposed-tiles {
     align-items: center;
-    flex-direction: column;
+    flex-direction: row;
     flex-wrap: nowrap;
     gap: 3px;
   }

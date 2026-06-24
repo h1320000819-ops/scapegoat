@@ -1767,6 +1767,7 @@ const getKakanActionOption = (state, player) => {
   return canKakan ? { type: "kan", playerId: player.id, options: { kanType: "kakan" } } : null;
 };
 const formatTile = (tile) => {
+  if (!tile) return "?";
   if (tile.suit === "honor") return tile.kind === "white" && tile.pochiColor ? pochiText[tile.pochiColor] : honorText[tile.kind];
   if (tile.suit === "flower") return `${colorText[tile.color] ?? ""}華`;
   return `${tile.isRocket ? "ロケット" : colorText[tile.color] ?? ""}${tile.rank}${suitText[tile.suit]}`;
@@ -1906,14 +1907,14 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", feverRiichi: "fever-riichi.wav" };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav" };
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
   if (event.type === "pon") return "pon";
   if (event.type === "kan") return "kan";
   if (event.type === "tsumo") return "tsumo";
   if (event.type === "ron") return "ron";
-  if (event.type === "riichi" && event.feverRiichiActive) return "feverRiichi";
+  if (event.type === "riichi") return event.feverRiichiActive ? "feverRiichi" : "riichi";
   return "";
 };
 const playGameSound = (type, { key = "" } = {}) => {
@@ -1949,7 +1950,7 @@ const normalizeTileForView = (tile) => {
 };
 const getTileImagePath = (tile, faceDown = false) => {
   tile = normalizeTileForView(tile);
-  if (faceDown) return tileAssetPath("tile_back.png");
+  if (faceDown || !tile) return tileAssetPath("tile_back.png");
   if (tile.isRocket && tile.suit === "manzu") return tileAssetPath(`man${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
@@ -4115,9 +4116,7 @@ class GameController {
           text: latestEvent.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
           kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
         };
-        if (latestEvent.feverRiichiActive) {
-          playGameSound("feverRiichi", { key: `fever-riichi:${latestEvent.playerId}:${latestEvent.turnIndex}` });
-        }
+        playGameSound(latestEvent.feverRiichiActive ? "feverRiichi" : "riichi", { key: `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}` });
         if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
         this.announcementClearTimer = setTimeout(() => {
           if (this.state.serverAnnouncement?.kind === next.serverAnnouncement.kind) {
@@ -5546,7 +5545,7 @@ class GameController {
           this.emit();
         }
       }, player.feverRiichiActive ? 2400 : 1500);
-      if (player.feverRiichiActive) playGameSound("feverRiichi", { key: `local-fever-riichi:${player.id}:${this.state.turnIndex}` });
+      playGameSound(player.feverRiichiActive ? "feverRiichi" : "riichi", { key: `local-riichi:${player.id}:${this.state.turnIndex}:${player.feverRiichiActive ? "fever" : "normal"}` });
       this.state.log.unshift(player.feverRiichiActive ? `${player.name} フィーバーリーチ` : `${player.name} リーチ`);
     }
     player.riichiDiscardTileIds = [];
@@ -5746,6 +5745,7 @@ class GameController {
     this.state.phase = "waitingForRiichiDiscard";
     this.state.isWaitingForHumanAction = true;
     this.startClockForPlayer(player.id);
+    playGameSound("riichi", { key: `riichi-button:${player.id}:${this.state.turnIndex}` });
     this.emit();
   }
   confirmPon(action) {
