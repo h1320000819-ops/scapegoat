@@ -3948,3 +3948,262 @@ button:hover {
     transform: translateX(-25vw) !important;
   }
 }
+
+/* Safe-area table layout: keep hand, meld, river and center panels in separate lanes. */
+.mahjong-table {
+  --safe-center-x: 50%;
+  --safe-center-y: calc(50% + var(--center-y-offset));
+  --safe-edge-gap: clamp(10px, 1.7vw, 26px);
+  --safe-right-lane-width: clamp(126px, 13vw, 188px);
+  --safe-top-lane-height: clamp(82px, 15dvh, 126px);
+  --safe-bottom-lane-height: clamp(112px, 19dvh, 164px);
+  --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
+  --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
+  --safe-right-meld-gap: clamp(10px, 2.1dvh, 28px);
+  --safe-right-meld-height: calc(var(--safe-other-tile-width) * 3 + 2px);
+  --safe-river-side-gap: clamp(12px, 2vw, 28px);
+}
+
+.mahjong-table .center-info {
+  left: var(--safe-center-x);
+  top: var(--safe-center-y);
+}
+
+.mahjong-table .discard-bottom {
+  left: var(--safe-center-x);
+  top: calc(var(--safe-center-y) + (var(--center-info-height) / 2) + var(--river-center-gap) + 10px);
+  transform: translateX(-50%);
+}
+
+.mahjong-table .discard-top {
+  left: var(--safe-center-x);
+  top: calc(var(--safe-center-y) - (var(--center-info-height) / 2) - var(--river-height) - 10px);
+  transform: translateX(-50%) rotate(180deg);
+}
+
+.mahjong-table .discard-right {
+  left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap));
+  top: var(--safe-center-y);
+  transform: translateY(-50%) rotate(-90deg);
+}
+
+.mahjong-table .seat-bottom {
+  bottom: max(var(--safe-edge-gap), env(safe-area-inset-bottom));
+  left: 50%;
+  max-width: calc(100vw - (var(--safe-edge-gap) * 2));
+  width: min(920px, calc(100vw - (var(--safe-edge-gap) * 2)));
+}
+
+.mahjong-table .seat-top {
+  left: 50%;
+  max-width: calc(100vw - var(--safe-right-lane-width) - (var(--safe-edge-gap) * 3));
+  top: var(--safe-edge-gap);
+  width: min(720px, calc(100vw - var(--safe-right-lane-width) - (var(--safe-edge-gap) * 3)));
+}
+
+.mahjong-table .seat-right {
+  height: calc(100dvh - var(--safe-top-lane-height) - var(--safe-bottom-lane-height));
+  max-height: calc(100dvh - var(--safe-top-lane-height) - var(--safe-bottom-lane-height));
+  min-height: 260px;
+  right: max(var(--safe-edge-gap), env(safe-area-inset-right));
+  top: calc(var(--safe-top-lane-height) + ((100dvh - var(--safe-top-lane-height) - var(--safe-bottom-lane-height)) / 2));
+  transform: translateY(-50%);
+  width: var(--safe-right-lane-width);
+}
+
+.mahjong-table .seat-right .seat-mini-name {
+  max-width: var(--safe-right-lane-width);
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mahjong-table .seat-right .hand-zone {
+  height: 100%;
+  width: 100%;
+}
+
+.mahjong-table .seat-right .hand-row {
+  --draw-slot-width: var(--safe-other-tile-height);
+  --exposed-slot-width: calc(var(--safe-other-tile-width) * 4 + 3px);
+  --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 4px);
+  --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 4px);
+  --right-meld-gap: var(--safe-right-meld-gap);
+  --right-meld-set-height: var(--safe-right-meld-height);
+  grid-template-areas:
+    "nuki"
+    "meld"
+    "draw"
+    "hand";
+  grid-template-columns: minmax(0, var(--exposed-slot-width));
+  grid-template-rows:
+    minmax(0, var(--nuki-slot-height))
+    minmax(0, 1fr)
+    minmax(0, var(--draw-slot-width))
+    minmax(0, calc(var(--safe-other-tile-height) * 4 + 10px));
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: visible !important;
+  width: 100% !important;
+}
+
+.mahjong-table .seat-right .tile,
+.mahjong-table .seat-right .tile-button,
+.mahjong-table .seat-right .tile-image,
+.mahjong-table .seat-right .tile-fallback {
+  height: var(--safe-other-tile-height);
+  min-width: var(--safe-other-tile-width);
+  width: var(--safe-other-tile-width);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area {
+  align-self: stretch;
+  justify-self: end;
+  max-height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: visible;
+  width: var(--exposed-slot-width);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles {
+  align-content: end !important;
+  align-items: flex-end !important;
+  display: flex !important;
+  flex-direction: column !important;
+  flex-wrap: nowrap !important;
+  gap: var(--safe-right-meld-gap) !important;
+  height: 100%;
+  justify-content: end !important;
+  max-height: 100%;
+  overflow: visible;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-set {
+  flex: 0 1 var(--safe-right-meld-height);
+  min-height: 0;
+  width: var(--exposed-slot-width);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tiles {
+  align-items: center;
+  flex-direction: column !important;
+  gap: 0;
+}
+
+.mahjong-table .seat-right .concealed-hand-tiles {
+  min-height: 0;
+  justify-content: end !important;
+}
+
+.mahjong-table .seat-right .hand-row > .drawn-tile-slot,
+.mahjong-table .seat-right .hand-row > .nuki-dora-area {
+  justify-self: end;
+}
+
+.mahjong-table .seat-top .tile,
+.mahjong-table .seat-top .tile-button,
+.mahjong-table .seat-top .tile-image,
+.mahjong-table .seat-top .tile-fallback {
+  height: var(--safe-other-tile-height);
+  min-width: var(--safe-other-tile-width);
+  width: var(--safe-other-tile-width);
+}
+
+.mahjong-table .seat-top .hand-row {
+  transform: none !important;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .mahjong-table {
+    --safe-center-y: 42%;
+    --safe-edge-gap: max(6px, env(safe-area-inset-right));
+    --safe-right-lane-width: clamp(74px, 14dvw, 112px);
+    --safe-top-lane-height: clamp(46px, 13dvh, 64px);
+    --safe-bottom-lane-height: clamp(72px, 19dvh, 92px);
+    --safe-other-tile-width: clamp(14px, 4.2dvh, 19px);
+    --safe-right-meld-gap: clamp(3px, 1.3dvh, 8px);
+    --safe-river-side-gap: clamp(6px, 1.2dvw, 12px);
+  }
+
+  .mahjong-table .seat-right {
+    height: calc(var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height));
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height));
+    min-height: 0;
+    right: max(4px, env(safe-area-inset-right));
+    top: calc(var(--safe-top-lane-height) + ((var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height)) / 2));
+    width: var(--safe-right-lane-width);
+  }
+
+  .mahjong-table .seat-right .hand-row {
+    --draw-slot-width: calc(var(--safe-other-tile-height) + 2px);
+    --exposed-slot-width: calc(var(--safe-other-tile-width) * 4 + 2px);
+    --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 2px);
+    --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 2px);
+    grid-template-rows:
+      minmax(0, var(--nuki-slot-height))
+      minmax(0, 1fr)
+      minmax(0, var(--draw-slot-width))
+      minmax(0, calc(var(--safe-other-tile-height) * 4 + 4px));
+  }
+
+  .mahjong-table .seat-right .seat-mini-name {
+    font-size: 9px;
+    line-height: 1;
+  }
+
+  .mahjong-table .seat-top {
+    left: 50% !important;
+    top: 8px;
+    width: calc(100vw - var(--safe-right-lane-width) - 28px);
+  }
+
+  .mahjong-table .seat-top .hand-row {
+    transform: none !important;
+  }
+
+  .mahjong-table .discard-right {
+    left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap));
+    top: var(--safe-center-y);
+  }
+}
+
+.mahjong-table.layout-tight-right {
+  --safe-right-lane-width: clamp(96px, 11vw, 156px);
+  --safe-other-tile-width: clamp(18px, 1.85vw, 26px);
+  --safe-right-meld-gap: clamp(5px, 1.3dvh, 14px);
+  --safe-river-side-gap: clamp(6px, 1vw, 14px);
+}
+
+.mahjong-table.layout-tight-right .seat-right {
+  right: max(6px, env(safe-area-inset-right));
+}
+
+.mahjong-table.layout-ultra-tight-right {
+  --safe-right-lane-width: clamp(82px, 9.5vw, 132px);
+  --safe-other-tile-width: clamp(16px, 1.55vw, 23px);
+  --safe-right-meld-gap: clamp(2px, 0.8dvh, 8px);
+  --safe-river-side-gap: 4px;
+}
+
+.mahjong-table.layout-ultra-tight-right .seat-right {
+  right: max(3px, env(safe-area-inset-right));
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .mahjong-table.layout-tight-right {
+    --safe-right-lane-width: clamp(68px, 12dvw, 96px);
+    --safe-other-tile-width: clamp(13px, 3.7dvh, 17px);
+    --safe-right-meld-gap: clamp(2px, 0.9dvh, 6px);
+    --safe-river-side-gap: 4px;
+  }
+
+  .mahjong-table.layout-ultra-tight-right {
+    --safe-right-lane-width: clamp(60px, 10dvw, 84px);
+    --safe-other-tile-width: clamp(12px, 3.3dvh, 15px);
+    --safe-right-meld-gap: clamp(1px, 0.5dvh, 4px);
+    --safe-river-side-gap: 2px;
+  }
+}

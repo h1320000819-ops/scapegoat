@@ -6642,6 +6642,54 @@ class GameView {
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
+    this.stabilizeTableLayout();
+  }
+  stabilizeTableLayout() {
+    if (typeof window === "undefined") return;
+    const table = this.root.querySelector(".mahjong-table");
+    if (!table) return;
+    window.requestAnimationFrame(() => {
+      const center = table.querySelector(".center-info");
+      const rightRiver = table.querySelector(".discard-right");
+      const rightSeat = table.querySelector(".seat-right");
+      const rightMelds = table.querySelector(".seat-right .meld-area .exposed-tiles");
+      if (!center || !rightRiver || !rightSeat || !rightMelds) return;
+      const intersects = (a, b, pad = 4) =>
+        a.left < b.right + pad &&
+        a.right > b.left - pad &&
+        a.top < b.bottom + pad &&
+        a.bottom > b.top - pad;
+      table.classList.remove("layout-tight-right", "layout-ultra-tight-right");
+      const seatBox = rightSeat.getBoundingClientRect();
+      const meldBox = rightMelds.getBoundingClientRect();
+      const centerBox = center.getBoundingClientRect();
+      const riverBox = rightRiver.getBoundingClientRect();
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+      const offscreen =
+        meldBox.right > viewportWidth - 2 ||
+        meldBox.left < 2 ||
+        meldBox.top < 2 ||
+        meldBox.bottom > viewportHeight - 2;
+      const overlapping = intersects(meldBox, centerBox, 6) || intersects(meldBox, riverBox, 6) || intersects(seatBox, riverBox, 2);
+      if (!offscreen && !overlapping) return;
+      table.classList.add("layout-tight-right");
+      window.requestAnimationFrame(() => {
+        const nextMeldBox = rightMelds.getBoundingClientRect();
+        const nextSeatBox = rightSeat.getBoundingClientRect();
+        const nextCenterBox = center.getBoundingClientRect();
+        const nextRiverBox = rightRiver.getBoundingClientRect();
+        const stillBad =
+          nextMeldBox.right > viewportWidth - 2 ||
+          nextMeldBox.left < 2 ||
+          nextMeldBox.top < 2 ||
+          nextMeldBox.bottom > viewportHeight - 2 ||
+          intersects(nextMeldBox, nextCenterBox, 4) ||
+          intersects(nextMeldBox, nextRiverBox, 4) ||
+          intersects(nextSeatBox, nextRiverBox, 2);
+        if (stillBad) table.classList.add("layout-ultra-tight-right");
+      });
+    });
   }
   bindAppControls() {
     this.root.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => this.handlers.onNavigate(b.dataset.nav)));
