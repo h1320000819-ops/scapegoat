@@ -192,7 +192,7 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260624-no-auto-scroll-a";
+    const assetVersion = "20260624-login-400-detail-a";
     loadScript(`${assetBase}runtime/pwa.js?v=${assetVersion}`).catch(() => {});
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();

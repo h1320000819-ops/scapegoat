@@ -1327,6 +1327,16 @@
     const data = await rest("/rpc/get_login_email", { method: "POST", body: JSON.stringify({ p_user_id: loginId }) });
     return Array.isArray(data) ? data[0] : data;
   };
+  const normalizeLoginInput = (value) => String(value || "")
+    .trim()
+    .replace(/[Ａ-Ｚａ-ｚ０-９＠．＿－]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/\s+/g, "");
+  const maskEmailForLog = (email) => {
+    const text = String(email || "");
+    const [name, domain] = text.split("@");
+    if (!name || !domain) return "";
+    return `${name.slice(0, 2)}***@${domain}`;
+  };
   const extractLoginEmail = (value) => {
     if (!value) return "";
     if (typeof value === "string") return value.trim();
@@ -1340,9 +1350,9 @@
     return String(candidates.find(Boolean) || "").trim();
   };
   const resolveLoginEmail = async (loginInput) => {
-    const identifier = String(loginInput || "").trim();
+    const identifier = normalizeLoginInput(loginInput);
     if (!identifier) throw new Error("メールアドレスまたはログインIDを入力してください。");
-    if (identifier.includes("@")) return identifier;
+    if (identifier.includes("@")) return identifier.toLowerCase();
     let email = "";
     try {
       email = extractLoginEmail(await getLoginEmail(identifier));
@@ -1352,7 +1362,7 @@
       throw new Error(toJapaneseError(raw));
     }
     if (!email || !email.includes("@")) throw new Error("ログインIDが見つかりません。メールアドレスまたはログインIDを確認してください。");
-    return email;
+    return email.toLowerCase();
   };
   const ensureProfileForAuthUser = async (authUser, displayName = "") => {
     if (!authUser?.id) throw new Error("認証ユーザー情報を取得できませんでした。");
@@ -1455,12 +1465,25 @@
     await signInWithEmail();
   };
   const signInWithEmail = async () => {
-    const loginInput = has("email") ? $("email").value.trim() : "";
+    const loginInput = has("email") ? normalizeLoginInput($("email").value) : "";
     const password = $("password").value;
     if (!loginInput) throw new Error("メールアドレスまたはログインIDを入力してください。");
     if (!password) throw new Error(JA_MESSAGES.passwordRequired);
     const email = await resolveLoginEmail(loginInput);
-    const session = await auth("/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
+    log("ログイン確認中", { inputType: loginInput.includes("@") ? "email" : "loginId", resolvedEmail: maskEmailForLog(email) });
+    let session;
+    try {
+      session = await auth("/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
+    } catch (error) {
+      const status = Number(error?.status || 0);
+      const raw = rawErrorText(error);
+      console.warn("[Auth] password login failed", { status, raw, inputType: loginInput.includes("@") ? "email" : "loginId", resolvedEmail: maskEmailForLog(email) });
+      log("ログイン認証に失敗しました", { status, inputType: loginInput.includes("@") ? "email" : "loginId", resolvedEmail: maskEmailForLog(email), detail: raw });
+      if (status === 400 || raw.includes("invalid_grant") || raw.includes("Invalid login credentials") || raw.trim() === "400") {
+        throw new Error("ログイン認証で拒否されました。ログインIDの場合はメール変換までは完了しています。パスワード、または登録メールアドレスが正しいか確認してください。");
+      }
+      throw error;
+    }
     saveSession(session, null);
     const authUser = session.user || await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");

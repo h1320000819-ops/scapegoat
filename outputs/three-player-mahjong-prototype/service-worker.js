@@ -1,13 +1,13 @@
-const CACHE_NAME = "anmika-pwa-20260624-no-auto-scroll-a";
+const CACHE_NAME = "anmika-pwa-20260624-login-400-detail-a";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-no-auto-scroll-a",
-  "/runtime/app.js?v=20260624-no-auto-scroll-a",
-  "/runtime/online-debug.js?v=20260624-no-auto-scroll-a",
-  "/runtime/pwa.js?v=20260624-no-auto-scroll-a",
+  "/styles.css?v=20260624-login-400-detail-a",
+  "/runtime/app.js?v=20260624-login-400-detail-a",
+  "/runtime/online-debug.js?v=20260624-login-400-detail-a",
+  "/runtime/pwa.js?v=20260624-login-400-detail-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
