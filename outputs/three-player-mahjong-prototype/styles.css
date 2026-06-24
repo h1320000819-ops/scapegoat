@@ -3963,6 +3963,7 @@ button:hover {
   --safe-right-meld-gap: clamp(10px, 2.1dvh, 28px);
   --safe-right-meld-height: calc(var(--safe-other-tile-width) * 3 + 2px);
   --safe-river-side-gap: var(--center-river-margin);
+  --right-river-left-pull: clamp(24px, 3vw, 54px);
 }
 
 .mahjong-table .center-info {
@@ -3983,7 +3984,7 @@ button:hover {
 }
 
 .mahjong-table .discard-right {
-  left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap));
+  left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap) - var(--right-river-left-pull));
   top: var(--safe-center-y);
   transform: translateY(-50%) rotate(-90deg);
 }
@@ -4144,6 +4145,7 @@ button:hover {
     --safe-other-tile-width: clamp(14px, 4.2dvh, 19px);
     --safe-right-meld-gap: clamp(3px, 1.3dvh, 8px);
     --safe-river-side-gap: var(--center-river-margin);
+    --right-river-left-pull: clamp(14px, 4.8dvh, 28px);
   }
 
   .mahjong-table .seat-right {
@@ -4183,7 +4185,7 @@ button:hover {
   }
 
   .mahjong-table .discard-right {
-    left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap));
+    left: calc(var(--safe-center-x) + (var(--center-info-width) / 2) + var(--safe-river-side-gap) - var(--right-river-left-pull));
     top: var(--safe-center-y);
   }
 }
