@@ -315,7 +315,7 @@ button:hover {
 
 .seat-right {
   right: clamp(56px, calc((100vw - (100dvh * var(--table-surface-aspect))) / 2 + 72px), 340px);
-  top: 28%;
+  top: 50%;
   transform: translateY(-50%);
   width: 168px;
 }
@@ -3609,6 +3609,7 @@ button:hover {
   grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(360px, 1fr);
   justify-content: end !important;
   justify-items: end;
+  max-height: calc(100dvh - 44px);
   min-height: 560px;
   width: var(--exposed-slot-width) !important;
 }
@@ -3642,6 +3643,14 @@ button:hover {
   flex-direction: column !important;
   gap: 8px;
   justify-content: flex-start !important;
+}
+
+.seat-right .hand-row > .meld-area .newest-meld {
+  order: 10;
+}
+
+.seat-right .hand-row > .meld-area .oldest-meld {
+  order: -10;
 }
 
 .seat-right .hand-row > .meld-area {
