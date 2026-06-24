@@ -1923,11 +1923,28 @@ const getGameSoundAudio = (type) => {
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
   if (event.type === "pon") return "pon";
-  if (event.type === "kan") return "kan";
+  if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return "kan";
   if (event.type === "tsumo") return "tsumo";
   if (event.type === "ron") return "ron";
-  if (event.type === "riichi") return event.feverRiichiActive ? "feverRiichi" : "riichi";
+  if (event.type === "win") return event.winType === "tsumo" ? "tsumo" : event.winType === "ron" ? "ron" : "";
+  if (event.type === "riichi" || event.type === "fever_riichi") return event.feverRiichiActive || event.type === "fever_riichi" ? "feverRiichi" : "riichi";
   return "";
+};
+const replayAnnouncementForEvent = (event) => {
+  if (!event?.type) return null;
+  if (event.type === "pon") return { text: "ポン", kind: "call-pon" };
+  if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return { text: "カン", kind: "call-kan" };
+  if (event.type === "ron") return { text: "ロン", kind: "ron" };
+  if (event.type === "tsumo") return { text: "ツモ", kind: "tsumo" };
+  if (event.type === "win") {
+    if (event.winType === "tsumo") return { text: "ツモ", kind: "tsumo" };
+    if (event.winType === "ron") return { text: "ロン", kind: "ron" };
+  }
+  if (event.type === "riichi" || event.type === "fever_riichi") {
+    const isFever = event.feverRiichiActive || event.type === "fever_riichi";
+    return { text: isFever ? "フィーバーリーチ" : "リーチ", kind: isFever ? "fever-riichi" : "riichi" };
+  }
+  return null;
 };
 const playGameSound = (type, { key = "" } = {}) => {
   const fileName = GAME_SOUND_FILES[type];
@@ -2426,6 +2443,7 @@ const createInitialGameState = (players) => {
     replayIndex: 0,
     replayViewerId: CURRENT_USER_ID,
     replayRevealHands: false,
+    replayAnnouncement: null,
     replayInitialState: null,
     replaySnapshots: [],
     activeTableId: null,
@@ -3342,6 +3360,8 @@ class GameController {
     this.gameSocket = null;
     this.onlineGameEndedReturnScheduled = false;
     this.replayAutoListTimer = null;
+    this.replayAnnouncementTimer = null;
+    this.replayEffectQueueTimer = null;
     this.lastDisplayedResultKey = "";
     this.lastDisplayedAnnouncementKey = "";
     this.announcementClearTimer = null;
@@ -4763,6 +4783,7 @@ class GameController {
       return;
     }
     const firstSnapshot = getCurrentReplaySnapshot(replay, 0);
+    this.clearReplayAnnouncement();
     this.state.selectedReplayId = replayId;
     this.state.replayIndex = 0;
     this.state.replayLoading = false;
@@ -4795,7 +4816,7 @@ class GameController {
       this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     }
     warmReplayTileImages(replay, this.state.replayIndex, delta >= 0 ? 5 : 2);
-    if (this.state.replayIndex !== previousIndex) this.playReplaySoundAtIndex(replay, this.state.replayIndex);
+    if (this.state.replayIndex !== previousIndex) this.playReplayEffectsBetween(replay, previousIndex, this.state.replayIndex);
     this.emit();
   }
   setReplayIndex(index) {
@@ -4804,14 +4825,71 @@ class GameController {
     const previousIndex = this.state.replayIndex;
     this.state.replayIndex = Math.max(0, Math.min(max, Number(index || 0)));
     warmReplayTileImages(replay, this.state.replayIndex, 5);
-    if (this.state.replayIndex !== previousIndex) this.playReplaySoundAtIndex(replay, this.state.replayIndex);
+    if (this.state.replayIndex !== previousIndex) this.playReplayEffectsAtIndex(replay, this.state.replayIndex);
     this.emit();
   }
-  playReplaySoundAtIndex(replay, index) {
+  playReplayEffectsAtIndex(replay, index) {
     const event = getReplayEventForSnapshotIndex(replay, index);
-    const soundType = soundTypeForEvent(event);
-    if (!soundType) return;
-    playGameSound(soundType);
+    if (!event) {
+      this.clearReplayAnnouncement();
+      return;
+    }
+    this.playReplayEffectQueue([{ event, index }]);
+  }
+  playReplayEffectsBetween(replay, fromIndex, toIndex) {
+    if (!replay || fromIndex === toIndex) return;
+    const items = [];
+    if (toIndex > fromIndex) {
+      for (let index = fromIndex + 1; index <= toIndex; index++) {
+        const event = getReplayEventForSnapshotIndex(replay, index);
+        if (event) items.push({ event, index });
+      }
+    } else {
+      const event = getReplayEventForSnapshotIndex(replay, toIndex);
+      if (event) items.push({ event, index: toIndex });
+    }
+    this.playReplayEffectQueue(items);
+  }
+  playReplayEffectQueue(items) {
+    const effectItems = (items || []).filter(({ event }) => soundTypeForEvent(event) || replayAnnouncementForEvent(event));
+    const queue = effectItems.filter(({ event }, index) => {
+      const nextEvent = effectItems[index + 1]?.event;
+      return !(event?.type === "win" && (nextEvent?.type === "ron" || nextEvent?.type === "tsumo") && nextEvent.type === event.winType);
+    });
+    if (this.replayEffectQueueTimer) clearTimeout(this.replayEffectQueueTimer);
+    if (!queue.length) {
+      this.clearReplayAnnouncement();
+      return;
+    }
+    const playNext = () => {
+      const item = queue.shift();
+      if (!item) return;
+      const { event, index } = item;
+      const soundType = soundTypeForEvent(event);
+      const announcement = replayAnnouncementForEvent(event);
+      if (soundType) playGameSound(soundType, { key: `replay:${soundType}:${index}:${event.playerId || event.actorPlayerId || ""}` });
+      if (announcement) {
+        const key = `replay:${announcement.kind}:${index}:${event.playerId || event.actorPlayerId || ""}`;
+        this.state.replayAnnouncement = { ...announcement, key };
+        if (this.replayAnnouncementTimer) clearTimeout(this.replayAnnouncementTimer);
+        this.replayAnnouncementTimer = setTimeout(() => {
+          if (this.state.replayAnnouncement?.key === key) {
+            this.state.replayAnnouncement = null;
+            this.emit();
+          }
+        }, 1300);
+        this.emit();
+      }
+      if (queue.length) this.replayEffectQueueTimer = setTimeout(playNext, 700);
+    };
+    playNext();
+  }
+  clearReplayAnnouncement() {
+    if (this.replayAnnouncementTimer) clearTimeout(this.replayAnnouncementTimer);
+    if (this.replayEffectQueueTimer) clearTimeout(this.replayEffectQueueTimer);
+    this.replayAnnouncementTimer = null;
+    this.replayEffectQueueTimer = null;
+    if (this.state.replayAnnouncement) this.state.replayAnnouncement = null;
   }
   goNextReplayStep() {
     this.stepReplay(1);
@@ -6965,6 +7043,7 @@ class GameView {
       ...snapshot,
       screen: "game",
       pendingAction: null,
+      serverAnnouncement: state.replayAnnouncement ?? snapshot.serverAnnouncement ?? null,
       cpuThinkingMessage: "",
       settingsOpen: false,
       isReplayView: true,
@@ -7096,7 +7175,7 @@ class GameView {
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
-    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : announcement.kind === "pao" ? "pao-announcement" : "";
+    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : announcement.kind === "pao" ? "pao-announcement" : announcement.kind === "ron" ? "ron-announcement" : announcement.kind === "tsumo" ? "tsumo-announcement" : "";
     const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
     return `<div class="win-announcement ${className}"><div>${content}</div></div>`;
   }

@@ -1495,8 +1495,8 @@ button:hover {
 }
 
 .bottom-actions {
-  bottom: 112px;
-  left: 50%;
+  bottom: 132px;
+  left: calc(50% + clamp(110px, 15vw, 190px));
   max-width: min(92vw, 680px);
   position: absolute;
   transform: translateX(-50%);
@@ -1768,6 +1768,20 @@ button:hover {
 .kan-announcement {
   background:
     radial-gradient(circle at center, rgba(255, 244, 167, 0.34), rgba(255, 122, 35, 0.18) 34%, rgba(0, 0, 0, 0.32) 64%),
+    rgba(0, 0, 0, 0.22);
+}
+
+.ron-announcement > div,
+.tsumo-announcement > div {
+  color: #fff6c7;
+  font-size: clamp(72px, 12vw, 144px);
+  text-shadow: 0 8px 0 #5b1710, 0 0 36px rgba(255, 227, 91, 0.9), 0 18px 42px rgba(0, 0, 0, 0.75);
+}
+
+.ron-announcement,
+.tsumo-announcement {
+  background:
+    radial-gradient(circle at center, rgba(255, 241, 118, 0.32), rgba(255, 62, 62, 0.18) 38%, rgba(0, 0, 0, 0.34) 68%),
     rgba(0, 0, 0, 0.22);
 }
 
@@ -2658,7 +2672,8 @@ button:hover {
   }
 
   .bottom-actions {
-    bottom: calc(max(54px, 14dvh) + env(safe-area-inset-bottom));
+    bottom: calc(max(74px, 17dvh) + env(safe-area-inset-bottom));
+    left: calc(50% + clamp(84px, 18vw, 150px));
     max-width: 96vw;
     transform: translateX(-50%);
     transform-origin: bottom center;
