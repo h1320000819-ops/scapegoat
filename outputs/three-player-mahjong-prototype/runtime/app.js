@@ -1908,6 +1908,18 @@ const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
 const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav" };
+const gameSoundCache = new Map();
+const getGameSoundAudio = (type) => {
+  const fileName = GAME_SOUND_FILES[type];
+  if (!fileName || typeof Audio === "undefined") return null;
+  if (!gameSoundCache.has(type)) {
+    const audio = new Audio(soundAssetPath(fileName));
+    audio.preload = "auto";
+    audio.volume = 0.92;
+    gameSoundCache.set(type, audio);
+  }
+  return gameSoundCache.get(type);
+};
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
   if (event.type === "pon") return "pon";
@@ -1927,8 +1939,10 @@ const playGameSound = (type, { key = "" } = {}) => {
   if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
   globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
   try {
-    const audio = new Audio(soundAssetPath(fileName));
+    const baseAudio = getGameSoundAudio(type);
+    const audio = baseAudio?.cloneNode ? baseAudio.cloneNode(true) : new Audio(soundAssetPath(fileName));
     audio.volume = 0.92;
+    audio.currentTime = 0;
     audio.play()?.catch?.(() => {});
   } catch {}
 };
@@ -5559,6 +5573,9 @@ class GameController {
     if (!pending) return;
     const action = actionType ? getActionOptions(pending).find((option) => option.type === actionType) : getActionOptions(pending)[0];
     if (!action) return;
+    if (action.type === "riichi") {
+      playGameSound("riichi", { key: `riichi-confirm:${action.playerId}:${this.state.turnIndex}` });
+    }
     if (isSocketAuthoritativeGame()) {
       submitOnlineGameAction(action.type, { action, localPlayerId: action.playerId }).catch((error) => {
         if (action.type === "ron") console.warn("[Ron] rejected", error);

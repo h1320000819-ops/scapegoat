@@ -3488,7 +3488,7 @@
     }
     if (response && response.status !== 404) {
       const data = await response.json().catch(() => ({}));
-      throw new Error(data?.error || "レーキ履歴の取得に失敗しました。");
+      log("サーバーAPIでのレーキ履歴取得に失敗したため、Supabaseから直接取得します。", data?.error || response.status);
     }
     const userFilter = userId ? "&user_id=eq." + encodeURIComponent(userId) : "";
     return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + userFilter + dateRangeQuery(activeRange) + "&order=created_at.desc");
@@ -3574,21 +3574,38 @@
   };
   const rakeRowUserId = (row = {}) => String(row.user_id || row.userId || "");
   const renderRakeCheckPage = async (body) => {
-    const clubId = selectedClubId();
-    if (!clubId) throw new Error(JA_MESSAGES.selectClub);
-    if (!isAdmin()) {
-      body.innerHTML = `<p class="muted">権限がありません。支払ったレーキを確認できるのは管理者だけです。</p>`;
-      return;
-    }
-    const range = getHistoryDateRange();
-    const [members, rows] = await Promise.all([
-      loadClubMembersForView(clubId),
-      fetchClubRakeRows(clubId, { range, userId: state.rakePlayerId || "" }),
-    ]);
-    if (!rows) {
-      body.innerHTML = `<p class="muted">${clubRakeLogsMissingMessage}</p>`;
-      return;
-    }
+    let clubId = "";
+    let range = getHistoryDateRange();
+    try {
+      clubId = selectedClubId();
+      if (!clubId) throw new Error(JA_MESSAGES.selectClub);
+      if (!isAdmin()) {
+        body.innerHTML = `<p class="muted">権限がありません。支払ったレーキを確認できるのは管理者だけです。</p>`;
+        return;
+      }
+      const rows = await fetchClubRakeRows(clubId, { range, userId: state.rakePlayerId || "" });
+      if (!rows) {
+        body.innerHTML = `<p class="muted">${clubRakeLogsMissingMessage}</p>`;
+        return;
+      }
+      let members = [];
+      try {
+        members = await loadClubMembersForView(clubId);
+      } catch (error) {
+        log("レーキ確認のメンバー一覧取得に失敗しました。履歴内の名前で表示します。", rawErrorText(error));
+      }
+      const knownMemberIds = new Set(members.map((member) => String(member.user_id || member.users?.user_id || "")).filter(Boolean));
+      for (const row of rows) {
+        const userId = rakeRowUserId(row);
+        if (!userId || knownMemberIds.has(userId)) continue;
+        knownMemberIds.add(userId);
+        members.push({
+          user_id: userId,
+          display_name: row.user_name || userId,
+          login_id: "",
+          users: { user_id: userId, display_name: row.user_name || userId, login_id: "" },
+        });
+      }
     const memberOptions = [
       `<option value="">全員</option>`,
       ...members.map((member) => {
@@ -3656,6 +3673,19 @@
       state.historyDateTo = "";
       renderRakeCheckPage(body).catch((error) => showError("レーキ確認の解除に失敗しました", error));
     });
+    } catch (error) {
+      body.innerHTML = `
+        <section class="card">
+          <h4>レーキ確認</h4>
+          <p class="muted">レーキ履歴の読み込みに失敗しました。</p>
+          <pre>${escapeHtml(getErrorText(error))}</pre>
+          <button type="button" id="retryRakeCheck">再読み込み</button>
+        </section>`;
+      body.querySelector("#retryRakeCheck")?.addEventListener("click", () => {
+        body.innerHTML = `<p class="muted">レーキ履歴を読み込み中...</p>`;
+        renderRakeCheckPage(body).catch((retryError) => showError("レーキ確認に失敗しました", retryError));
+      });
+    }
   };
   const ensureTsumoLossless3maCreateUi = () => {
     if (!has("ruleId")) return;

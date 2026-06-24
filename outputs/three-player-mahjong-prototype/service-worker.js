@@ -1,4 +1,4 @@
-const CACHE_NAME = "anmika-pwa-20260624-rake-check-a";
+const CACHE_NAME = "anmika-pwa-20260624-rake-check-fix-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v1";
 const APP_SHELL = [
   "/",
@@ -6,8 +6,8 @@ const APP_SHELL = [
   "/online-debug/index.html",
   "/replay.html",
   "/styles.css?v=20260624-top-nuki-horizontal-a",
-  "/runtime/app.js?v=20260624-replay-null-tile-a",
-  "/runtime/online-debug.js?v=20260624-rake-check-a",
+  "/runtime/app.js?v=20260624-riichi-sound-fix-a",
+  "/runtime/online-debug.js?v=20260624-rake-check-fix-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
