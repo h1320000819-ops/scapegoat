@@ -2864,19 +2864,21 @@ button:hover {
     align-items: flex-start;
     flex-direction: column;
     flex-wrap: nowrap;
-    gap: 22px;
+    gap: 10px;
   }
 
   .seat-right .hand-row > .meld-area {
-    margin-top: 18px;
+    margin-top: 34px;
   }
 
   .seat-right .hand-row > .meld-area .exposed-tiles {
-    gap: 22px !important;
+    gap: 10px !important;
   }
 
   .seat-right .hand-row > .meld-area .meld-set {
-    min-height: 52px;
+    justify-content: flex-start;
+    min-height: 40px;
+    width: var(--exposed-slot-width);
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
@@ -3658,8 +3660,10 @@ button:hover {
 }
 
 .seat-right .hand-row > .meld-area .meld-set {
+  justify-content: flex-start;
   margin-bottom: 0;
   min-height: 112px;
+  width: var(--exposed-slot-width);
 }
 
 .seat-right .hand-row > .meld-area .newest-meld {
