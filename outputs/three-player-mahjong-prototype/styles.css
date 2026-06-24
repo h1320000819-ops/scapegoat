@@ -3953,6 +3953,7 @@ button:hover {
 .mahjong-table {
   --safe-center-x: 50%;
   --safe-center-y: calc(50% + var(--center-y-offset));
+  --center-river-margin: clamp(4px, 0.75vw, 10px);
   --safe-edge-gap: clamp(10px, 1.7vw, 26px);
   --safe-right-lane-width: clamp(126px, 13vw, 188px);
   --safe-top-lane-height: clamp(82px, 15dvh, 126px);
@@ -3961,7 +3962,7 @@ button:hover {
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: clamp(10px, 2.1dvh, 28px);
   --safe-right-meld-height: calc(var(--safe-other-tile-width) * 3 + 2px);
-  --safe-river-side-gap: clamp(12px, 2vw, 28px);
+  --safe-river-side-gap: var(--center-river-margin);
 }
 
 .mahjong-table .center-info {
@@ -3971,13 +3972,13 @@ button:hover {
 
 .mahjong-table .discard-bottom {
   left: var(--safe-center-x);
-  top: calc(var(--safe-center-y) + (var(--center-info-height) / 2) + var(--river-center-gap) + 10px);
+  top: calc(var(--safe-center-y) + (var(--center-info-height) / 2) + var(--center-river-margin));
   transform: translateX(-50%);
 }
 
 .mahjong-table .discard-top {
   left: var(--safe-center-x);
-  top: calc(var(--safe-center-y) - (var(--center-info-height) / 2) - var(--river-height) - 10px);
+  top: calc(var(--safe-center-y) - (var(--center-info-height) / 2) - var(--river-height) - var(--center-river-margin));
   transform: translateX(-50%) rotate(180deg);
 }
 
@@ -4047,6 +4048,22 @@ button:hover {
   min-height: 0;
   overflow: visible !important;
   width: 100% !important;
+}
+
+.mahjong-table .seat-bottom .hand-row {
+  --draw-tile-gap: var(--self-tile-width);
+}
+
+.mahjong-table .seat-bottom .hand-row > .drawn-tile-slot {
+  margin-left: 0 !important;
+}
+
+.mahjong-table .seat-top .hand-row > .drawn-tile-slot {
+  margin-right: var(--safe-other-tile-width) !important;
+}
+
+.mahjong-table .seat-right .hand-row > .drawn-tile-slot {
+  margin-bottom: var(--safe-other-tile-height) !important;
 }
 
 .mahjong-table .seat-right .tile,
@@ -4119,13 +4136,14 @@ button:hover {
 @media (max-width: 920px) and (orientation: landscape) {
   .mahjong-table {
     --safe-center-y: 42%;
+    --center-river-margin: clamp(2px, 0.8dvh, 5px);
     --safe-edge-gap: max(6px, env(safe-area-inset-right));
     --safe-right-lane-width: clamp(74px, 14dvw, 112px);
     --safe-top-lane-height: clamp(46px, 13dvh, 64px);
     --safe-bottom-lane-height: clamp(72px, 19dvh, 92px);
     --safe-other-tile-width: clamp(14px, 4.2dvh, 19px);
     --safe-right-meld-gap: clamp(3px, 1.3dvh, 8px);
-    --safe-river-side-gap: clamp(6px, 1.2dvw, 12px);
+    --safe-river-side-gap: var(--center-river-margin);
   }
 
   .mahjong-table .seat-right {
