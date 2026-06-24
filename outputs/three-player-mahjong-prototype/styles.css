@@ -2789,21 +2789,21 @@ button:hover {
   .seat-bottom .nuki-dora-area .exposed-tiles,
   .seat-top .meld-area .exposed-tiles,
   .seat-top .nuki-dora-area .exposed-tiles {
-    gap: 7px;
+    gap: 14px;
   }
 
   .seat-bottom .meld-area .exposed-tiles,
   .seat-bottom .nuki-dora-area .exposed-tiles {
     flex-direction: row;
     flex-wrap: nowrap;
-    gap: 3px;
+    gap: 8px;
   }
 
   .seat-bottom .meld-set,
   .seat-top .meld-set {
     gap: 0;
-    margin-right: 7px;
-    min-height: 40px;
+    margin-right: 14px;
+    min-height: 46px;
   }
 
   .seat-bottom .meld-tiles,
@@ -2849,7 +2849,7 @@ button:hover {
   .seat-right .meld-set {
     gap: 0;
     margin-right: 0;
-    min-height: 42px;
+    min-height: 64px;
     transform: none;
     transform-origin: top left;
   }
@@ -2864,7 +2864,7 @@ button:hover {
     align-items: flex-start;
     flex-direction: column;
     flex-wrap: nowrap;
-    gap: 18px;
+    gap: 32px;
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
@@ -3641,8 +3641,13 @@ button:hover {
 .seat-right .hand-row > .meld-area .exposed-tiles {
   align-items: flex-end !important;
   flex-direction: column !important;
-  gap: 8px;
+  gap: 34px;
   justify-content: flex-start !important;
+}
+
+.seat-right .hand-row > .meld-area .meld-set {
+  margin-bottom: 0;
+  min-height: 78px;
 }
 
 .seat-right .hand-row > .meld-area .newest-meld {
