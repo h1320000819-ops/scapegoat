@@ -3342,7 +3342,13 @@ const countServerIndicatorDora = (indicators, tiles) => {
   }));
   return ensureArray(tiles).filter((tile) => doraKeys.has(tileKindKey(tile))).length;
 };
+const getActiveServerFeverRiichiPlayer = (state) =>
+  ensureArray(state?.players).find((player) => player?.feverRiichiActive && (player.feverWinCount ?? 0) < 2) || null;
 const evaluateServerWin = (state, player, tile, winType) => {
+  const activeFever = getActiveServerFeverRiichiPlayer(state);
+  if (activeFever && activeFever.id !== player?.id) {
+    return { canWin: false, reason: "フィーバーリーチ中はフィーバーリーチ者以外は和了できません" };
+  }
   const winningTile = tile || player?.drawnTile || null;
   const concealedTiles = [...ensureArray(player?.hand), ...(winningTile ? [winningTile] : [])].filter((item) => !isFlowerTile(item));
   const melds = ensureArray(player?.melds);
@@ -3698,10 +3704,14 @@ const queueServerDiscardTurnOptions = (state, player, source = { type: "discardT
   ], source);
 };
 const canServerTsumo = (state, player) => {
+  const activeFever = getActiveServerFeverRiichiPlayer(state);
+  if (activeFever && activeFever.id !== player?.id) return false;
   if (isServerWhitePochiTile(player?.drawnTile) && resolveServerPochiWin(state, player, player.drawnTile, "tsumo")) return true;
   return evaluateServerWin(state, player, player?.drawnTile, "tsumo").canWin;
 };
 const canServerRon = (state, player, sourceTile) => {
+  const activeFever = getActiveServerFeverRiichiPlayer(state);
+  if (activeFever && activeFever.id !== player?.id) return false;
   const waits = getWinningTilesForServerTenpai(player);
   if (!waits.some((wait) => sameTileKind(wait, sourceTile))) return false;
   if (isServerFuritenForWaits(player, waits)) return false;
@@ -3775,7 +3785,7 @@ const beginServerRiichiAutoDiscard = (state, player) => {
 };
 const queueServerSelfDrawOptions = (state, player) => {
   if (!player || player.type === "cpu") return false;
-  const feverPlayer = ensureArray(state.players).find((item) => item.feverRiichiActive && (item.feverWinCount ?? 0) < 2);
+  const feverPlayer = getActiveServerFeverRiichiPlayer(state);
   if (feverPlayer && feverPlayer.id !== player.id) return beginServerRiichiAutoDiscard(state, player);
   const options = [];
   const canKanNow = canServerDeclareKanNow(state);
@@ -4134,9 +4144,9 @@ const applyServerPonRevealEffect = (state) => {
   return true;
 };
 const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
-  const feverPlayer = ensureArray(state.players).find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
-  if (feverPlayer && feverPlayer.id !== fromPlayerId) {
-    if (canServerRon(state, feverPlayer, sourceTile)) {
+  const feverPlayer = getActiveServerFeverRiichiPlayer(state);
+  if (feverPlayer) {
+    if (feverPlayer.id !== fromPlayerId && canServerRon(state, feverPlayer, sourceTile)) {
       applyServerAction(state, { playerId: feverPlayer.id, actionType: "ron", payload: { action: { type: "ron", playerId: feverPlayer.id, fromPlayerId, sourceTile }, fromPlayerId, sourceTile } });
       return true;
     }
@@ -4353,7 +4363,6 @@ const applyServerAction = (state, event) => {
       ? ensureArray(payload.serverAutoOkPlayerIds).filter((id) => requiredOkPlayerIds.includes(id))
       : [];
     const extraOkPlayerIds = [...new Set([...timedOutAutoOkPlayerIds, ...serverAutoOkPlayerIds])];
-    if (asArray(state.resultOkPlayerIds).includes(player.id) && !extraOkPlayerIds.length) return state;
     state.resultOkPlayerIds = [...new Set([
       ...(state.resultOkPlayerIds ?? []),
       player.id,

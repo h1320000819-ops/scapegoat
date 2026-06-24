@@ -19,7 +19,7 @@ const installResultOkClickBridge = () => {
     if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 0) return;
     const resultId = resultOk.dataset?.resultId || "";
     const nowMs = Date.now();
-    if (resultId && resultId === lastHandledResultId && nowMs - lastHandledAt < 1200) {
+    if (resultId && resultId === lastHandledResultId && nowMs - lastHandledAt < 180) {
       event.preventDefault();
       event.stopImmediatePropagation?.();
       event.stopPropagation();
@@ -1940,12 +1940,29 @@ const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/ti
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
 const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", baiba: "baiba.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
+const gameSoundPools = new Map();
 const soundFileNamesForType = (type) => {
   const files = GAME_SOUND_FILES[type];
   return Array.isArray(files) ? files : files ? [files] : [];
 };
+const mimeTypeForSoundFile = (fileName) => {
+  const ext = String(fileName || "").split(".").pop()?.toLowerCase();
+  if (ext === "m4a") return "audio/mp4";
+  if (ext === "mp3") return "audio/mpeg";
+  if (ext === "wav") return "audio/wav";
+  return "";
+};
+const selectSupportedSoundFile = (type) => {
+  const fileNames = soundFileNamesForType(type);
+  if (!fileNames.length || typeof Audio === "undefined") return "";
+  const tester = new Audio();
+  return fileNames.find((fileName) => {
+    const mimeType = mimeTypeForSoundFile(fileName);
+    return !mimeType || tester.canPlayType(mimeType) !== "";
+  }) || fileNames[0];
+};
 const getGameSoundAudio = (type) => {
-  const fileName = soundFileNamesForType(type)[0];
+  const fileName = selectSupportedSoundFile(type);
   if (!fileName || typeof Audio === "undefined") return null;
   if (!gameSoundCache.has(type)) {
     const audio = new Audio(soundAssetPath(fileName));
@@ -1954,6 +1971,32 @@ const getGameSoundAudio = (type) => {
     gameSoundCache.set(type, audio);
   }
   return gameSoundCache.get(type);
+};
+const getGameSoundPool = (type) => {
+  if (typeof Audio === "undefined") return [];
+  if (!gameSoundPools.has(type)) {
+    const fileName = selectSupportedSoundFile(type);
+    if (!fileName) return [];
+    const poolSize = type === "discard" ? 10 : 5;
+    const pool = Array.from({ length: poolSize }, () => {
+      const audio = new Audio(soundAssetPath(fileName));
+      audio.preload = "auto";
+      audio.volume = 0.92;
+      audio.__anmikaStartedAt = 0;
+      audio.load?.();
+      return audio;
+    });
+    gameSoundPools.set(type, pool);
+  }
+  return gameSoundPools.get(type) || [];
+};
+const getPlayableGameSoundAudio = (type) => {
+  const pool = getGameSoundPool(type);
+  if (!pool.length) return getGameSoundAudio(type);
+  const available = pool.find((audio) => audio.paused || audio.ended || audio.currentTime === 0);
+  const audio = available || [...pool].sort((a, b) => (a.__anmikaStartedAt || 0) - (b.__anmikaStartedAt || 0))[0];
+  audio.__anmikaStartedAt = Date.now();
+  return audio;
 };
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
@@ -2009,19 +2052,48 @@ const playGameSound = (type, { key = "" } = {}) => {
   const nowMs = Date.now();
   const cacheKey = key || `${type}:${nowMs}`;
   globalThis.__anmikaSoundHistory ??= {};
-  if (key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < (type === "discard" ? 180 : 1200)) return;
-  if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
+  if (key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < (type === "discard" ? 60 : 450)) return;
+  if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 450) return;
   globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
   try {
-    const baseAudio = getGameSoundAudio(type);
-    const audio = baseAudio?.cloneNode ? baseAudio.cloneNode(true) : new Audio(soundAssetPath(fileNames[0]));
+    const audio = getPlayableGameSoundAudio(type) || new Audio(soundAssetPath(selectSupportedSoundFile(type) || fileNames[0]));
     audio.volume = 0.92;
     audio.currentTime = 0;
     audio.play()?.catch?.(() => {
-      if (fileNames[1]) playAudioFile(fileNames[1]).catch?.(() => {});
+      const fallback = fileNames.find((fileName) => fileName !== selectSupportedSoundFile(type));
+      if (fallback) playAudioFile(fallback).catch?.(() => {});
     });
   } catch {}
 };
+const unlockGameSounds = () => {
+  if (globalThis.__anmikaGameSoundsUnlocked || typeof Audio === "undefined") return;
+  globalThis.__anmikaGameSoundsUnlocked = true;
+  Object.keys(GAME_SOUND_FILES).forEach((type) => {
+    getGameSoundPool(type).forEach((audio) => {
+      try {
+        const originalVolume = audio.volume;
+        audio.muted = true;
+        audio.volume = 0;
+        audio.currentTime = 0;
+        const promise = audio.play?.();
+        promise?.then?.(() => {
+          audio.pause?.();
+          audio.currentTime = 0;
+          audio.muted = false;
+          audio.volume = originalVolume || 0.92;
+        })?.catch?.(() => {
+          audio.muted = false;
+          audio.volume = originalVolume || 0.92;
+        });
+      } catch {}
+    });
+  });
+};
+if (typeof document !== "undefined") {
+  ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
+    document.addEventListener(eventName, unlockGameSounds, { once: true, passive: true });
+  });
+}
 const rocketAssetExtension = (rank) => (rank === 1 || rank === 5 || rank === 9) ? "png" : "jpg";
 const normalizeTileForView = (tile) => {
   if (!tile) return tile;
@@ -2384,8 +2456,8 @@ const renderResultOkButton = (state) => {
   const isConfirmed = hasLocalPlayerConfirmedResult(state);
   const isSubmitting = Boolean(state.resultOkSubmitted && !isConfirmed);
   const countText = requiredIds.length > 1 ? ` ${okIds.filter((id) => requiredIds.includes(id)).length}/${requiredIds.length}` : "";
-  const disabledAttr = isConfirmed || isSubmitting ? " disabled aria-disabled=\"true\"" : "";
-  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}"${disabledAttr}>${isConfirmed ? `OK済み (${countdown}秒)${countText}` : isSubmitting ? `OK送信中 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
+  const disabledAttr = isConfirmed ? " disabled aria-disabled=\"true\"" : "";
+  return `<button type="button" class="primary-action" data-result-ok data-result-id="${escapeHtml(getCurrentResultId(state))}"${disabledAttr}>${isConfirmed ? `OK済み (${countdown}秒)${countText}` : isSubmitting ? `OK再送 (${countdown}秒)${countText}` : `OK (${countdown}秒)${countText}`}</button>`;
 };
 const renderAgariYameButton = (state) => {
   if (!canLocalPlayerAgariYame(state)) return "";
@@ -2987,7 +3059,13 @@ const evaluateWinExplicit = (state, player, tile) => {
 class RuleEngine {
   canDraw(state, player) { return (state.phase === "playing" || state.phase === "waitingForHumanDiscard") && state.liveWall.length > 0 && player.status === "active" && !player.drawnTile; }
   canDiscard(_state, player, tile) { return player.drawnTile?.id === tile.id || player.hand.some((t) => t.id === tile.id); }
-  canWin(state, player, tile) { return evaluateWinExplicit(state, player, tile); }
+  canWin(state, player, tile) {
+    const activeFever = getActiveFeverRiichiPlayer(state);
+    if (activeFever && activeFever.id !== player?.id) {
+      return { canWin: false, reason: "フィーバーリーチ中はフィーバーリーチ者以外は和了できません" };
+    }
+    return evaluateWinExplicit(state, player, tile);
+  }
   calculateScore(state, _winner, input) {
     const normalDora = input.doraCount ?? countIndicatorDora(state.doraIndicators, input.winningTiles);
     const colored = input.winningTiles.filter((tile) => ["red", "blue", "gold", "turquoise"].includes(tile.color)).length;
@@ -5276,7 +5354,7 @@ class GameController {
       if (
         this.state.resultOkSubmitted &&
         this.state.resultOkSubmittedResultId === currentResultId &&
-        Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 6000
+        Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 700
       ) return;
       const requestId = `result-ok-${result.resultId || "result"}-${localPlayerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.state.resultOkSubmitted = true;
@@ -5288,7 +5366,7 @@ class GameController {
         this.state.handLog.result.resultOkPlayerIds = [...new Set([...(this.state.handLog.result.resultOkPlayerIds || []), localPlayerId])];
       }
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 8000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 5000 }).then(async (response) => {
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? loadOnlineSync()?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
           this.applyOnlineStateSnapshot(response.state);
@@ -5327,12 +5405,8 @@ class GameController {
         this.state.resultOkSubmitted = false;
         this.state.resultOkSubmittedResultId = "";
         this.state.resultAutoCloseHandled = false;
-        this.state.resultOkPlayerIds = (this.state.resultOkPlayerIds || []).filter((id) => id !== localPlayerId);
-        if (this.state.handLog?.result?.resultId === result.resultId) {
-          this.state.handLog.result.resultOkPlayerIds = (this.state.handLog.result.resultOkPlayerIds || []).filter((id) => id !== localPlayerId);
-        }
         console.warn("[SocketGame] result ok failed", error);
-        this.state.log.unshift(`オンライン次局開始に失敗: ${error.message}`);
+        this.state.log.unshift(`OK送信を再試行できます: ${error.message}`);
         this.emit();
         this.resyncSocketGameState("resultOkFailed").catch(() => {});
       });
@@ -5820,6 +5894,13 @@ class GameController {
   }
   finishHand(input) {
     const winner = this.getPlayer(input.winnerId ?? getCurrentPlayer(this.state).id);
+    const activeFever = getActiveFeverRiichiPlayer(this.state);
+    if (activeFever && activeFever.id !== winner.id) {
+      console.warn("[FeverRiichi] blocked non-fever win", { feverPlayerId: activeFever.id, winnerId: winner.id, winType: input.winType });
+      this.state.lastError = "フィーバーリーチ中はフィーバーリーチ者以外は和了できません";
+      this.emit();
+      return null;
+    }
     const meldTiles = winner.melds.flatMap((meld) => meld.tiles ?? []);
     const winningTiles = [...input.winningTiles, ...(input.drawnTile ? [input.drawnTile] : []), ...meldTiles].filter((t) => !isFlowerTile(t));
     const score = input.scoreResult ?? this.ruleEngine.calculateScore(this.state, winner, { ...input, winnerId: winner.id, dealerPlayerId: this.state.round.dealerPlayerId, playerIds: this.state.players.map((p) => p.id), winningTiles, nukiDoraCount: winner.nukiDoraTiles.length, nukiDoraTiles: winner.nukiDoraTiles });
@@ -5888,8 +5969,9 @@ class GameController {
     return score;
   }
   queueResponseAfterDiscard(fromPlayerId, tile) {
-    const feverPlayer = this.state.players.find((p) => p.id !== fromPlayerId && p.feverRiichiActive && (p.feverWinCount ?? 0) < 2);
+    const feverPlayer = getActiveFeverRiichiPlayer(this.state);
     if (feverPlayer) {
+      if (feverPlayer.id === fromPlayerId) return false;
       const ron = this.ruleEngine.canWin(this.state, feverPlayer, tile);
       if (ron.canWin && !feverPlayer.sameTurnFuriten && !isPermanentFuriten(this.state, feverPlayer)) {
         this.finishHand({ winnerId: feverPlayer.id, winType: "ron", discarderId: fromPlayerId, yaku: ron.yaku ?? [], winningTiles: [...feverPlayer.hand, tile], selectedWait: tile, isRiichi: feverPlayer.isRiichi, isIppatsu: feverPlayer.ippatsu });
@@ -5916,6 +5998,7 @@ class GameController {
     return false;
   }
   queueCallAfterDiscard(tile, fromPlayerId, alreadySkippedRon) {
+    if (getActiveFeverRiichiPlayer(this.state)) return false;
     const human = this.state.players.find((p) => p.type === "human" && p.id !== fromPlayerId);
     if (!human || !tile) return false;
     if (!hasLiveWallAfterCurrentDraw(this.state)) return false;
@@ -5933,6 +6016,12 @@ class GameController {
   }
   confirmTsumo(action) {
     const player = this.getPlayer(action.playerId);
+    const activeFever = getActiveFeverRiichiPlayer(this.state);
+    if (activeFever && activeFever.id !== player.id) {
+      this.state.lastError = "フィーバーリーチ中はフィーバーリーチ者以外は和了できません";
+      this.emit();
+      return;
+    }
     const tile = player.drawnTile ?? action.sourceTile;
     const pochiResolution = resolvePochiWin(this.state, player, tile, this.ruleEngine);
     if (pochiResolution) {
@@ -5943,6 +6032,12 @@ class GameController {
   }
   confirmRon(action) {
     const player = this.getPlayer(action.playerId);
+    const activeFever = getActiveFeverRiichiPlayer(this.state);
+    if (activeFever && activeFever.id !== player.id) {
+      this.state.lastError = "フィーバーリーチ中はフィーバーリーチ者以外は和了できません";
+      this.emit();
+      return;
+    }
     this.finishHand({ winnerId: player.id, winType: "ron", discarderId: action.fromPlayerId, yaku: action.options?.yaku ?? [], winningTiles: [...player.hand, action.sourceTile], selectedWait: action.sourceTile, isRiichi: player.isRiichi, isIppatsu: player.ippatsu });
   }
   confirmRiichi(action) {
@@ -6043,6 +6138,20 @@ class GameController {
   }
   queueTsumoKanRiichiDiscard(playerId) {
     const player = this.getPlayer(playerId);
+    const activeFever = getActiveFeverRiichiPlayer(this.state);
+    if (activeFever && activeFever.id !== player.id) {
+      this.state.pendingAction = null;
+      this.state.phase = "playing";
+      this.state.isWaitingForHumanAction = false;
+      this.emit();
+      if (player.drawnTile) {
+        const tsumogiriTileId = player.drawnTile.id;
+        setTimeout(() => {
+          if (this.state.phase === "playing" && player.drawnTile?.id === tsumogiriTileId) this.discardTile(tsumogiriTileId);
+        }, 600);
+      }
+      return;
+    }
     const options = [];
     if (player.drawnTile) {
       if (isWhitePochiTile(player.drawnTile) && player.isRiichi && resolvePochiWin(this.state, player, player.drawnTile, this.ruleEngine)) {

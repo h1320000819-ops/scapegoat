@@ -109,9 +109,9 @@ button:hover {
 
 .mahjong-table::after {
   background: #55B0FF;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-radius: 18px;
-  box-shadow: inset 0 0 42px rgba(255, 255, 255, 0.08), 0 18px 60px rgba(0, 0, 0, 0.55);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   content: "";
   height: min(calc(100dvh - 88px), calc((100vw - 168px) / var(--table-surface-aspect)));
   left: 50%;
@@ -123,8 +123,9 @@ button:hover {
 }
 
 .table-frame {
-  border: 2px solid rgba(8, 22, 36, 0.58);
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
+  border: 0;
+  box-shadow: none;
+  display: none;
   height: min(38vw, 430px, 58dvh);
   left: 50%;
   pointer-events: none;
@@ -1405,7 +1406,7 @@ button:hover {
   display: grid;
   font-size: 14px;
   gap: 6px;
-  left: calc(50% - (var(--center-info-width) / 2) - 122px);
+  left: calc(50% - (var(--center-info-width) / 2) - 172px);
   margin: 0;
   opacity: 0.94;
   padding: 8px;
@@ -3081,7 +3082,7 @@ button:hover {
   .assist-controls {
     font-size: 12px;
     gap: 5px;
-    left: calc(50% - (var(--center-info-width) / 2) - 84px);
+    left: calc(50% - (var(--center-info-width) / 2) - 124px);
     padding: 5px;
     top: 42%;
     transform: translate(-60%, -150%);
@@ -4159,7 +4160,7 @@ button:hover {
     max-height: calc(var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height));
     min-height: 0;
     right: max(4px, env(safe-area-inset-right));
-    top: calc(var(--safe-top-lane-height) + ((var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height)) / 2));
+    top: calc(var(--safe-top-lane-height) + ((var(--anmika-viewport-height, 100dvh) - var(--safe-top-lane-height) - var(--safe-bottom-lane-height)) / 2) + 18px);
     width: var(--safe-right-lane-width);
   }
 
@@ -4181,7 +4182,7 @@ button:hover {
   }
 
   .mahjong-table .seat-top {
-    left: 50% !important;
+    left: 42% !important;
     top: 8px;
     width: calc(100vw - var(--safe-right-lane-width) - 28px);
   }
@@ -4282,4 +4283,36 @@ button:hover {
 
 .mahjong-table .seat-right .meld-area .kakan-added.meld-rotate-ccw90 {
   transform: translateX(-50%) rotate(-90deg) !important;
+}
+
+/* Right-seat melds: build the self-seat meld horizontally, then rotate the whole meld block. */
+.mahjong-table .seat-right .hand-row > .meld-area .meld-set.meld-set-rotate-ccw90 {
+  transform: rotate(-90deg) !important;
+  transform-origin: center;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tiles {
+  align-items: center !important;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 1px !important;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile .tile {
+  transform: rotate(0deg) !important;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile.sideways .tile,
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile.called-tile .tile,
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile.meld-rotate-cw90 .tile {
+  transform: rotate(90deg) !important;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile.meld-rotate-180 .tile {
+  transform: rotate(180deg) !important;
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-tile.meld-rotate-ccw90 .tile {
+  transform: rotate(-90deg) !important;
 }

@@ -1,12 +1,12 @@
-const CACHE_NAME = "anmika-pwa-20260625-flat-blue-table-a";
-const TILE_CACHE_NAME = "anmika-tile-assets-v5";
+const CACHE_NAME = "anmika-pwa-20260625-result-ok-reliable-a";
+const TILE_CACHE_NAME = "anmika-tile-assets-v6";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260625-flat-blue-table-a",
-  "/runtime/app.js?v=20260625-flat-blue-table-a",
+  "/styles.css?v=20260625-result-ok-reliable-a",
+  "/runtime/app.js?v=20260625-result-ok-reliable-a",
   "/runtime/online-debug.js?v=20260624-reseat-reset-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
@@ -19,6 +19,8 @@ const APP_SHELL = [
   "/sounds/riichi.wav",
   "/sounds/fever-riichi.wav",
   "/sounds/baiba.wav",
+  "/sounds/pochi-tsumo-red.wav",
+  "/sounds/pochi-tsumo-blue.wav",
   "/sounds/dapai.m4a",
   "/sounds/discard.m4a",
   "/sounds/discard.mp3",
