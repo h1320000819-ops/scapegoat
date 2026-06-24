@@ -1907,7 +1907,7 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav" };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: "discard.mp3" };
 const gameSoundCache = new Map();
 const getGameSoundAudio = (type) => {
   const fileName = GAME_SOUND_FILES[type];
@@ -1922,6 +1922,7 @@ const getGameSoundAudio = (type) => {
 };
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
+  if (event.type === "discard") return "discard";
   if (event.type === "pon") return "pon";
   if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return "kan";
   if (event.type === "tsumo") return "tsumo";
@@ -4142,6 +4143,9 @@ class GameController {
       })
       : "";
     const latestEvent = next.handLog?.events?.at?.(-1);
+    if (latestEvent?.type === "discard") {
+      playGameSound("discard", { key: `discard:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.tileId || latestEvent.tile?.id || ""}` });
+    }
     if (latestEvent?.type === "riichi") {
       const announcementKey = `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}`;
       if (announcementKey !== this.lastDisplayedAnnouncementKey) {
@@ -5597,6 +5601,7 @@ class GameController {
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
+    playGameSound("discard", { key: `local-discard:${player.id}:${this.state.turnIndex}:${tileId}` });
     if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
       player.ippatsu = false;
       player.ippatsuOwnDrawStarted = false;
@@ -6905,7 +6910,7 @@ class GameView {
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${anmikaConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="otokogiEnabled" ${anmikaConfig.otokogiEnabled ? "checked" : ""} /> 漢気ルール</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="feverRiichiEnabled" ${anmikaConfig.feverRiichiEnabled ? "checked" : ""} /> フィーバーリーチ</label>
-          <label class="setting-row"><span>ターコイズ5p: ${anmikaConfig.turquoise5pCount}枚</span><select data-rule-config-turquoise>
+          <label class="setting-row compact-select-row"><span>ターコイズ5p</span><select data-rule-config-turquoise>
             ${[0, 1, 2].map((count) => `<option value="${count}" ${anmikaConfig.turquoise5pCount === count ? "selected" : ""}>${count}枚</option>`).join("")}
           </select></label>
         `}

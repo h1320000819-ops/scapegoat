@@ -918,6 +918,23 @@ button:hover {
   flex: 0 0 auto;
 }
 
+.setting-row.compact-select-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  max-width: 360px;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.setting-row.compact-select-row select {
+  flex: 0 0 auto;
+  min-width: 74px;
+  padding: 5px 8px;
+  width: auto;
+}
+
 .setting-row input[type="range"] {
   width: 100%;
 }
@@ -1284,20 +1301,37 @@ button:hover {
 }
 
 .assist-controls {
-  align-items: center;
-  color: rgba(255, 255, 255, 0.86);
-  display: flex;
+  align-items: stretch;
+  background: rgba(4, 12, 20, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.9);
+  display: grid;
   font-size: 14px;
-  gap: 12px;
-  justify-content: center;
-  margin-top: 6px;
-  opacity: 0.88;
+  gap: 6px;
+  left: clamp(10px, 2vw, 24px);
+  margin: 0;
+  opacity: 0.94;
+  padding: 8px;
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 26;
 }
 
 .assist-controls label {
   align-items: center;
-  display: inline-flex;
-  gap: 4px;
+  display: flex;
+  flex-direction: row-reverse;
+  gap: 8px;
+  justify-content: space-between;
+  line-height: 1;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+.assist-controls input[type="checkbox"] {
+  flex: 0 0 auto;
 }
 
 .seat-top .exposed-row {
@@ -2753,7 +2787,15 @@ button:hover {
 
   .assist-controls {
     font-size: 12px;
-    gap: 8px;
+    gap: 5px;
+    left: max(4px, env(safe-area-inset-left));
+    padding: 5px;
+    top: 46%;
+  }
+
+  .assist-controls label {
+    gap: 5px;
+    min-width: 74px;
   }
 
   .settings-toggle {

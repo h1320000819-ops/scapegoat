@@ -69,18 +69,14 @@
       }
       label { display: grid; gap: 6px; margin: 8px 0; }
       .inline-range-label {
-        align-items: center;
-        display: flex;
-        flex-wrap: nowrap;
-        gap: 10px;
+        display: grid;
+        gap: 6px;
       }
       .inline-range-label .range-text {
-        flex: 0 0 auto;
         white-space: nowrap;
       }
       .inline-range-label input[type="range"] {
-        flex: 1 1 160px;
-        min-width: 140px;
+        width: 100%;
       }
       .inline-checkbox-label {
         align-items: center;
@@ -93,6 +89,20 @@
       }
       .inline-checkbox-label input[type="checkbox"] {
         flex: 0 0 auto;
+      }
+      .inline-select-label {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        max-width: 360px;
+        white-space: nowrap;
+      }
+      .inline-select-label select {
+        flex: 0 0 auto;
+        min-width: 74px;
+        padding: 5px 8px;
+        width: auto;
       }
       input, select, button {
         font: inherit;
@@ -301,8 +311,6 @@
       <div class="top">
         <div>
           <h1>ロビー</h1>
-          <p id="configStatus">確認中...</p>
-          <p id="lanHint" class="warn"></p>
         </div>
         <div class="signed-in-only">
           <p>現在のユーザー: <strong id="currentUser">未ログイン</strong></p>
@@ -401,7 +409,7 @@
             <label class="inline-checkbox-label"><input id="baibaEnabled" type="checkbox" checked /> 倍場</label>
             <label class="inline-checkbox-label"><input id="otokogiEnabled" type="checkbox" checked /> 漢気ルール</label>
             <label class="inline-checkbox-label"><input id="feverRiichiEnabled" type="checkbox" checked /> フィーバーリーチ</label>
-            <label>ターコイズ5p
+            <label class="inline-select-label">ターコイズ5p
               <select id="turquoise5pCount">
                 <option value="0">0枚</option>
                 <option value="1">1枚</option>
@@ -491,7 +499,7 @@
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
     <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
-    <script src="../runtime/online-debug.js?v=20260624-create-form-inline-a"></script>
+    <script src="../runtime/online-debug.js?v=20260624-discard-sound-a"></script>
   </body>
 </html>
 
