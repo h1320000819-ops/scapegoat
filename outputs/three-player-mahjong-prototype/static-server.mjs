@@ -22,13 +22,14 @@ const mimeTypes = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".wav": "audio/wav",
 };
 
 const cacheControlFor = (filePath, url, pathname) => {
   const ext = path.extname(filePath).toLowerCase();
   if (pathname === "/service-worker.js" || pathname === "/manifest.json") return "no-store";
   if (ext === ".html") return "no-store";
-  if (pathname.startsWith("/tiles/") || [".png", ".jpg", ".jpeg", ".webp", ".svg"].includes(ext)) {
+  if (pathname.startsWith("/tiles/") || pathname.startsWith("/sounds/") || [".png", ".jpg", ".jpeg", ".webp", ".svg", ".wav"].includes(ext)) {
     return "public, max-age=31536000, immutable";
   }
   if (url.searchParams.has("v") && [".js", ".css"].includes(ext)) {
@@ -146,8 +147,18 @@ const handleClubRakeApi = async (request, response, clubId) => {
       return;
     }
     const isAdmin = member.role === "admin";
-    const userFilter = isAdmin ? "" : `&user_id=eq.${encodeURIComponent(user.id)}`;
-    const rows = await supabaseServerRest(`/club_rake_logs?select=*&club_id=eq.${encodeURIComponent(clubId)}${userFilter}&order=created_at.desc&limit=1000`);
+    if (!isAdmin) {
+      sendJson(response, 403, { ok: false, error: "支払レーキ履歴はクラブ管理者のみ確認できます。" });
+      return;
+    }
+    const url = new URL(request.url ?? "/", `http://${host}:${port}`);
+    const from = url.searchParams.get("from") || "";
+    const to = url.searchParams.get("to") || "";
+    const dateFilter = [
+      from ? `&created_at=gte.${encodeURIComponent(from)}` : "",
+      to ? `&created_at=lt.${encodeURIComponent(to)}` : "",
+    ].join("");
+    const rows = await supabaseServerRest(`/club_rake_logs?select=*&club_id=eq.${encodeURIComponent(clubId)}${dateFilter}&order=created_at.desc&limit=1000`);
     sendJson(response, 200, { ok: true, isAdmin, rows: Array.isArray(rows) ? rows : [] });
   } catch (error) {
     console.error("[ClubRakeApi] failed", { clubId, error: error?.message || String(error) });
@@ -175,7 +186,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (pathname === "/.env" || pathname.startsWith("/.env.")) throw new Error("Not found");
-    const assetPathname = pathname.startsWith("/tiles/") ? `/public${pathname}` : pathname;
+    const assetPathname = (pathname.startsWith("/tiles/") || pathname.startsWith("/sounds/")) ? `/public${pathname}` : pathname;
     let filePath = path.join(root, assetPathname === "/" ? "index.html" : assetPathname);
 
     if (!filePath.startsWith(root)) throw new Error("Invalid path");
@@ -186,6 +197,9 @@ const server = http.createServer(async (request, response) => {
     } catch {
       if (pathname.startsWith("/replay/")) {
         filePath = path.join(root, "replay.html");
+      }
+      else if (pathname === "/auth/callback") {
+        filePath = path.join(root, "online-debug", "index.html");
       }
       else if (pathname.startsWith("/table/") || pathname === "/online-debug") {
         filePath = path.join(root, "index.html");

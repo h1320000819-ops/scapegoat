@@ -46,15 +46,13 @@ alter table public.club_rake_logs enable row level security;
 
 drop policy if exists "rake club members read own or admin" on public.club_rake_logs;
 drop policy if exists "rake club admins read" on public.club_rake_logs;
+drop policy if exists "rake club members read" on public.club_rake_logs;
 drop policy if exists "rake club members insert" on public.club_rake_logs;
 
-create policy "rake club members read own or admin"
+create policy "rake club admins read"
 on public.club_rake_logs for select
 to authenticated
-using (
-  public.is_club_admin(club_id, auth.uid())
-  or user_id = auth.uid()
-);
+using (public.is_club_admin(club_id, auth.uid()));
 
 create policy "rake club members insert"
 on public.club_rake_logs for insert

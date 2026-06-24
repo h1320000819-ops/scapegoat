@@ -1,16 +1,22 @@
-const CACHE_NAME = "anmika-pwa-20260624-mobile-discard-b";
+const CACHE_NAME = "anmika-pwa-20260624-nuki-orientation-a";
+const TILE_CACHE_NAME = "anmika-tile-assets-v1";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-mobile-discard-b",
-  "/runtime/app.js?v=20260624-login-400-detail-a",
-  "/runtime/online-debug.js?v=20260624-login-400-detail-a",
-  "/runtime/pwa.js?v=20260624-login-400-detail-a",
+  "/styles.css?v=20260624-nuki-orientation-a",
+  "/runtime/app.js?v=20260624-replay-image-cache-a",
+  "/runtime/online-debug.js?v=20260624-email-confirm-auth-a",
+  "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
+  "/sounds/pon.wav",
+  "/sounds/kan.wav",
+  "/sounds/ron.wav",
+  "/sounds/tsumo.wav",
+  "/sounds/fever-riichi.wav",
 ];
 
 self.addEventListener("install", (event) => {
@@ -21,7 +27,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME && key !== TILE_CACHE_NAME).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
@@ -35,6 +41,18 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate" || url.pathname.endsWith(".html") || url.pathname === "/online-debug") {
     event.respondWith(fetch(request).catch(() => caches.match(request).then((cached) => cached || caches.match("/online-debug/index.html"))));
+    return;
+  }
+
+  if (url.pathname.startsWith("/tiles/") || url.pathname.startsWith("/sounds/")) {
+    event.respondWith(
+      caches.open(TILE_CACHE_NAME).then((cache) =>
+        cache.match(request).then((cached) => cached || fetch(request).then((response) => {
+          if (response.ok) cache.put(request, response.clone()).catch(() => null);
+          return response;
+        }))
+      )
+    );
     return;
   }
 

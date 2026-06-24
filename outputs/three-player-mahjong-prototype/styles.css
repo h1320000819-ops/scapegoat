@@ -311,7 +311,7 @@ button:hover {
 }
 
 .seat-right {
-  right: 14px;
+  right: 84px;
   top: 50%;
   transform: translateY(-50%);
   width: 190px;
@@ -606,6 +606,13 @@ button:hover {
   touch-action: manipulation;
 }
 
+.tile-button.selected-discard,
+.tile.selected-discard {
+  box-shadow: 0 0 0 3px #ffd15c, 0 7px 14px rgba(0, 0, 0, 0.32);
+  transform: translateY(-7px);
+  z-index: 5;
+}
+
 .tile-image {
   display: block;
   height: 52px;
@@ -750,7 +757,7 @@ button:hover {
 
 .discard.tsumogiri,
 .tile.tsumogiri {
-  opacity: 0.8;
+  opacity: 0.88;
 }
 
 .riichi-discard .tile {
@@ -811,6 +818,13 @@ button:hover {
 .settings-panel h2 {
   font-size: 18px;
   margin: 0 0 10px;
+}
+
+.settings-check {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 12px;
 }
 
 .setting-row {
@@ -1286,6 +1300,17 @@ button:hover {
   transform: translateX(-50%) rotate(90deg);
 }
 
+.seat-top .nuki-dora-area .exposed-tiles {
+  align-items: center;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.seat-top .nuki-dora-area .tile {
+  transform: rotate(180deg);
+}
+
 .seat-right .exposed-row {
   align-items: flex-start;
   flex-direction: row;
@@ -1316,10 +1341,14 @@ button:hover {
 .seat-right .nuki-dora-area .exposed-tiles,
 .seat-right .meld-area .exposed-tiles {
   align-items: flex-start;
-  flex-direction: row;
+  flex-direction: column;
   flex-wrap: nowrap;
-  gap: 10px;
+  gap: 4px;
   justify-content: flex-start;
+}
+
+.seat-right .nuki-dora-area .tile {
+  transform: rotate(-90deg);
 }
 
 .seat-right .meld-area .meld-set {
@@ -1481,13 +1510,28 @@ button:hover {
   border-radius: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   color: #17202a;
-  padding: 12px;
+  padding: 16px;
   pointer-events: auto;
   text-align: center;
 }
 
+.action-prompt .actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  justify-content: center;
+}
+
 .action-prompt button {
+  border-radius: 10px;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.1;
+  min-height: 54px;
+  min-width: 92px;
+  padding: 14px 18px;
   pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .discard-debug-message {
@@ -1623,12 +1667,16 @@ button:hover {
   z-index: 30;
 }
 
-.result-modal [data-result-ok] {
+.result-modal [data-result-ok],
+.result-modal [data-final-result-ok] {
   bottom: 14px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  font-size: 18px;
+  font-weight: 900;
   left: 18px;
   margin: 0;
-  min-height: 46px;
+  min-height: 58px;
+  padding: 12px 18px;
   position: sticky;
   right: 18px;
   width: calc(100% - 36px);
@@ -1636,14 +1684,16 @@ button:hover {
 }
 
 .win-result-modal {
-  padding-top: 44px;
+  padding-top: 28px;
 }
 
 .win-result-modal [data-result-ok] {
   bottom: auto;
   left: auto;
-  min-height: 34px;
-  padding: 7px 12px;
+  font-size: 16px;
+  min-height: 46px;
+  min-width: 92px;
+  padding: 10px 18px;
   position: absolute;
   right: 12px;
   top: 10px;
@@ -1719,6 +1769,19 @@ button:hover {
   background:
     radial-gradient(circle at center, rgba(255, 244, 167, 0.34), rgba(255, 122, 35, 0.18) 34%, rgba(0, 0, 0, 0.32) 64%),
     rgba(0, 0, 0, 0.22);
+}
+
+.pao-announcement > div {
+  animation: kanImpact 0.28s ease-out 2 alternate;
+  color: #ffd9fb;
+  font-size: clamp(70px, 12vw, 140px);
+  text-shadow: 0 8px 0 #6d124d, 0 0 24px rgba(255, 255, 255, 0.85), 0 0 52px rgba(255, 84, 219, 0.95), 0 18px 42px rgba(0, 0, 0, 0.78);
+}
+
+.pao-announcement {
+  background:
+    radial-gradient(circle at center, rgba(255, 96, 222, 0.35), rgba(125, 36, 255, 0.24) 38%, rgba(0, 0, 0, 0.34) 68%),
+    rgba(0, 0, 0, 0.24);
 }
 
 .fever-announcement > div {
@@ -1850,7 +1913,7 @@ button:hover {
 .score-winner-line {
   font-size: 16px;
   font-weight: 800;
-  margin: 0 0 6px;
+  margin: 0 0 3px;
 }
 
 .score-note {
@@ -1861,15 +1924,15 @@ button:hover {
 
 .score-tile-section {
   display: grid;
-  gap: 8px;
+  gap: 5px;
   grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
-  margin: 6px 0;
+  margin: 3px 0;
 }
 
 .score-hand-win-row {
   align-items: end;
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
@@ -1903,6 +1966,10 @@ button:hover {
   display: block;
 }
 
+.win-result-modal .score-hand-block strong {
+  display: none;
+}
+
 .result-melds {
   align-items: flex-start;
   display: flex;
@@ -1916,7 +1983,7 @@ button:hover {
   gap: 2px 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   list-style: none;
-  margin: 4px 0;
+  margin: 2px 0;
   padding-left: 0;
 }
 
@@ -2016,7 +2083,11 @@ button:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 6px;
+  margin-top: 3px;
+}
+
+.win-result-modal .score-hand-block .result-tiles {
+  margin-top: 0;
 }
 
 .result-hand-line {
@@ -2122,7 +2193,7 @@ button:hover {
   }
 
   .seat-right {
-    right: 10px;
+    right: 76px;
     width: 150px;
   }
 
@@ -2240,7 +2311,7 @@ button:hover {
   }
 
   .seat-right {
-    right: 0;
+    right: 62px;
     width: 126px;
   }
 
@@ -2472,13 +2543,13 @@ button:hover {
   .seat-bottom .nuki-dora-area .exposed-tiles,
   .seat-top .meld-area .exposed-tiles,
   .seat-top .nuki-dora-area .exposed-tiles {
-    gap: 0;
+    gap: 7px;
   }
 
   .seat-bottom .meld-set,
   .seat-top .meld-set {
     gap: 0;
-    margin-right: 0;
+    margin-right: 7px;
     min-height: 40px;
   }
 
@@ -2525,7 +2596,7 @@ button:hover {
   .seat-right .meld-set {
     gap: 0;
     margin-right: 0;
-    min-height: 34px;
+    min-height: 42px;
     transform: none;
     transform-origin: top left;
   }
@@ -2540,15 +2611,30 @@ button:hover {
     align-items: flex-start;
     flex-direction: column;
     flex-wrap: nowrap;
-    gap: 8px;
+    gap: 18px;
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
     align-items: flex-start;
-    flex-direction: row;
+    flex-direction: column;
     flex-wrap: nowrap;
-    gap: 0;
+    gap: 3px;
     justify-content: flex-start;
+  }
+
+  .seat-top .nuki-dora-area .exposed-tiles {
+    align-items: center;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+
+  .seat-top .nuki-dora-area .tile {
+    transform: rotate(180deg);
+  }
+
+  .seat-right .nuki-dora-area .tile {
+    transform: rotate(-90deg);
   }
 
   .seat-right .meld-area .meld-tile .tile {
@@ -2580,26 +2666,26 @@ button:hover {
   }
 
   .action-prompt {
-    border-radius: 7px;
-    padding: 4px 5px;
+    border-radius: 9px;
+    padding: 8px 9px;
   }
 
   .action-prompt .actions {
     display: flex;
     flex-wrap: nowrap;
-    gap: 4px;
+    gap: 8px;
     justify-content: center;
   }
 
   .action-prompt .actions button {
-    border-radius: 6px;
+    border-radius: 8px;
     flex: 0 0 auto;
-    font-size: 10px;
+    font-size: 15px;
     font-weight: 900;
-    line-height: 1;
-    min-height: 24px;
-    min-width: 38px;
-    padding: 4px 6px;
+    line-height: 1.05;
+    min-height: 44px;
+    min-width: 76px;
+    padding: 10px 12px;
     touch-action: manipulation;
   }
 
@@ -2620,21 +2706,21 @@ button:hover {
 
   .result-modal {
     max-height: 98dvh;
-    overflow: hidden;
+    overflow: auto;
   }
 
   .score-result.result-modal {
-    font-size: 8px;
-    line-height: 1.05;
-    max-width: min(116vw, 620px);
-    padding: 3px 4px 6px;
+    font-size: 10px;
+    line-height: 1.12;
+    max-width: min(98vw, 700px);
+    padding: 6px 8px 8px;
     top: 48%;
-    transform: translate(-50%, -50%) scale(0.88);
-    width: 620px;
+    transform: translate(-50%, -50%) scale(1);
+    width: 700px;
   }
 
   .score-result.result-modal.win-result-modal {
-    padding-top: 18px;
+    padding-top: 16px;
   }
 
   .win-result-modal [data-result-ok] {
@@ -2646,18 +2732,18 @@ button:hover {
   }
 
   .compact-score-result {
-    font-size: 8px;
-    max-width: min(116vw, 620px);
-    padding: 3px 4px 6px;
-    width: 620px;
+    font-size: 10px;
+    max-width: min(98vw, 700px);
+    padding: 4px 7px 7px;
+    width: 700px;
   }
 
   .allred-score-result {
-    font-size: 8px;
+    font-size: 10px;
     max-height: 98dvh;
-    max-width: min(116vw, 620px);
-    padding: 3px 4px 6px;
-    width: 620px;
+    max-width: min(98vw, 700px);
+    padding: 4px 7px 7px;
+    width: 700px;
   }
 
   .allred-result-grid {
@@ -2665,20 +2751,20 @@ button:hover {
   }
 
   .result-modal h2 {
-    font-size: 13px;
+    font-size: 17px;
     line-height: 1;
-    margin-bottom: 1px;
+    margin-bottom: 3px;
   }
 
   .result-modal h3 {
-    font-size: 9px;
+    font-size: 12px;
     line-height: 1;
-    margin: 2px 0 0;
+    margin: 1px 0 0;
   }
 
   .allred-score-result h3 {
-    font-size: 9px;
-    margin: 2px 0 0;
+    font-size: 12px;
+    margin: 1px 0 0;
   }
 
   .allred-score-result ul {
@@ -2692,9 +2778,9 @@ button:hover {
   }
 
   .score-winner-line {
-    font-size: 10px;
+    font-size: 13px;
     line-height: 1;
-    margin-bottom: 0;
+    margin-bottom: 1px;
   }
 
   .score-tile-section {
@@ -2710,7 +2796,7 @@ button:hover {
   }
 
   .score-hand-win-row {
-    gap: 3px;
+    gap: 2px;
     grid-template-columns: minmax(0, max-content) max-content;
     justify-content: start;
   }
@@ -2743,8 +2829,12 @@ button:hover {
   .score-hand-block strong,
   .score-winning-tile strong,
   .score-nuki-dora-tile strong {
-    font-size: 8px;
+    font-size: 10px;
     line-height: 1;
+  }
+
+  .win-result-modal .score-hand-block strong {
+    display: none;
   }
 
   .result-melds {
@@ -2766,9 +2856,9 @@ button:hover {
   .score-result .result-melds .tile,
   .score-result .result-melds .tile-image,
   .score-result .result-melds .tile-fallback {
-    height: 25px;
-    min-width: 18px;
-    width: 18px;
+    height: 29px;
+    min-width: 21px;
+    width: 21px;
   }
 
   .score-result .result-melds .meld-kakan {
@@ -2796,7 +2886,7 @@ button:hover {
   }
 
   .final-score-line {
-    font-size: 9px;
+    font-size: 12px;
   }
 
   .score-payments {
@@ -2806,7 +2896,7 @@ button:hover {
 
   .score-payments li {
     border-radius: 2px;
-    font-size: 8px;
+    font-size: 10px;
     gap: 2px;
     line-height: 1;
     min-height: 0;
@@ -2815,16 +2905,16 @@ button:hover {
 
   .score-payments li strong,
   .score-payments li span {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .score-extra-settlement {
-    font-size: 8px;
+    font-size: 10px;
     margin: 1px 0;
   }
 
   .score-extra-settlement h3 {
-    font-size: 9px;
+    font-size: 11px;
     margin: 1px 0 0;
   }
 
@@ -2840,24 +2930,24 @@ button:hover {
   .score-extra-settlement li {
     background: rgba(18, 63, 98, 0.08);
     border-radius: 2px;
-    font-size: 8px;
+    font-size: 10px;
     line-height: 1;
     padding: 1px;
   }
 
   .tenpai-results {
-    gap: 4px;
+    gap: 6px;
   }
 
   .tenpai-player {
     border-radius: 5px;
-    font-size: 9px;
-    padding: 3px;
+    font-size: 11px;
+    padding: 5px;
   }
 
   .tenpai-player h4 {
-    font-size: 10px;
-    margin-bottom: 1px;
+    font-size: 12px;
+    margin-bottom: 2px;
   }
 
   .tenpai-player p {
@@ -2881,9 +2971,9 @@ button:hover {
   .result-tiles .tile,
   .result-tiles .tile-image,
   .result-tiles .tile-fallback {
-    height: 22px;
-    min-width: 16px;
-    width: 16px;
+    height: 28px;
+    min-width: 20px;
+    width: 20px;
   }
 
   .result-melds-inline {
@@ -2902,21 +2992,24 @@ button:hover {
   .result-melds-inline .tile,
   .result-melds-inline .tile-image,
   .result-melds-inline .tile-fallback {
-    height: 22px;
-    min-width: 16px;
-    width: 16px;
+    height: 28px;
+    min-width: 20px;
+    width: 20px;
   }
 
-  .result-modal [data-result-ok] {
+  .result-modal [data-result-ok],
+  .result-modal [data-final-result-ok] {
     border-radius: 999px;
     bottom: auto;
-    font-size: 10px;
+    font-size: 14px;
+    font-weight: 900;
     left: auto;
-    min-height: 24px;
-    padding: 3px 9px;
+    min-height: 40px;
+    min-width: 78px;
+    padding: 8px 14px;
     position: absolute;
-    right: 6px;
-    top: 5px;
+    right: 8px;
+    top: 7px;
     width: auto;
   }
 

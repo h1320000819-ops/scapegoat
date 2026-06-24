@@ -15,21 +15,25 @@ function getTileAssetPath(fileName: string): string {
   return `/tiles/${fileName}`;
 }
 
+function getRocketAssetExtension(rank?: number): string {
+  return rank === 1 || rank === 9 ? "png" : "jpg";
+}
+
 export function getTileImagePath(tile: Tile, faceDown = false): string {
   if (faceDown) {
     return getTileAssetPath("tile_back.png");
   }
 
   if (tile.isRocket && tile.suit === "manzu") {
-    return getTileAssetPath(`man${tile.rank}_rocket.jpg`);
+    return getTileAssetPath(`man${tile.rank}_rocket.${getRocketAssetExtension(tile.rank)}`);
   }
 
   if (tile.isRocket && tile.suit === "pinzu") {
-    return getTileAssetPath(`pin${tile.rank}_rocket.jpg`);
+    return getTileAssetPath(`pin${tile.rank}_rocket.${getRocketAssetExtension(tile.rank)}`);
   }
 
   if (tile.isRocket && tile.suit === "souzu") {
-    return getTileAssetPath(`sou${tile.rank}_rocket.jpg`);
+    return getTileAssetPath(`sou${tile.rank}_rocket.${getRocketAssetExtension(tile.rank)}`);
   }
 
   if (tile.suit === "manzu") {

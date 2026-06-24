@@ -70,12 +70,17 @@
     recentlyLeftTableId: initialParams.get("leftTableId") || initialRecentlyLeft.tableId || "",
     recentlyLeftAt: Number(initialParams.get("leftAt") || initialRecentlyLeft.leftAt || 0),
     searchedClub: null,
+    historyDateFrom: "",
+    historyDateTo: "",
     localSeatsByTable: JSON.parse(sessionStorage.getItem("anmikaOnlineDebugSeats") || "{}"),
     pollTimer: 0,
     clubPollTimer: 0,
     lobbyRefreshInFlight: false,
     lobbyRefreshPending: false,
     tablePostRefreshInFlight: false,
+    pendingSignupEmail: localStorage.getItem("anmikaPendingSignupEmail") || "",
+    authNotice: "",
+    authNoticeType: "info",
   };
 
   const $ = (id) => {
@@ -883,6 +888,22 @@
   };
   const rest = (path, options = {}) => request("/rest/v1" + path, options);
   const auth = (path, options = {}) => request("/auth/v1" + path, { ...options, auth: false });
+  const supabaseAuth = {
+    signUp: ({ email, password, options = {}, data = {} }) => {
+      const redirectTo = options.emailRedirectTo || authRedirectUrl();
+      return auth(`/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
+        method: "POST",
+        body: JSON.stringify({ email, password, data, options: { emailRedirectTo: redirectTo } }),
+      });
+    },
+    resend: ({ type, email, options = {} }) => {
+      const redirectTo = options.emailRedirectTo || authRedirectUrl();
+      return auth(`/resend?redirect_to=${encodeURIComponent(redirectTo)}`, {
+        method: "POST",
+        body: JSON.stringify({ type, email, options: { emailRedirectTo: redirectTo } }),
+      });
+    },
+  };
   const settleRecentlyLeftTable = async () => {
     const tableId = normalizeRemoteTableId(state.recentlyLeftTableId);
     if (!tableId || !state.user?.id || !state.accessToken) {
@@ -1313,7 +1334,16 @@
   const randomEmail = () => crypto.randomUUID() + "@anmika.local";
   const authRedirectUrl = () => {
     if (location.protocol === "file:") return buildAppUrl("/online-debug/index.html");
-    return `${location.origin}/online-debug/index.html`;
+    return `${location.origin}/auth/callback`;
+  };
+  const setAuthNotice = (message, type = "info") => {
+    state.authNotice = message || "";
+    state.authNoticeType = type;
+    if (has("authNotice")) {
+      $("authNotice").textContent = state.authNotice;
+      $("authNotice").className = `auth-notice ${type}`;
+      $("authNotice").style.display = state.authNotice ? "" : "none";
+    }
   };
   const getProfile = async (idOrLoginId) => {
     if (isUuid(idOrLoginId)) {
@@ -1380,9 +1410,25 @@
     return Array.isArray(profile) ? profile[0] : profile;
   };
   const completeOAuthRedirectIfNeeded = async () => {
+    const query = new URLSearchParams(location.search || "");
     const hash = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    const isAuthCallback = location.pathname === "/auth/callback" || query.has("auth_callback");
+    const authError = hash.get("error_description") || hash.get("error") || query.get("error_description") || query.get("error");
+    if (authError) {
+      clearStoredSession();
+      setAuthNotice("メール認証が完了していません。確認メールのリンクを開いてからログインしてください。", "warn");
+      history.replaceState(null, "", "/online-debug/index.html");
+      return false;
+    }
     const accessToken = hash.get("access_token");
-    if (!accessToken) return false;
+    if (!accessToken) {
+      if (isAuthCallback) {
+        clearStoredSession();
+        setAuthNotice("メール認証が完了していません。ログイン画面からもう一度確認してください。", "warn");
+        history.replaceState(null, "", "/online-debug/index.html");
+      }
+      return false;
+    }
     const session = {
       access_token: accessToken,
       refresh_token: hash.get("refresh_token") || "",
@@ -1391,8 +1437,11 @@
     const authUser = await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser);
     saveSession(session, profile);
-    history.replaceState(null, "", location.pathname + location.search);
-    log("外部アカウントでログインしました。", profile);
+    localStorage.removeItem("anmikaPendingSignupEmail");
+    state.pendingSignupEmail = "";
+    setAuthNotice("メール認証が完了しました。ログインしました。", "ok");
+    history.replaceState(null, "", "/online-debug/index.html");
+    log(isAuthCallback ? "メール認証が完了しました。" : "外部アカウントでログインしました。", profile);
     await loadClubs().catch(() => {});
     startClubPolling();
     return true;
@@ -1415,22 +1464,43 @@
     if (!email) throw new Error("メールアドレスを入力してください。");
     if (!email.includes("@")) throw new Error("アカウント作成時はメールアドレスを入力してください。ログインIDは作成後に自動発行されます。");
     try {
-      const signUpData = await auth("/signup", { method: "POST", body: JSON.stringify({ email, password, data: { display_name: displayName } }) });
-      const authUserId = signUpData.user?.id;
-      if (!signUpData.access_token || !authUserId) throw new Error("アカウント作成後の認証情報を取得できませんでした。メール確認OFF設定を確認してください。");
-      saveSession(signUpData, null);
-      const profile = await rest("/rpc/ensure_user_profile", { method: "POST", body: JSON.stringify({ p_user_id: authUserId, p_auth_email: email, p_display_name: displayName }) });
-      const nextProfile = Array.isArray(profile) ? profile[0] : profile;
-      saveSession(signUpData, nextProfile);
-      if (has("userId")) $("userId").value = nextProfile.login_id || nextProfile.user_id;
-      console.log("[Auth] create account success", nextProfile);
-      log("アカウントを作成しました", nextProfile);
-      await loadClubs().catch(() => {});
+      clearStoredSession();
+      const redirectTo = authRedirectUrl();
+      const normalizedEmail = normalizeLoginInput(email).toLowerCase();
+      await supabaseAuth.signUp({
+        email: normalizedEmail,
+        password,
+        data: { display_name: displayName },
+        options: { emailRedirectTo: redirectTo },
+      });
+      state.pendingSignupEmail = normalizedEmail;
+      localStorage.setItem("anmikaPendingSignupEmail", normalizedEmail);
+      if (has("email")) $("email").value = normalizedEmail;
+      console.log("[Auth] signup confirmation mail sent", { email: maskEmailForLog(normalizedEmail), redirectTo });
+      log("確認メールを送信しました。", { email: maskEmailForLog(normalizedEmail), redirectTo });
+      setAuthNotice("確認メールを送信しました。メール内のリンクを押して認証を完了してください。", "ok");
+      render();
     } catch (error) {
       console.error("[Auth] create account failed", error);
       log("アカウント作成に失敗しました。", rawErrorText(error));
       throw error;
     }
+  };
+  const resendSignupConfirmation = async () => {
+    const rawEmail = normalizeLoginInput((has("email") && $("email").value) || state.pendingSignupEmail || "");
+    if (!rawEmail || !rawEmail.includes("@")) throw new Error("確認メールを再送するメールアドレスを入力してください。");
+    const email = rawEmail.toLowerCase();
+    const redirectTo = authRedirectUrl();
+    await supabaseAuth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    state.pendingSignupEmail = email;
+    localStorage.setItem("anmikaPendingSignupEmail", email);
+    setAuthNotice("確認メールを再送しました。メール内のリンクを押して認証を完了してください。", "ok");
+    log("確認メールを再送しました。", { email: maskEmailForLog(email), redirectTo });
+    render();
   };
   // DEBUG ACCOUNT START: 本番前に削除しやすいよう、このブロックと debugSignInButton だけで完結させる。
   const createDebugAccount = async () => {
@@ -1488,6 +1558,9 @@
     const authUser = session.user || await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");
     saveSession(session, profile);
+    localStorage.removeItem("anmikaPendingSignupEmail");
+    state.pendingSignupEmail = "";
+    setAuthNotice("", "info");
     log("ログインしました", state.user);
     await loadClubs();
     startClubPolling();
@@ -3328,6 +3401,61 @@
     return raw.includes("club_rake_logs") && (raw.includes("schema cache") || raw.includes("Could not find the table") || raw.includes("PGRST205"));
   };
   const clubRakeLogsMissingMessage = "レーキ履歴テーブルがまだSupabaseに作成されていません。\nsupabase/patch_club_rake_logs.sql を実行してください。";
+  const normalizeDateInput = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
+  const dateRangeStartIso = (value) => {
+    const date = normalizeDateInput(value);
+    return date ? new Date(`${date}T00:00:00`).toISOString() : "";
+  };
+  const dateRangeEndExclusiveIso = (value) => {
+    const date = normalizeDateInput(value);
+    if (!date) return "";
+    const end = new Date(`${date}T00:00:00`);
+    end.setDate(end.getDate() + 1);
+    return end.toISOString();
+  };
+  const getHistoryDateRange = () => ({
+    from: normalizeDateInput(state.historyDateFrom),
+    to: normalizeDateInput(state.historyDateTo),
+    fromIso: dateRangeStartIso(state.historyDateFrom),
+    toExclusiveIso: dateRangeEndExclusiveIso(state.historyDateTo),
+  });
+  const isRowInDateRange = (row, range = getHistoryDateRange()) => {
+    const createdAt = row?.created_at || row?.createdAt;
+    if (!createdAt) return true;
+    const time = new Date(createdAt).getTime();
+    if (!Number.isFinite(time)) return true;
+    if (range.fromIso && time < new Date(range.fromIso).getTime()) return false;
+    if (range.toExclusiveIso && time >= new Date(range.toExclusiveIso).getTime()) return false;
+    return true;
+  };
+  const dateRangeQuery = (range = getHistoryDateRange()) => {
+    const parts = [];
+    if (range.fromIso) parts.push("&created_at=gte." + encodeURIComponent(range.fromIso));
+    if (range.toExclusiveIso) parts.push("&created_at=lt." + encodeURIComponent(range.toExclusiveIso));
+    return parts.join("");
+  };
+  const renderHistoryDateFilter = (range = getHistoryDateRange()) => `
+    <section class="card">
+      <h4>日付で絞り込み</h4>
+      <div class="row">
+        <label>開始日 <input id="historyDateFrom" type="date" value="${escapeHtml(range.from)}" /></label>
+        <label>終了日 <input id="historyDateTo" type="date" value="${escapeHtml(range.to)}" /></label>
+        <button type="button" id="applyHistoryDateFilter">適用</button>
+        <button type="button" id="clearHistoryDateFilter" class="secondary">解除</button>
+      </div>
+    </section>`;
+  const bindHistoryDateFilter = (body) => {
+    body.querySelector("#applyHistoryDateFilter")?.addEventListener("click", () => {
+      state.historyDateFrom = normalizeDateInput(body.querySelector("#historyDateFrom")?.value || "");
+      state.historyDateTo = normalizeDateInput(body.querySelector("#historyDateTo")?.value || "");
+      renderPointHistoryPage(body).catch((error) => showError("ポイント収支の絞り込みに失敗しました", error));
+    });
+    body.querySelector("#clearHistoryDateFilter")?.addEventListener("click", () => {
+      state.historyDateFrom = "";
+      state.historyDateTo = "";
+      renderPointHistoryPage(body).catch((error) => showError("ポイント収支の絞り込み解除に失敗しました", error));
+    });
+  };
   const restOptionalClubRakeLogs = async (path) => {
     try {
       return await rest(path);
@@ -3340,9 +3468,14 @@
     }
   };
   const rakeAmountOf = (row) => roundToTenth(row?.rake_amount ?? row?.amount ?? 0);
-  const fetchClubRakeRows = async (clubId) => {
+  const fetchClubRakeRows = async (clubId, { range = null } = {}) => {
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
-    const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}`;
+    if (!isAdmin()) return [];
+    const activeRange = range || getHistoryDateRange();
+    const params = new URLSearchParams();
+    if (activeRange.fromIso) params.set("from", activeRange.fromIso);
+    if (activeRange.toExclusiveIso) params.set("to", activeRange.toExclusiveIso);
+    const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}${params.toString() ? `?${params}` : ""}`;
     const response = await fetch(apiUrl, {
       headers: buildSafeAuthHeaders(),
       cache: "no-store",
@@ -3355,7 +3488,7 @@
       const data = await response.json().catch(() => ({}));
       throw new Error(data?.error || "レーキ履歴の取得に失敗しました。");
     }
-    return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + "&order=created_at.desc");
+    return restOptionalClubRakeLogs("/club_rake_logs?select=*&club_id=eq." + encodeURIComponent(clubId) + dateRangeQuery(activeRange) + "&order=created_at.desc");
   };
   const rakeTotalsByUser = (rows = []) => rows.reduce((totals, row) => {
     const userId = row.user_id || row.userId;
@@ -3549,32 +3682,51 @@
   const formatRuleSummary = (table) => {
     const ruleId = table.rule_id || "anmika-rocket";
     const configValue = parseRuleConfig(table.rule_config);
+    const textItem = (label, value) => `
+      <span class="rule-check-item rule-value-item">
+        <span class="rule-value-label">${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </span>`;
+    const checkItem = (label, checked) => `
+      <span class="rule-check-item ${checked ? "on" : "off"}">
+        <input type="checkbox" ${checked ? "checked" : ""} disabled />
+        <span>${escapeHtml(label)}</span>
+      </span>`;
     if (ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID) {
-      const onOff = (value) => value ? "ON" : "OFF";
-      return [
-        `レート: 1点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
-        `レーキ: ${table.rake_percent ?? 0}%`,
-        `1・9牌ロケット ${onOff(Boolean(configValue.rocket19Enabled))}`,
-        `倍場 ${onOff(Boolean(configValue.baibaEnabled))}`,
-        `フィーバーリーチ ${onOff(Boolean(configValue.feverRiichiEnabled))}`,
-        `男気ルール ${onOff(configValue.otokogiEnabled !== false)}`,
-        `ターコイズ5p ${Number(configValue.turquoise5pCount ?? 0)}枚`,
-      ].join(" / ");
+      const turquoiseCount = Number(configValue.turquoise5pCount ?? 0);
+      const fivePinLabel = turquoiseCount >= 2
+        ? "金ロケタコタコ"
+        : turquoiseCount === 1
+          ? "赤金ロケタコ"
+          : "赤赤金ロケ";
+      const items = [
+        textItem("レート", `${Number(table.point_rate || 1).toFixed(1)}pt/ 1点`),
+        textItem("レーキ", `${Number(table.rake_percent ?? 0)}%`),
+        checkItem("1・9牌ロケット", Boolean(configValue.rocket19Enabled)),
+        checkItem("倍場", Boolean(configValue.baibaEnabled)),
+        checkItem("フィーバーリーチ", Boolean(configValue.feverRiichiEnabled)),
+        checkItem("漢気ルール", configValue.otokogiEnabled !== false),
+        textItem("ターコイズ5p", `${turquoiseCount}枚`),
+        textItem("5pの内訳", fivePinLabel),
+        textItem("5sの内訳", "赤赤金ロケ"),
+      ];
+      return `<div class="rule-check-grid">${items.join("")}</div>`;
     }
     const entryRake = Number(table.entry_rake_points ?? configValue.entryRakePoints ?? 5).toFixed(1);
     const chip = Number(configValue.chipValuePoints || 5000).toLocaleString();
     const umaLabel = String(configValue.umaType || "20-0--20").replace("--", "-▲");
     const fiveLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青", blackBlackRedRed: "黒黒赤赤" }[configValue.fiveTileComposition || "red3blue1"];
     const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[configValue.flowerComposition || "red3blue1"];
-    return [
-      `レート: 1000点 = ${Number(table.point_rate || 1).toFixed(1)}pt`,
-      `開始時レーキ: ${entryRake}pt`,
-      `5の内訳: ${fiveLabel}`,
-      `華牌: ${flowerLabel}`,
-      `祝儀: ${chip}点相当`,
-      `ウマ: ${umaLabel}`,
-      configValue.northNukiDoraEnabled ? "北抜きON" : "北抜きOFF",
-    ].join(" / ");
+    const items = [
+      textItem("レート", `${Number(table.point_rate || 1).toFixed(1)}pt/1000点`),
+      textItem("レーキ", `${entryRake}pt`),
+      textItem("5の内訳", fiveLabel),
+      textItem("華の内訳", flowerLabel),
+      textItem("祝儀", `${chip}点相当`),
+      textItem("ウマ", umaLabel),
+      checkItem("北抜きドラ", Boolean(configValue.northNukiDoraEnabled)),
+    ];
+    return `<div class="rule-check-grid">${items.join("")}</div>`;
   };
   const updateRangeLabels = () => {
     ensureTsumoLossless3maCreateUi();
@@ -3624,10 +3776,12 @@
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const members = await loadClubMembersForView(clubId);
-    const rakeRows = await fetchClubRakeRows(clubId).catch((error) => {
-      log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
-      return [];
-    });
+    const rakeRows = isAdmin()
+      ? await fetchClubRakeRows(clubId).catch((error) => {
+          log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
+          return [];
+        })
+      : [];
     const paidRakeByUser = rakeTotalsByUser(rakeRows);
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
@@ -3651,7 +3805,7 @@
       const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
       const row = document.createElement("div");
       row.className = "point-user-row";
-      row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span><span>支払レーキ ${formatPoint(paidRake)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+      row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span>${isAdmin() ? `<span>支払レーキ ${formatPoint(paidRake)} pt</span><button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>` : ""}`;
       const sendButton = row.querySelector('[data-action="send"]');
       if (sendButton) {
         sendButton.addEventListener("click", async () => {
@@ -3752,6 +3906,8 @@
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     try {
       const user = requireUser();
+      const range = getHistoryDateRange();
+      const filterHtml = renderHistoryDateFilter(range);
       let rows;
       try {
         rows = await rest("/rpc/get_my_club_point_history", { method: "POST", body: JSON.stringify({ p_club_id: clubId }) });
@@ -3764,35 +3920,41 @@
         .filter((row) => {
           const rowUserId = row.user_id || row.userId || row.actor_user_id || row.actorUserId;
           const isMine = !rowUserId || rowUserId === user.id;
-          return isMine && (isGamePointReason(row.reason) || Boolean(row.game_id || row.gameId));
+          return isMine && isRowInDateRange(row, range) && (isGamePointReason(row.reason) || Boolean(row.game_id || row.gameId));
         })
         .sort((a, b) => new Date(a.created_at || a.createdAt || 0).getTime() - new Date(b.created_at || b.createdAt || 0).getTime());
-      const rakeRows = (await fetchClubRakeRows(clubId).catch((error) => {
-        log("自分のレーキ履歴取得をスキップしました。", rawErrorText(error));
-        return [];
-      })).filter((row) => (row.user_id || row.userId) === user.id);
+      const rakeRows = isAdmin()
+        ? (await fetchClubRakeRows(clubId, { range }).catch((error) => {
+            log("支払レーキ履歴取得をスキップしました。", rawErrorText(error));
+            return [];
+          })).filter((row) => (row.user_id || row.userId) === user.id)
+        : [];
       const paidRakeTotal = roundToTenth(rakeRows.reduce((sum, row) => sum + rakeAmountOf(row), 0));
-      const rakeHistoryHtml = rakeRows.length
-        ? `<section class="card">
-            <h4>支払レーキ</h4>
-            <div class="point-summary"><strong>合計: ${formatPoint(paidRakeTotal)} pt</strong><span>対象件数: ${rakeRows.length}件</span></div>
-            ${rakeRows.slice(0, 50).map((row) => `
-              <div class="table-seat-line">
-                <span>${escapeHtml(new Date(row.created_at || row.createdAt || Date.now()).toLocaleString())}</span>
-                <strong>${formatPoint(rakeAmountOf(row))} pt</strong>
-                <span>${escapeHtml(rakeLogLabel(row))}</span>
-                <span class="muted">元収入 ${formatPoint(row.original_gain || 0)} / ${formatPoint(row.rake_percent || 0)}%</span>
-              </div>`).join("")}
-          </section>`
-        : `<section class="card"><h4>支払レーキ</h4><p class="muted">支払レーキはまだありません。</p></section>`;
+      const rakeHistoryHtml = !isAdmin()
+        ? ""
+        : rakeRows.length
+          ? `<section class="card">
+              <h4>支払レーキ</h4>
+              <div class="point-summary"><strong>合計: ${formatPoint(paidRakeTotal)} pt</strong><span>対象件数: ${rakeRows.length}件</span></div>
+              ${rakeRows.slice(0, 50).map((row) => `
+                <div class="table-seat-line">
+                  <span>${escapeHtml(new Date(row.created_at || row.createdAt || Date.now()).toLocaleString())}</span>
+                  <strong>${formatPoint(rakeAmountOf(row))} pt</strong>
+                  <span>${escapeHtml(rakeLogLabel(row))}</span>
+                  <span class="muted">元収入 ${formatPoint(row.original_gain || 0)} / ${formatPoint(row.rake_percent || 0)}%</span>
+                </div>`).join("")}
+            </section>`
+          : `<section class="card"><h4>支払レーキ</h4><p class="muted">指定期間の支払レーキはありません。</p></section>`;
       if (!gameRows.length) {
         body.innerHTML = `
+          ${filterHtml}
           <section class="card">
             <h4>ゲーム収支グラフ</h4>
-            <p class="muted">ゲーム由来のポイント収支はまだありません。</p>
+            <p class="muted">指定期間のゲーム由来ポイント収支はありません。</p>
             <p class="muted">管理者の送る・回収、ユーザー間送信はこの画面では集計しません。</p>
           </section>
           ${rakeHistoryHtml}`;
+        bindHistoryDateFilter(body);
         return;
       }
       let cumulative = 0;
@@ -3809,6 +3971,7 @@
         };
       });
       body.innerHTML = `
+        ${filterHtml}
         <section class="card">
           <h4>ゲーム収支グラフ</h4>
           <p class="muted">自分の対局精算・レーキ・祝儀など、ゲーム上で発生したポイントだけを累積表示しています。</p>
@@ -3816,7 +3979,7 @@
           <div class="point-summary">
             <strong>累計収支: ${formatSignedPoint(cumulative)} pt</strong>
             <span>対象件数: ${series.length}件</span>
-            <span>支払レーキ合計: ${formatPoint(paidRakeTotal)} pt</span>
+            ${isAdmin() ? `<span>支払レーキ合計: ${formatPoint(paidRakeTotal)} pt</span>` : ""}
           </div>
           ${renderPointHistoryChart(series)}
         </section>
@@ -3835,6 +3998,7 @@
               </div>`)
             .join("")}
         </section>`;
+      bindHistoryDateFilter(body);
     } catch (error) {
       body.innerHTML = `<p class="muted">ポイント履歴テーブルはまだ連携されていません。</p><pre>${getErrorText(error)}</pre>`;
     }
@@ -4197,7 +4361,7 @@
     <div class="primary-actions">
       <button type="button" class="${activePage === "joinRequests" ? "" : "secondary"}" ${activePage === "joinRequests" ? "disabled" : 'data-management-page="joinRequests"'}>加入申請一覧</button>
       <button type="button" class="${activePage === "members" ? "" : "secondary"}" ${activePage === "members" ? "disabled" : 'data-management-page="members"'}>メンバー管理</button>
-      <button type="button" class="${activePage === "clubSettings" ? "" : "secondary"}" ${activePage === "clubSettings" ? "disabled" : 'data-management-page="clubSettings"'}>クラブ設定</button>
+      ${isAdmin() ? `<button type="button" class="${activePage === "clubSettings" ? "" : "secondary"}" ${activePage === "clubSettings" ? "disabled" : 'data-management-page="clubSettings"'}>クラブ設定</button>` : ""}
       ${isSuperClubCreator() ? `<button type="button" class="danger" data-delete-club-management>クラブ削除</button>` : ""}
     </div>
   `;
@@ -4549,6 +4713,11 @@
       return;
     }
     if (page === "clubSettings") {
+      if (!isAdmin()) {
+        title.textContent = "クラブ管理";
+        body.innerHTML = `<p class="muted">権限がありません。クラブ設定を変更できるのは管理者だけです。</p>`;
+        return;
+      }
       title.textContent = "クラブ管理 - クラブ設定";
       body.innerHTML = `<p class="muted">クラブ設定を読み込み中...</p>`;
       await renderClubSettingsPage(body);
@@ -4624,10 +4793,12 @@
     const clubId = selectedClubId();
     if (!clubId) throw new Error(JA_MESSAGES.selectClub);
     const members = await loadClubMembersForView(clubId);
-    const rakeRows = await fetchClubRakeRows(clubId).catch((error) => {
-      log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
-      return [];
-    });
+    const rakeRows = isAdmin()
+      ? await fetchClubRakeRows(clubId).catch((error) => {
+          log("レーキ支払い集計の取得をスキップしました。", rawErrorText(error));
+          return [];
+        })
+      : [];
     const paidRakeByUser = rakeTotalsByUser(rakeRows);
     const pointSummary = clubPointSummaryFromMembers(members);
     const visibleMembers = members.filter((member) => isAdmin() || member.users?.user_id === requireUser().id);
@@ -4640,7 +4811,7 @@
         const userId = member.users?.user_id || "";
         const name = member.users?.display_name || userId || "Player";
         const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
-        return `${name}\n  現在ポイント: ${formatPoint(member.point_balance)}\n  支払レーキ: ${formatPoint(paidRake)}\n  権限: ${member.role}`;
+        return `${name}\n  現在ポイント: ${formatPoint(member.point_balance)}${isAdmin() ? `\n  支払レーキ: ${formatPoint(paidRake)}` : ""}\n  権限: ${member.role}`;
       });
       $("pointSummary").textContent = [
         `クラブポイント固定総量: ${formatPoint(pointSummary.fixedTotal)}`,
@@ -4658,7 +4829,7 @@
         const paidRake = roundToTenth(paidRakeByUser[userId] || 0);
         const row = document.createElement("div");
         row.className = "point-user-row";
-        row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span><span>支払レーキ ${formatPoint(paidRake)} pt</span>${isAdmin() ? '<button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>' : ""}`;
+        row.innerHTML = `<strong>${name}</strong><span>${formatPoint(member.point_balance)} pt</span>${isAdmin() ? `<span>支払レーキ ${formatPoint(paidRake)} pt</span><button type="button" data-action="send">送る</button><button type="button" data-action="collect" class="secondary">回収</button>` : ""}`;
         const sendButton = row.querySelector('[data-action="send"]');
         if (sendButton) {
           sendButton.addEventListener("click", async () => {
@@ -4831,6 +5002,15 @@
     $("currentUser").textContent = state.user ? `${state.user.displayName} / ${state.user.loginId || state.user.id}` : "未ログイン";
     if (has("loginIdDisplay")) $("loginIdDisplay").textContent = state.user ? state.user.loginId || state.user.id : "未設定";
     if (state.user && has("userId")) $("userId").value = state.user.loginId || state.user.id;
+    if (!state.authNotice && state.pendingSignupEmail && !state.user) {
+      state.authNotice = "確認メールを送信しました。メール内のリンクを押して認証を完了してください。";
+      state.authNoticeType = "ok";
+    }
+    if (has("authNotice")) {
+      $("authNotice").textContent = state.authNotice || "";
+      $("authNotice").className = `auth-notice ${state.authNoticeType || "info"}`;
+      $("authNotice").style.display = state.authNotice ? "" : "none";
+    }
     if (!state.user || !state.accessToken) document.body.dataset.screen = "auth";
     else if (document.body.dataset.screen === "auth") document.body.dataset.screen = shouldOpenTableListOnBoot ? "club-home" : "clubs";
     document.body.dataset.super = isSuperClubCreator() ? "true" : "false";
@@ -4871,6 +5051,11 @@
       const pendingCount = isAdmin() ? state.adminJoinRequests.length : 0;
       joinRequestMenuButton.textContent = pendingCount ? `クラブ管理（加入申請 ${pendingCount}件）` : "クラブ管理";
       joinRequestMenuButton.style.display = isAdmin() ? "" : "none";
+    }
+    const clubSettingsMenuButton = document.querySelector('[data-settings-page="clubSettings"]');
+    if (clubSettingsMenuButton) {
+      clubSettingsMenuButton.style.display = isAdmin() ? "" : "none";
+      clubSettingsMenuButton.disabled = !isAdmin();
     }
     $("clubSelect").innerHTML = "";
     if (has("clubCards")) $("clubCards").innerHTML = "";
@@ -5156,6 +5341,7 @@
     $("configStatus").className = config.url && config.anonKey ? "ok" : "warn";
     bind("signUpButton", signUp);
     bind("signInButton", signInWithEmail);
+    bind("resendConfirmationButton", resendSignupConfirmation);
     bind("debugSignInButton", createDebugAccount);
     bind("signOutButton", async () => {
       if (confirm("本当にログアウトしますか？")) await signOut();

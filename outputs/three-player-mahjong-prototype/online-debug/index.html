@@ -90,6 +90,25 @@
       .row > label { flex: 1 1 220px; }
       .muted { color: rgba(244, 255, 249, 0.72); }
       .warn { color: #ffd77a; }
+      .auth-notice {
+        display: none;
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: rgba(255, 255, 255, 0.12);
+        font-weight: 700;
+      }
+      .auth-notice.ok {
+        display: block;
+        background: rgba(66, 184, 131, 0.2);
+        border-color: rgba(66, 184, 131, 0.45);
+      }
+      .auth-notice.warn {
+        display: block;
+        background: rgba(242, 184, 75, 0.2);
+        border-color: rgba(242, 184, 75, 0.5);
+      }
       .error-box {
         display: none;
         white-space: pre-wrap;
@@ -128,7 +147,8 @@
         padding: 8px;
       }
       .settings-menu.open { display: grid !important; gap: 6px; }
-      .settings-menu button { width: 100%; text-align: left; background: rgba(255, 255, 255, 0.12); color: var(--text); }
+      .settings-menu button { width: 100%; text-align: left; background: #1a5a4b; color: var(--text); }
+      .settings-menu button:hover { background: #226d5b; }
       .drawer:not(.open), .modal-panel:not(.open) { pointer-events: none; }
       .drawer.open, .modal-panel.open { pointer-events: auto; }
       .card-grid, .table-list, .online-player-list { display: grid; gap: 14px; }
@@ -159,6 +179,50 @@
       }
       .club-card-body { min-width: 0; }
       .table-card { width: 100%; max-width: 640px; }
+      .rule-check-grid {
+        display: grid;
+        gap: 6px 10px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin: 8px 0;
+      }
+      .rule-check-item {
+        align-items: center;
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 18px minmax(0, 1fr);
+        min-width: 0;
+        padding: 4px 6px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 13px;
+      }
+      .rule-check-item input {
+        accent-color: var(--accent);
+        height: 15px;
+        margin: 0;
+        padding: 0;
+        pointer-events: none;
+        width: 15px;
+      }
+      .rule-check-item.off { opacity: 0.62; }
+      .rule-value-item {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+      .rule-value-item strong {
+        color: #fff2b8;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+      .rule-value-label {
+        min-width: 0;
+      }
+      .rule-check-item small {
+        color: rgba(244, 255, 249, 0.72);
+        display: block;
+        font-size: 11px;
+        line-height: 1.2;
+      }
       .table-seat-line, .seat-row, .point-user-row, .online-player-row {
         display: grid;
         align-items: center;
@@ -201,6 +265,7 @@
           display: grid;
           grid-template-columns: 1fr;
         }
+        .rule-check-grid { grid-template-columns: 1fr; }
         .table-card { max-width: none; }
       }
     </style>
@@ -246,8 +311,10 @@
         <div class="row">
           <button id="signUpButton">アカウント作成</button>
           <button id="signInButton">ログイン</button>
+          <button id="resendConfirmationButton" class="secondary" type="button">確認メール再送</button>
           <button id="debugSignInButton" class="secondary" type="button">デバッグログイン</button>
         </div>
+        <p id="authNotice" class="auth-notice"></p>
         <p class="muted">デバッグログインは仮アカウントを自動作成してログインします。本番前に削除する機能です。</p>
       </section>
 
@@ -400,8 +467,8 @@
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/pwa.js?v=20260624-login-400-detail-a"></script>
-    <script src="../runtime/online-debug.js?v=20260624-login-400-detail-a"></script>
+    <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
+    <script src="../runtime/online-debug.js?v=20260624-email-confirm-auth-a"></script>
   </body>
 </html>
 

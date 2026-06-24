@@ -1905,6 +1905,33 @@ const sortHandTiles = (hand) => {
 };
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
+const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", feverRiichi: "fever-riichi.wav" };
+const soundTypeForEvent = (event) => {
+  if (!event?.type) return "";
+  if (event.type === "pon") return "pon";
+  if (event.type === "kan") return "kan";
+  if (event.type === "tsumo") return "tsumo";
+  if (event.type === "ron") return "ron";
+  if (event.type === "riichi" && event.feverRiichiActive) return "feverRiichi";
+  return "";
+};
+const playGameSound = (type, { key = "" } = {}) => {
+  const fileName = GAME_SOUND_FILES[type];
+  if (!fileName || typeof Audio === "undefined") return;
+  const nowMs = Date.now();
+  const cacheKey = key || `${type}:${nowMs}`;
+  globalThis.__anmikaSoundHistory ??= {};
+  if (key && globalThis.__anmikaSoundHistory[cacheKey]) return;
+  if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
+  globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
+  try {
+    const audio = new Audio(soundAssetPath(fileName));
+    audio.volume = 0.92;
+    audio.play()?.catch?.(() => {});
+  } catch {}
+};
+const rocketAssetExtension = (rank) => (rank === 1 || rank === 9) ? "png" : "jpg";
 const normalizeTileForView = (tile) => {
   if (!tile) return tile;
   if (tile.tile) tile = tile.tile;
@@ -1923,9 +1950,9 @@ const normalizeTileForView = (tile) => {
 const getTileImagePath = (tile, faceDown = false) => {
   tile = normalizeTileForView(tile);
   if (faceDown) return tileAssetPath("tile_back.png");
-  if (tile.isRocket && tile.suit === "manzu") return tileAssetPath(`man${tile.rank}_rocket.jpg`);
-  if (tile.isRocket && tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}_rocket.jpg`);
-  if (tile.isRocket && tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}_rocket.jpg`);
+  if (tile.isRocket && tile.suit === "manzu") return tileAssetPath(`man${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
+  if (tile.isRocket && tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
+  if (tile.isRocket && tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.suit === "manzu") return tileAssetPath(`man${tile.rank}.png`);
   if (tile.suit === "pinzu" && tile.color === "turquoise") return tileAssetPath(`pin${tile.rank}_turquoise.jpg`);
   if (tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}${colorSuffix(tile)}.png`);
@@ -1935,39 +1962,98 @@ const getTileImagePath = (tile, faceDown = false) => {
   return tileAssetPath(`${{ east: "east", south: "south", west: "west", north: "north", white: "haku", green: "hatsu", red: "chun" }[tile.kind]}.png`);
 };
 const preloadedTileImagePaths = new Set();
-const preloadTileImagePath = (src) => {
+const decodedTileImagePaths = new Set();
+const tileImageMemoryCache = new Map();
+const preloadTileImagePath = (src, { link = false } = {}) => {
   if (!src || preloadedTileImagePaths.has(src) || typeof document === "undefined") return;
   preloadedTileImagePaths.add(src);
-  const link = document.createElement("link");
-  link.rel = "preload";
-  link.as = "image";
-  link.href = src;
-  document.head?.appendChild(link);
+  if (link) {
+    const preload = document.createElement("link");
+    preload.rel = "preload";
+    preload.as = "image";
+    preload.href = src;
+    document.head?.appendChild(preload);
+  }
   const img = new Image();
-  img.decoding = "sync";
+  img.decoding = "async";
   img.loading = "eager";
+  tileImageMemoryCache.set(src, img);
   img.src = src;
+  img.decode?.().then(() => decodedTileImagePaths.add(src)).catch(() => {});
 };
-const preloadTileImages = () => {
+const buildAllTileAssetNames = () => {
   const paths = ["tile_back.png", "back.png", "east.png", "south.png", "west.png", "north.png", "haku.png", "hatsu.png", "chun.png"];
   for (let rank = 1; rank <= 9; rank++) {
     paths.push(`man${rank}.png`, `pin${rank}.png`, `sou${rank}.png`);
   }
-  for (const suit of ["man", "pin", "sou"]) for (const rank of [1, 5, 9]) paths.push(`${suit}${rank}_rocket.jpg`);
+  for (const suit of ["man", "pin", "sou"]) for (const rank of [1, 5, 9]) paths.push(`${suit}${rank}_rocket.${rocketAssetExtension(rank)}`);
   for (const color of ["red", "blue", "gold"]) paths.push(`pin5_${color}.png`, `sou5_${color}.png`);
   paths.push("pin5_turquoise.jpg");
   for (const color of ["red", "blue"]) paths.push(`flower_${color}.png`);
   for (const color of ["red", "yellow", "green", "blue"]) paths.push(`haku_${color}.png`);
-  for (const path of paths) preloadTileImagePath(tileAssetPath(path));
+  return paths;
+};
+const scheduleTileImagePreload = (paths, { linkFirst = false } = {}) => {
+  const unique = [...new Set(paths)].filter(Boolean);
+  const run = () => {
+    for (let index = 0; index < unique.length; index++) {
+      preloadTileImagePath(unique[index], { link: linkFirst && index < 6 });
+    }
+  };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 1800 });
+  else setTimeout(run, 80);
+};
+const preloadTileImages = () => {
+  const critical = ["tile_back.png", "east.png", "south.png", "west.png", "north.png", "haku.png", "hatsu.png", "chun.png"];
+  for (let rank = 1; rank <= 9; rank++) critical.push(`man${rank}.png`, `pin${rank}.png`, `sou${rank}.png`);
+  scheduleTileImagePreload(critical.map(tileAssetPath), { linkFirst: true });
+  scheduleTileImagePreload(buildAllTileAssetNames().map(tileAssetPath));
 };
 preloadTileImages();
-const renderTileView = ({ tile, isDrawnTile = false, isTsumogiri = false, faceDown = false, buttonTileId, buttonAction = "discard", disabledForRiichi = false }) => {
+const collectTileImagePathsFromSnapshot = (snapshot) => {
+  const paths = new Set();
+  const addTile = (tile, faceDown = false) => {
+    const path = getTileImagePath(tile, faceDown);
+    if (path) paths.add(path);
+  };
+  if (!snapshot) return paths;
+  for (const player of snapshot.players ?? []) {
+    for (const tile of player.hand ?? []) addTile(tile);
+    addTile(player.drawnTile);
+    for (const tile of player.nukiDoraTiles ?? []) addTile(tile);
+    for (const discard of player.discardedTiles ?? []) addTile(discard?.tile ?? discard);
+    for (const meld of player.melds ?? []) {
+      for (const tile of meld.tiles ?? []) addTile(tile);
+      addTile(meld.addedTile);
+    }
+  }
+  for (const tile of snapshot.doraIndicators ?? []) addTile(tile);
+  for (const tile of snapshot.uraDoraIndicators ?? []) addTile(tile);
+  const result = snapshot.handLog?.result || snapshot.lastScoreResult || null;
+  for (const win of result?.wins ?? []) {
+    for (const tile of win.hand ?? []) addTile(tile);
+    for (const tile of win.meldTiles ?? []) addTile(tile);
+    for (const tile of win.nukiDoraTiles ?? []) addTile(tile);
+    addTile(win.winningTile || win.displayWinningTile);
+  }
+  return paths;
+};
+const warmReplayTileImages = (replay, index, radius = 2) => {
+  const snapshots = getReplaySnapshots(replay);
+  const paths = new Set();
+  for (let offset = -1; offset <= radius; offset++) {
+    const snapshot = snapshots[index + offset];
+    for (const path of collectTileImagePathsFromSnapshot(snapshot)) paths.add(path);
+  }
+  scheduleTileImagePreload([...paths], { linkFirst: true });
+};
+const renderTileView = ({ tile, isDrawnTile = false, isTsumogiri = false, faceDown = false, buttonTileId, buttonAction = "discard", disabledForRiichi = false, isSelectedForDiscard = false }) => {
   tile = normalizeTileForView(tile);
-  const classes = ["tile", isDrawnTile ? "drawn" : "", isTsumogiri ? "tsumogiri" : "", disabledForRiichi ? "disabled-for-riichi" : ""].filter(Boolean).join(" ");
+  const classes = ["tile", isDrawnTile ? "drawn" : "", isTsumogiri ? "tsumogiri" : "", disabledForRiichi ? "disabled-for-riichi" : "", isSelectedForDiscard ? "selected-discard" : ""].filter(Boolean).join(" ");
   const label = faceDown ? "■" : formatTile(tile);
   const imagePath = getTileImagePath(tile, faceDown);
   preloadTileImagePath(imagePath);
-  const content = `<img class="tile-image" src="${imagePath}" alt="${label}" decoding="sync" loading="eager" draggable="false" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
+  const content = `<img class="tile-image" src="${imagePath}" alt="${label}" decoding="async" loading="eager" fetchpriority="high" draggable="false" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
   if (!buttonTileId) return `<span class="${classes}">${content}</span>`;
   const attr = buttonAction === "nuki" ? "data-nuki-tile-id" : "data-discard-tile-id";
   return `<button class="${classes} tile-button" type="button" ${attr}="${buttonTileId}" oncontextmenu="event.preventDefault(); event.stopPropagation(); window.__anmikaController && window.__anmikaController.handleContextMenuAction && window.__anmikaController.handleContextMenuAction(); return false;">${content}</button>`;
@@ -2540,8 +2626,15 @@ const canWinByRiichiRequirement = ({ state, yaku, player, isClosed }) => {
   if (isTsumoLossless3maState(state)) return true;
   if (state?.settings?.ruleConfig?.otokogiEnabled === false) return true;
   if (yaku.some((item) => item.name === "国士無双" || item.name === "人和")) return true;
+  if (yaku.some((item) => item.name === "嶺上開花")) return true;
   if (!isClosed) return true;
   return player.isRiichi;
+};
+const isRinshanKaihouTsumo = (state, player, tile) => {
+  if (!state?.rinshanKaihou || !player?.drawnTile || !tile) return false;
+  return state.rinshanKaihou.playerId === player.id &&
+    state.rinshanKaihou.tileId === tile.id &&
+    player.drawnTile.id === tile.id;
 };
 const explicitIsChinitsuTiles = (tiles) => {
   const numberTiles = tiles.filter((tile) => ["manzu", "pinzu", "souzu"].includes(tile.suit));
@@ -2741,6 +2834,7 @@ const evaluateWinExplicit = (state, player, tile) => {
   if (riichiYakuEnabled && player.isRiichi) baseYaku.push({ name: "リーチ", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
   if (riichiYakuEnabled && player.ippatsu && player.isRiichi) baseYaku.push({ name: "一発", han: 1 });
   if (menzenTsumoYakuEnabled && isTsumo) baseYaku.push({ name: "門前清自摸和", han: 1, detail: turquoiseOpenRiichi ? "ターコイズ副露リーチ" : undefined });
+  if (isTsumo && isRinshanKaihouTsumo(state, player, tile || player.drawnTile)) baseYaku.push({ name: "嶺上開花", han: 1 });
   if (isFirstTsumoYakumanEligible(state, player, isTsumo)) baseYaku.push({ name: player.id === state.round.dealerPlayerId ? "天和" : "地和", han: 13, isYakuman: true });
   if (isRenhouEligible(state, player, isTsumo)) baseYaku.push({ name: "人和", han: 13, isYakuman: true });
   if (meldCount === 0 && explicitIsSevenPairs(concealedCounts)) {
@@ -2919,12 +3013,14 @@ const performNukiDoraDetailed = (state, playerId, tileId) => {
   if (fromDrawn) player.drawnTile = null;
   else player.hand = player.hand.filter((t) => t.id !== tileId);
   player.nukiDoraTiles.push(tile);
-  const replacementTile = state.rinshanWall.shift();
-  if (replacementTile) {
-    if (fromDrawn) player.drawnTile = replacementTile;
-    else player.hand.push(replacementTile);
-    state.lastDrawnTile = replacementTile;
-  }
+    const replacementTile = state.rinshanWall.shift();
+    if (replacementTile) {
+      if (fromDrawn) player.drawnTile = replacementTile;
+      else player.hand.push(replacementTile);
+      state.lastDrawnTile = replacementTile;
+      state.rinshanKaihou = null;
+      state.pendingRinshanKaihouFromKan = false;
+    }
   player.hand = sortHandTiles(player.hand);
   return replacementTile ? { nukiTile: tile, replacementTile } : { nukiTile: tile };
 };
@@ -3240,18 +3336,19 @@ class GameController {
       this.handleResultOk({ autoAllResultOk: true });
     });
   }
-  showActionAnnouncement(event, { targetState = this.state, durationMs = 850, emit = false } = {}) {
+  showActionAnnouncement(event, { targetState = this.state, durationMs = 1200, emit = false } = {}) {
     if (!event?.type) return false;
-    const labels = { pon: "ポン", kan: "カン" };
+    const labels = { pon: "ポン", kan: "カン", pao: "パオ" };
     const label = labels[event.type];
     if (!label) return false;
     const announcementKey = `${event.type}:${event.playerId || ""}:${event.turnIndex ?? ""}:${event.kanType || ""}:${event.tile?.id || event.tiles?.map?.((tile) => tile?.id).join(",") || ""}`;
     if (announcementKey === this.lastDisplayedAnnouncementKey) return false;
     this.lastDisplayedAnnouncementKey = announcementKey;
-    targetState.serverAnnouncement = { text: label, kind: `call-${event.type}` };
+    targetState.serverAnnouncement = { text: label, kind: event.type === "pao" ? "pao" : `call-${event.type}` };
+    playGameSound(soundTypeForEvent(event), { key: `call:${announcementKey}` });
     if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
     this.announcementClearTimer = setTimeout(() => {
-      if (this.state.serverAnnouncement?.kind === `call-${event.type}`) {
+      if (this.state.serverAnnouncement?.kind === (event.type === "pao" ? "pao" : `call-${event.type}`)) {
         this.state.serverAnnouncement = null;
         this.emit();
       }
@@ -3260,9 +3357,9 @@ class GameController {
     return true;
   }
   showLatestCallAnnouncement(events, { targetState = this.state } = {}) {
-    const callEvent = [...(events ?? [])].reverse().find((event) => event?.type === "pon" || event?.type === "kan");
+    const callEvent = [...(events ?? [])].reverse().find((event) => event?.type === "pon" || event?.type === "kan" || event?.type === "pao");
     if (!callEvent) return false;
-    return this.showActionAnnouncement(callEvent, { targetState, durationMs: callEvent.type === "kan" ? 1250 : 850 });
+    return this.showActionAnnouncement(callEvent, { targetState, durationMs: callEvent.type === "kan" ? 1600 : callEvent.type === "pao" ? 1500 : 1200 });
   }
   setOnlineLoadingMessage(message) {
     const text = String(message || "");
@@ -3410,7 +3507,7 @@ class GameController {
       return;
     }
     const tile = player.drawnTile ?? player.hand.at(-1);
-    if (tile) this.discardTile(tile.id);
+    if (tile) this.handleDiscardTileClick(tile.id);
   }
   monitorDiscardRecover() {
     if (this.state.screen !== "game" || this.state.handLog?.result) {
@@ -4018,14 +4115,25 @@ class GameController {
           text: latestEvent.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
           kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
         };
+        if (latestEvent.feverRiichiActive) {
+          playGameSound("feverRiichi", { key: `fever-riichi:${latestEvent.playerId}:${latestEvent.turnIndex}` });
+        }
         if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
         this.announcementClearTimer = setTimeout(() => {
           if (this.state.serverAnnouncement?.kind === next.serverAnnouncement.kind) {
             this.state.serverAnnouncement = null;
             this.emit();
           }
-        }, latestEvent.feverRiichiActive ? 1800 : 1000);
+        }, latestEvent.feverRiichiActive ? 2400 : 1500);
       }
+    }
+    const announcementKind = next.phase === "showingWinAnnouncement"
+      ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
+      : "";
+    if (announcementKind === "tsumo" || announcementKind === "ron" || announcementKind === "double-ron") {
+      playGameSound(announcementKind === "tsumo" ? "tsumo" : "ron", {
+        key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
+      });
     }
     this.showLatestCallAnnouncement(next.handLog?.events?.slice?.(-8) ?? [], { targetState: next });
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
@@ -4423,7 +4531,7 @@ class GameController {
           if (this.state.phase === "onlineLoading") sendInitialSocketState("startupWatchdog");
         });
       }
-    }, 1800);
+    }, 2400);
   }
   async resyncSocketGameState(reason = "resync") {
     const sync = loadOnlineSync();
@@ -4649,6 +4757,7 @@ class GameController {
     this.state.replayViewerId = getValidReplayViewerId(firstSnapshot, this.state.replayViewerId ?? CURRENT_USER_ID, replay);
     this.state.replayRevealHands = false;
     this.state.screen = "replayViewer";
+    warmReplayTileImages(replay, 0, 4);
     if (updateHash && globalThis.location) {
       const encoded = encodeURIComponent(replayId);
       if (globalThis.location.protocol === "file:") {
@@ -4664,6 +4773,7 @@ class GameController {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
     const max = Math.max(0, getReplaySnapshots(replay).length - 1);
     const visible = getReplayVisibleSnapshotIndexes(replay);
+    const previousIndex = this.state.replayIndex;
     if (visible.length) {
       const { position } = getReplayVisiblePosition(replay, this.state.replayIndex);
       const nextPosition = Math.max(0, Math.min(visible.length - 1, position + delta));
@@ -4671,13 +4781,24 @@ class GameController {
     } else {
       this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     }
+    warmReplayTileImages(replay, this.state.replayIndex, delta >= 0 ? 5 : 2);
+    if (this.state.replayIndex !== previousIndex) this.playReplaySoundAtIndex(replay, this.state.replayIndex);
     this.emit();
   }
   setReplayIndex(index) {
     const replay = replayRepository.getReplay(this.state.selectedReplayId);
     const max = Math.max(0, getReplaySnapshots(replay).length - 1);
+    const previousIndex = this.state.replayIndex;
     this.state.replayIndex = Math.max(0, Math.min(max, Number(index || 0)));
+    warmReplayTileImages(replay, this.state.replayIndex, 5);
+    if (this.state.replayIndex !== previousIndex) this.playReplaySoundAtIndex(replay, this.state.replayIndex);
     this.emit();
+  }
+  playReplaySoundAtIndex(replay, index) {
+    const event = getReplayEventForSnapshotIndex(replay, index);
+    const soundType = soundTypeForEvent(event);
+    if (!soundType) return;
+    playGameSound(soundType);
   }
   goNextReplayStep() {
     this.stepReplay(1);
@@ -4866,7 +4987,7 @@ class GameController {
     this.state.settings.ruleId = ruleId;
     this.state.settings.gameType = this.state.settings.gameType || ruleId;
     this.state.settings.ruleConfig = ruleConfig;
-    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkSubmittedResultId: "", resultOkPlayerIds: [], log: [] });
+    Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, rinshanKaihou: null, pendingRinshanKaihouFromKan: false, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkSubmittedResultId: "", resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.riichiStickCount = 0;
     if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
@@ -4963,10 +5084,18 @@ class GameController {
       }
       this.onStateChanged(this.state);
       submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 8000 }).then(async (response) => {
-        if (response?.state?.phase !== "gameEnded") {
+        if (response?.state) {
+          saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? loadOnlineSync()?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+          this.applyOnlineStateSnapshot(response.state);
+        } else {
           this.state.resultOkSubmitted = false;
           this.state.resultOkSubmittedResultId = "";
+          this.state.resultAutoCloseHandled = false;
+          await this.resyncSocketGameState("resultOkAckWithoutState").catch(() => {});
           this.emit();
+          return;
+        }
+        if (response?.state?.phase !== "gameEnded") {
           return;
         }
         const sync = loadOnlineSync();
@@ -5234,6 +5363,33 @@ class GameController {
     this.discardTile(player.drawnTile.id);
     return true;
   }
+  handleDiscardTileClick(tileId) {
+    if (!tileId) return;
+    if (this.state.selectedDiscardTileId === tileId) {
+      this.state.selectedDiscardTileId = null;
+      this.discardTile(tileId);
+      return;
+    }
+    const player = getCurrentPlayer(this.state);
+    const viewerPlayerId = isSocketAuthoritativeGame() ? loadOnlineSync()?.userId : getLocalHumanPlayerId(this.state);
+    const discardStatus = getDiscardStatus(this.state, viewerPlayerId, tileId);
+    if (!discardStatus.can) {
+      this.state.selectedDiscardTileId = null;
+      this.state.discardDebugMessage = `打牌できません: ${discardStatus.reason}`;
+      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction/.test(discardStatus.reason)) {
+        this.resyncSocketGameState("discardSelectBlocked").then((synced) => {
+          if (!synced) this.emit();
+        });
+      } else {
+        this.emit();
+      }
+      return;
+    }
+    if (!player?.hand?.some((tile) => tile.id === tileId) && player?.drawnTile?.id !== tileId) return;
+    this.state.selectedDiscardTileId = tileId;
+    this.state.discardDebugMessage = "";
+    this.emit();
+  }
   drawTile({ suppressEmit = false } = {}) {
     const player = getCurrentPlayer(this.state);
     if (!this.ruleEngine.canDraw(this.state, player)) return null;
@@ -5245,6 +5401,8 @@ class GameController {
       player.ippatsuOwnDrawStarted = true;
     }
     this.state.lastDrawnTile = tile;
+    this.state.rinshanKaihou = null;
+    this.state.pendingRinshanKaihouFromKan = false;
     appendHandLogEvent(this.state.handLog, { type: "draw", playerId: player.id, tile, from: "liveWall", turnIndex: this.state.turnIndex });
     bumpGameStateVersion(this.state);
     appendReplaySnapshot(this.state);
@@ -5269,6 +5427,7 @@ class GameController {
     console.log("[DiscardClick] clientVersion=", syncForLog?.version ?? this.state.version ?? 0);
     console.log("[DiscardClick] serverVersion=", syncForLog?.lastServerState?.version ?? syncForLog?.version ?? this.state.version ?? 0);
     if (!discardStatus.can) {
+      this.state.selectedDiscardTileId = null;
       this.state.discardDebugMessage = `打牌できません: ${discardStatus.reason}`;
       console.warn("[Discard] blocked", { tileId, reason: discardStatus.reason, pendingAction: this.state.pendingAction, phase: this.state.phase, version: this.state.version });
       if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction/.test(discardStatus.reason)) {
@@ -5280,6 +5439,7 @@ class GameController {
       }
       return;
     }
+    this.state.selectedDiscardTileId = null;
     this.state.discardDebugMessage = "";
     const discardWithoutRiichiFromChoice = isRiichiChoicePending(this.state.pendingAction) && this.state.phase !== "waitingForRiichiDiscard";
     if (!player) {
@@ -5374,6 +5534,19 @@ class GameController {
       player.feverRiichiActive = isFeverRiichiEligibleAfterDiscard(this.state, player, player.hand.filter((tile) => !isFlowerTile(tile)));
       player.feverWinCount = 0;
       appendHandLogEvent(this.state.handLog, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, turnIndex: this.state.turnIndex });
+      this.state.serverAnnouncement = {
+        text: player.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
+        kind: player.feverRiichiActive ? "fever-riichi" : "riichi",
+      };
+      if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
+      const riichiAnnouncementKind = this.state.serverAnnouncement.kind;
+      this.announcementClearTimer = setTimeout(() => {
+        if (this.state.serverAnnouncement?.kind === riichiAnnouncementKind) {
+          this.state.serverAnnouncement = null;
+          this.emit();
+        }
+      }, player.feverRiichiActive ? 2400 : 1500);
+      if (player.feverRiichiActive) playGameSound("feverRiichi", { key: `local-fever-riichi:${player.id}:${this.state.turnIndex}` });
       this.state.log.unshift(player.feverRiichiActive ? `${player.name} フィーバーリーチ` : `${player.name} リーチ`);
     }
     player.riichiDiscardTileIds = [];
@@ -5488,6 +5661,7 @@ class GameController {
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
     this.state.cpuThinkingMessage = "";
+    playGameSound(input.winType, { key: `local-win:${this.state.handLog.result?.resultId || this.state.turnIndex}:${input.winType}` });
     this.emit();
     setTimeout(() => {
       if (this.state.phase !== "showingWinAnnouncement") return;
@@ -5497,7 +5671,7 @@ class GameController {
       this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
       this.state.resultAutoCloseHandled = false;
       this.emit();
-    }, 1800);
+    }, 2400);
     return score;
   }
   queueResponseAfterDiscard(fromPlayerId, tile) {
@@ -5583,7 +5757,7 @@ class GameController {
     player.melds.push({ type: "pon", tiles: [...consumed, action.sourceTile], calledTile: action.sourceTile, fromPlayerId: action.fromPlayerId });
     const ponEvent = { type: "pon", playerId: player.id, fromPlayerId: action.fromPlayerId, tile: action.sourceTile, consumedTiles: consumed, turnIndex: this.state.turnIndex };
     appendHandLogEvent(this.state.handLog, ponEvent);
-    this.showActionAnnouncement(ponEvent, { targetState: this.state, durationMs: 850 });
+    this.showActionAnnouncement(ponEvent, { targetState: this.state, durationMs: 1200 });
     appendReplaySnapshot(this.state);
     for (const p of this.state.players) { p.ippatsu = false; p.ippatsuOwnDrawStarted = false; }
     this.state.currentPlayerIndex = this.state.players.findIndex((p) => p.id === player.id);
@@ -5622,7 +5796,7 @@ class GameController {
     this.state.kanCount++;
     const kanEvent = { type: "kan", playerId: player.id, fromPlayerId: action.fromPlayerId, tiles, kanType, turnIndex: this.state.turnIndex };
     appendHandLogEvent(this.state.handLog, kanEvent);
-    this.showActionAnnouncement(kanEvent, { targetState: this.state, durationMs: 1050 });
+    this.showActionAnnouncement(kanEvent, { targetState: this.state, durationMs: 1600 });
     appendReplaySnapshot(this.state);
     this.revealAdditionalDoraIndicator("kan");
     if (player.drawnTile) {
@@ -5637,6 +5811,8 @@ class GameController {
       return;
     }
     player.drawnTile = rinshan;
+    this.state.rinshanKaihou = { playerId: player.id, tileId: rinshan.id };
+    this.state.pendingRinshanKaihouFromKan = false;
     appendHandLogEvent(this.state.handLog, { type: "draw", playerId: player.id, tile: rinshan, from: "rinshanWall", turnIndex: this.state.turnIndex });
     appendReplaySnapshot(this.state);
     for (const p of this.state.players) { p.ippatsu = false; p.ippatsuOwnDrawStarted = false; }
@@ -5951,6 +6127,7 @@ class GameController {
       this.stopAllClocks();
       this.state.cpuThinkingPlayerId = null;
       this.state.cpuThinkingMessage = "";
+      playGameSound("tsumo", { key: `local-nagashi:${this.state.handLog.result?.resultId || this.state.turnIndex}` });
       appendHandLogEvent(this.state.handLog, { type: "win", winnerId: nagashiWinner.id, winType: "tsumo", winningTile: nagashiWinner.discardedTiles.at(-1)?.tile, scoreResult: score, turnIndex: this.state.turnIndex });
       this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "win", winnerId: nagashiWinner.id, winType: "tsumo", scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })) };
       this.state.resultCountdownStartedAt = null;
@@ -5971,7 +6148,7 @@ class GameController {
         this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
         this.state.resultAutoCloseHandled = false;
         this.emit();
-      }, 1800);
+      }, 2400);
       return;
     }
     const { tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments, paymentMap, finalScores } = calculateExhaustiveDrawPayments(this.state);
@@ -6098,6 +6275,22 @@ const calledTileIndexForMeld = (state, ownerId, fromPlayerId, tileCount) => {
   return tileCount === 4 ? 1 : Math.floor(tileCount / 2);
 };
 const meldRotationClass = (rotation) => rotation ? `meld-rotate-${rotation}` : "";
+const topSeatMeldSpec = (fromSeat, tileCount) => {
+  if (fromSeat === "right") {
+    return {
+      calledIndex: tileCount - 1,
+      rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "cw90" : "180"),
+    };
+  }
+  if (fromSeat === "bottom") {
+    const calledIndex = tileCount === 4 ? 2 : 1;
+    return {
+      calledIndex,
+      rotations: Array.from({ length: tileCount }, (_, index) => index === calledIndex ? "cw90" : "180"),
+    };
+  }
+  return null;
+};
 const meldDisplaySpec = (state, ownerId, meld, tileCount) => {
   const ownerSeat = seatPositionForPlayer(state, ownerId);
   const fromSeat = seatPositionForPlayer(state, meld?.fromPlayerId);
@@ -6111,13 +6304,7 @@ const meldDisplaySpec = (state, ownerId, meld, tileCount) => {
   if (ownerSeat === "right" && fromSeat === "bottom") {
     return { calledIndex: tileCount - 1, rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "180" : "ccw90") };
   }
-  if (ownerSeat === "top" && fromSeat === "right") {
-    return { calledIndex: tileCount - 1, rotations: Array.from({ length: tileCount }, (_, index) => index === tileCount - 1 ? "cw90" : "180") };
-  }
-  if (ownerSeat === "top" && fromSeat === "bottom") {
-    const calledIndex = tileCount === 4 ? 2 : 1;
-    return { calledIndex, rotations: Array.from({ length: tileCount }, (_, index) => index === calledIndex ? "cw90" : "180") };
-  }
+  if (ownerSeat === "top") return topSeatMeldSpec(fromSeat, tileCount) || { calledIndex: calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount), rotations: [] };
   return { calledIndex: calledTileIndexForMeld(state, ownerId, meld?.fromPlayerId, tileCount), rotations: [] };
 };
 const renderMeldSet = (state, ownerId, meld) => {
@@ -6443,7 +6630,7 @@ class GameView {
         <p>ターコイズ5pを使用している場合、副露していてもリーチ可能です。</p>
         <h3>フィーバーリーチ</h3>
         <p>7pまたは7sが完全暗刻の状態でリーチした場合、フィーバーリーチになります。フィーバーリーチ中は他家が強制ツモ切りになり、最大2回和了できます。2回目の和了では華牌・カン・ドラなどの増加分を再計算します。</p>
-        <h3>男気ルール</h3>
+        <h3>漢気ルール</h3>
         <p>ONでは門前和了にリーチ必須です。例外は国士無双と人和です。OFFでは役があればダマテン和了できます。</p>
         <h3>本役満</h3>
         <ul><li>人和</li><li>萬子混一色</li><li>大車輪</li><li>流し役満</li><li>緑一色</li><li>大三元</li><li>地和</li><li>天和</li><li>九蓮宝燈</li><li>四暗刻</li><li>四槓子</li><li>国士無双</li></ul>
@@ -6621,7 +6808,7 @@ class GameView {
         ` : `
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="rocket19Enabled" ${anmikaConfig.rocket19Enabled ? "checked" : ""} /> 1・9牌ロケット</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${anmikaConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
-          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="otokogiEnabled" ${anmikaConfig.otokogiEnabled ? "checked" : ""} /> 男気ルール</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="otokogiEnabled" ${anmikaConfig.otokogiEnabled ? "checked" : ""} /> 漢気ルール</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="feverRiichiEnabled" ${anmikaConfig.feverRiichiEnabled ? "checked" : ""} /> フィーバーリーチ</label>
           <label class="setting-row"><span>ターコイズ5p: ${anmikaConfig.turquoise5pCount}枚</span><select data-rule-config-turquoise>
             ${[0, 1, 2].map((count) => `<option value="${count}" ${anmikaConfig.turquoise5pCount === count ? "selected" : ""}>${count}枚</option>`).join("")}
@@ -6696,7 +6883,7 @@ class GameView {
     return [
       ruleConfig.rocket19Enabled ? "1・9牌ロケット" : null,
       ruleConfig.baibaEnabled ? "倍場" : null,
-      ruleConfig.otokogiEnabled ? "男気ON" : "男気OFF",
+      ruleConfig.otokogiEnabled ? "漢気ON" : "漢気OFF",
       ruleConfig.feverRiichiEnabled ? "フィーバーリーチ" : null,
       `ターコイズ5p ${ruleConfig.turquoise5pCount}枚`,
     ].filter(Boolean).join(" / ");
@@ -6892,7 +7079,7 @@ class GameView {
   serverAnnouncement(state) {
     const announcement = state.serverAnnouncement || {};
     const lines = Array.isArray(announcement.lines) ? announcement.lines : [];
-    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : "";
+    const className = announcement.kind === "double-ron" ? "double-ron-announcement" : announcement.kind === "fever-riichi" ? "fever-announcement" : announcement.kind === "riichi" ? "riichi-announcement" : announcement.kind === "call-pon" ? "pon-announcement" : announcement.kind === "call-kan" ? "kan-announcement" : announcement.kind === "pao" ? "pao-announcement" : "";
     const content = lines.length > 1 ? lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("") : escapeHtml(announcement.text ?? "");
     return `<div class="win-announcement ${className}"><div>${content}</div></div>`;
   }
@@ -6908,8 +7095,12 @@ class GameView {
   settingsPanel(state) {
     const sync = loadOnlineSync();
     const showDebugLeave = Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
+    const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
+    const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
+    const localLastHandChecked = Boolean(localPlayer && declaredBy.includes(localPlayer.id));
     return `<aside class="settings-panel">
       <h2>設定</h2>
+      ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
       <button type="button" class="secondary" data-page-reload>画面更新</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
@@ -7005,12 +7196,9 @@ class GameView {
   assistControls(player) {
     const assist = player.assistSettings ?? {};
     const autoWinChecked = Boolean(assist.autoWin || player.isRiichi);
-    const declaredBy = Array.isArray(this.currentStateForClock?.lastHandDeclaredBy) ? this.currentStateForClock.lastHandDeclaredBy : [];
-    const localLastHandChecked = declaredBy.includes(player.id);
     return `<div class="assist-controls">
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
-      <label><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>
     </div>`;
   }
   discardAreaClean(player, seat) {
@@ -7030,8 +7218,8 @@ class GameView {
     const melds = [...player.melds].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
     const nuki = player.nukiDoraTiles.map((tile) => renderTileView({ tile })).join("");
     return `<div class="exposed-row">
-      <div class="nuki-dora-area"><span>抜きドラ</span><div class="exposed-tiles">${nuki || `<small>なし</small>`}</div></div>
-      <div class="meld-area"><span>副露</span><div class="exposed-tiles">${melds || `<small>なし</small>`}</div></div>
+      <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
+      <div class="meld-area"><div class="exposed-tiles">${melds}</div></div>
     </div>`;
   }
   mahjongTable(state, current, dealer) {
@@ -7065,7 +7253,7 @@ class GameView {
     const isRiichiDiscardSelection = this.currentStateForClock?.phase === "waitingForRiichiDiscard" && currentStatePlayer?.id === player?.id;
     if (isRiichiDiscardSelection && riichiDiscardIds.length > 0 && !riichiDiscardIds.includes(tile.id)) return renderTileView({ tile, isDrawnTile, disabledForRiichi: true });
     if (player?.isRiichi && !isDrawnTile) return renderTileView({ tile, isDrawnTile });
-    return renderTileView({ tile, isDrawnTile, buttonTileId: tile.id, buttonAction: isFlowerTile(tile) ? "nuki" : "discard" });
+    return renderTileView({ tile, isDrawnTile, buttonTileId: tile.id, buttonAction: isFlowerTile(tile) ? "nuki" : "discard", isSelectedForDiscard: this.currentStateForClock?.selectedDiscardTileId === tile.id });
   }
   result(state) {
     const result = state.handLog.result;
@@ -7092,7 +7280,6 @@ class GameView {
     const hasPayment = Array.isArray(result.payments)
       ? result.payments.some((payment) => Number(payment.delta || 0) !== 0)
       : Object.values(result.payments || {}).some((delta) => Number(delta || 0) !== 0);
-    const carryRiichiStickCount = isTsumoLossless3maState(state) ? Number(state.riichiStickCount || 0) : 0;
     return `<section class="score-result result-modal"><h2>流局</h2>
       <h3>テンパイ状況</h3>
       ${tenpaiCount === 0 ? `<p class="score-note">全員ノーテン</p>` : ""}
@@ -7102,13 +7289,11 @@ class GameView {
         const handTiles = item?.handTiles ?? [];
         return `<section class="tenpai-player">
           <h4>${player.name}: ${item?.isTenpai ? "テンパイ" : "ノーテン"}</h4>
-          ${item?.isTenpai ? `<p><strong>待ち:</strong> ${waits.map(formatTile).join("、") || "なし"}</p>
-          <div><strong>手牌:</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>` : ""}
+          ${item?.isTenpai ? `<div><strong>手牌:</strong><div class="result-tiles">${handTiles.map((tile) => renderTileView({ tile })).join("")}</div></div>` : ""}
         </section>`;
       }).join("")}</div>
       <h3>点数移動</h3>
       ${hasPayment ? `<ul>${this.paymentRows(state, result.payments ?? {})}</ul>` : `<p>点数移動なし</p>`}
-      ${carryRiichiStickCount > 0 ? `<p>リーチ棒 x${carryRiichiStickCount} は次局へ持ち越し</p>` : ""}
       <h3>現在点数</h3>
       <ul>${state.players.map((player) => `<li>${player.name}: ${formatPointDisplay(result.finalScores?.[player.id] ?? player.score)}点</li>`).join("")}</ul>
       ${renderAgariYameButton(state)}${renderResultOkButton(state)}
@@ -7140,7 +7325,7 @@ class GameView {
         return `<section class="double-ron-result-block">
           <h3>${index === 0 ? "上家取り" : "和了"}: ${escapeHtml(winner?.name || getPlayerNameById(win.winnerId))} ロン</h3>
           <div class="score-hand-win-row result-hand-win-nuki-row">
-            <div class="score-hand-block"><strong>手牌・副露</strong><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>
+            <div class="score-hand-block"><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>
             <div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles result-winning-tile">${displayTile ? renderTileView({ tile: displayTile, isDrawnTile: true }) : ""}</div></div>
           </div>
           <ul class="score-yaku compact-yaku">${yakuRows || "<li>なし</li>"}</ul>
@@ -7165,7 +7350,7 @@ class GameView {
     const handTiles = resultHand13Tiles(score, winner, scoringWinningTile);
     const meldsInlineView = resultMeldsInlineView(state, winner);
     const nukiDoraTiles = Array.isArray(winner?.nukiDoraTiles) ? winner.nukiDoraTiles : [];
-    const resultHandLineView = `<div class="score-hand-block"><strong>手牌・副露</strong><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>`;
+    const resultHandLineView = `<div class="score-hand-block"><div class="result-tiles result-hand-line">${handTiles.map((tile) => renderTileView({ tile })).join("")}${meldsInlineView}</div></div>`;
     const resultWinningTileView = `<div class="score-winning-tile"><strong>和了牌</strong><div class="result-tiles result-winning-tile">${displayWinningTile ? renderTileView({ tile: displayWinningTile, isDrawnTile: true }) : ""}</div></div>`;
     const resultNukiDoraTileView = `<div class="score-nuki-dora-tile"><strong>華牌</strong><div class="result-tiles result-nuki-dora-tiles">${nukiDoraTiles.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>`;
     const resultHandWinNukiRow = `<div class="score-hand-win-row result-hand-win-nuki-row">${resultHandLineView}${resultWinningTileView}${resultNukiDoraTileView}</div>`;
@@ -7217,14 +7402,14 @@ class GameView {
         ? score.limitType
         : `${Number(score.han ?? score.totalHan ?? 0)}翻`;
       const scoreLabel = `${allRedScoreRank}${score.isTsumo ? "ツモ" : "ロン"}`;
-      return `<section class="score-result result-modal win-result-modal allred-score-result"><h2>和了結果</h2>
+      return `<section class="score-result result-modal win-result-modal allred-score-result">
         <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
         <div class="allred-result-grid">
           <div class="allred-hand-win-row">${resultHandWinNukiRow}</div>
           <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
           <div><strong>裏ドラ表示牌</strong><div class="result-tiles">${winnerRiichi ? state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし" : "リーチなし"}</div></div>
         </div>
-        <h3>役一覧</h3>
+        <h3>役</h3>
         <ul>${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
         <p class="final-score-line">${scoreLabel}</p>
         <h3>点数の移動</h3>
@@ -7274,7 +7459,7 @@ class GameView {
       <h3>半荘精算</h3>
       <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${formatPoint(item.pointDelta)}pt</li>`).join("")}</ul>
     </section>` : "";
-    return `<section class="score-result result-modal win-result-modal compact-score-result"><h2>和了結果</h2>
+    return `<section class="score-result result-modal win-result-modal compact-score-result">
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
       ${score.debugNoPointSettlement ? `<p class="score-note">CPUデバッグ卓: 点数・クラブポイント精算なし</p>` : ""}
@@ -7283,7 +7468,7 @@ class GameView {
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
         ${winnerRiichi ? `<div><strong>裏ドラ表示牌</strong><div class="result-tiles">${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>` : ""}
       </div>
-      <h3>役一覧</h3>
+      <h3>役</h3>
       <ul class="score-yaku compact-yaku">${yakuRows.join("")}</ul>
       <div class="compact-score-lines">
         <p>追加点合計 ${formatPoint(score.bonusPoints ?? 0)}</p>
@@ -7312,7 +7497,7 @@ if (typeof window !== "undefined") window.__anmikaController = controller;
 view = new GameView(document.querySelector("#game-root"), {
   onStart: () => { controller.getState().screen = "game"; controller.startGame(); },
   onDraw: () => controller.advanceUntilHumanAction(),
-  onDiscard: (id) => controller.discardTile(id),
+  onDiscard: (id) => controller.handleDiscardTileClick(id),
   onAgariYame: (resultId = "") => controller.handleAgariYame({ resultId }),
   onForceDiscardResync: () => controller.resyncSocketGameState("manualDiscardResync"),
   onNuki: (id) => controller.performNukiDora(getCurrentPlayer(controller.getState()).id, id),
