@@ -22,6 +22,8 @@ const mimeTypes = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
 };
 
@@ -29,7 +31,7 @@ const cacheControlFor = (filePath, url, pathname) => {
   const ext = path.extname(filePath).toLowerCase();
   if (pathname === "/service-worker.js" || pathname === "/manifest.json") return "no-store";
   if (ext === ".html") return "no-store";
-  if (pathname.startsWith("/tiles/") || pathname.startsWith("/sounds/") || [".png", ".jpg", ".jpeg", ".webp", ".svg", ".wav"].includes(ext)) {
+  if (pathname.startsWith("/tiles/") || pathname.startsWith("/sounds/") || [".png", ".jpg", ".jpeg", ".webp", ".svg", ".m4a", ".mp3", ".wav"].includes(ext)) {
     return "public, max-age=31536000, immutable";
   }
   if (url.searchParams.has("v") && [".js", ".css"].includes(ext)) {

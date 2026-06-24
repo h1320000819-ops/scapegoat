@@ -37,7 +37,7 @@ const installResultOkClickBridge = () => {
   document.addEventListener("click", handler, true);
 };
 installResultOkClickBridge();
-const STOP_PHASES = new Set(["waitingForAction", "waitingForHumanDiscard", "waitingForRiichiDiscard", "showingWinAnnouncement", "showingFlowerAnnouncement", "handEnded", "exhaustiveDraw", "gameEnded"]);
+const STOP_PHASES = new Set(["waitingForAction", "waitingForHumanDiscard", "waitingForRiichiDiscard", "showingWinAnnouncement", "showingFlowerAnnouncement", "showingCallAnnouncement", "handEnded", "exhaustiveDraw", "gameEnded"]);
 
 const colorText = { normal: "", red: "赤", gold: "金", blue: "青", turquoise: "ターコイズ" };
 const suitText = { man: "萬", pin: "筒", sou: "索", manzu: "萬", pinzu: "筒", souzu: "索", honor: "字", flower: "華" };
@@ -731,7 +731,7 @@ const isUsableOnlineGameState = (state) => Boolean(
   (
     (Array.isArray(state.liveWall) && state.liveWall.length > 0) ||
     (state.handLog?.handId && state.handLog.handId !== "not-started") ||
-    ["playing", "waitingForHumanDiscard", "waitingForAction", "waitingForRiichiDiscard", "handEnded", "showingWinAnnouncement"].includes(state.phase)
+    ["playing", "waitingForHumanDiscard", "waitingForAction", "waitingForRiichiDiscard", "handEnded", "showingWinAnnouncement", "showingCallAnnouncement"].includes(state.phase)
   )
 );
 const pushOnlineSyncState = async (gameState, reason = "state") => {
@@ -1907,7 +1907,7 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: "discard.mp3" };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: "discard.m4a" };
 const gameSoundCache = new Map();
 const getGameSoundAudio = (type) => {
   const fileName = GAME_SOUND_FILES[type];
@@ -1953,9 +1953,11 @@ const playGameSound = (type, { key = "" } = {}) => {
   const nowMs = Date.now();
   const cacheKey = key || `${type}:${nowMs}`;
   globalThis.__anmikaSoundHistory ??= {};
-  if (key && globalThis.__anmikaSoundHistory[cacheKey]) return;
-  if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
-  globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
+  if (type !== "discard") {
+    if (key && globalThis.__anmikaSoundHistory[cacheKey]) return;
+    if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 1200) return;
+    globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
+  }
   try {
     const baseAudio = getGameSoundAudio(type);
     const audio = baseAudio?.cloneNode ? baseAudio.cloneNode(true) : new Audio(soundAssetPath(fileName));
@@ -2201,7 +2203,7 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
   if (!gameState) return fail("局面がありません");
   if (gameState.screen && gameState.screen !== "game") return fail("対局画面ではありません");
   if (gameState.handLog?.result) return fail("結果画面を表示中です");
-  if (gameState.phase === "showingWinAnnouncement" || gameState.phase === "showingFlowerAnnouncement") return fail("演出中です");
+  if (gameState.phase === "showingWinAnnouncement" || gameState.phase === "showingFlowerAnnouncement" || gameState.phase === "showingCallAnnouncement") return fail("演出中です");
   const pendingRiichiChoice = isRiichiChoicePending(gameState.pendingAction);
   if (gameState.pendingAction && !pendingRiichiChoice) return fail("pendingAction が残っています");
   const phaseAllowsDiscard = ["waitingForHumanDiscard", "waitingForRiichiDiscard", "playing"].includes(gameState.phase) ||
@@ -7287,11 +7289,13 @@ class GameView {
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
+    const exposedArea = this.exposedAreaClean(player, true);
+    const exposedBeforeHand = seat === "top" || seat === "right" ? exposedArea : "";
+    const exposedAfterHand = seat === "bottom" ? exposedArea : "";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</div></div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${exposedBeforeHand}<span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>${exposedAfterHand}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
-      ${this.exposedAreaClean(player)}
     </section>`;
   }
   assistControls(player) {
@@ -7313,12 +7317,13 @@ class GameView {
       <div class="discard-grid">${discardRows.map((row) => `<div class="discard-row">${row.map(renderDiscard).join("")}</div>`).join("")}</div>
     </section>`;
   }
-  exposedAreaClean(player) {
+  exposedAreaClean(player, inline = false) {
     player = player.player ?? player;
     const state = this.currentStateForClock;
     const melds = [...player.melds].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
     const nuki = player.nukiDoraTiles.map((tile) => renderTileView({ tile })).join("");
-    return `<div class="exposed-row">
+    if (!melds && !nuki) return "";
+    return `<div class="exposed-row ${inline ? "inline-exposed-row" : ""}">
       <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
       <div class="meld-area"><div class="exposed-tiles">${melds}</div></div>
     </div>`;

@@ -510,6 +510,41 @@ button:hover {
   justify-content: flex-start;
 }
 
+.concealed-hand-tiles {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
+}
+
+.seat-bottom .hand-row {
+  gap: 8px;
+}
+
+.hand-row > .inline-exposed-row {
+  flex: 0 0 auto;
+  gap: 4px;
+  margin: 0;
+  max-width: none;
+  min-width: 0;
+  position: static;
+  transform: none;
+  width: auto;
+}
+
+.seat-bottom .hand-row > .inline-exposed-row {
+  margin-left: auto;
+}
+
+.seat-top .hand-row > .inline-exposed-row {
+  margin-right: auto;
+}
+
+.seat-right .hand-row > .inline-exposed-row {
+  margin-bottom: auto;
+}
+
 .seat-top .hand-row {
   transform: translateY(-18px);
 }
@@ -1293,11 +1328,65 @@ button:hover {
 
 .seat-bottom .exposed-row {
   align-items: flex-end;
-  bottom: 76px;
-  flex-direction: column;
-  gap: 1px;
-  right: clamp(56px, 13vw, 128px);
-  width: min(42vw, 420px);
+  flex: 0 0 auto;
+  flex-direction: row;
+  gap: 4px;
+  margin-left: auto;
+  max-width: 40vw;
+  min-width: 0;
+  position: static;
+  width: auto;
+}
+
+.seat-bottom .meld-area .exposed-tiles,
+.seat-bottom .nuki-dora-area .exposed-tiles {
+  align-items: flex-end;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.seat-bottom .meld-area,
+.seat-bottom .nuki-dora-area {
+  flex: 0 0 auto;
+}
+
+.seat-bottom .hand-row > .inline-exposed-row .meld-area { order: 1; }
+.seat-bottom .hand-row > .inline-exposed-row .nuki-dora-area { order: 2; }
+.seat-top .hand-row > .inline-exposed-row .nuki-dora-area { order: 1; }
+.seat-top .hand-row > .inline-exposed-row .meld-area { order: 2; }
+.seat-right .hand-row > .inline-exposed-row .nuki-dora-area { order: 1; }
+.seat-right .hand-row > .inline-exposed-row .meld-area { order: 2; }
+
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area .exposed-tiles {
+  align-items: end;
+  display: grid;
+  gap: 2px;
+  grid-template-columns: repeat(2, var(--discard-tile-width));
+  grid-template-rows: repeat(2, var(--discard-tile-height));
+  justify-content: end;
+  min-height: 0;
+}
+
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area .tile,
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area .tile-image,
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area .tile-fallback {
+  height: var(--discard-tile-height);
+  min-width: var(--discard-tile-width);
+  width: var(--discard-tile-width);
+}
+
+.seat-top .hand-row > .inline-exposed-row .meld-area .exposed-tiles,
+.seat-top .hand-row > .inline-exposed-row .nuki-dora-area .exposed-tiles {
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.seat-right .hand-row > .inline-exposed-row .meld-area .exposed-tiles,
+.seat-right .hand-row > .inline-exposed-row .nuki-dora-area .exposed-tiles {
+  align-items: center;
+  gap: 4px;
 }
 
 .assist-controls {
@@ -2431,6 +2520,7 @@ button:hover {
   }
 
   .seat-bottom .hand-row {
+    gap: 5px;
     min-height: clamp(54px, 15dvh, 68px);
     padding: 3px;
   }
@@ -2629,8 +2719,10 @@ button:hover {
   }
 
   .seat-bottom .exposed-row {
-    gap: 0;
-    right: clamp(42px, 18vw, 126px);
+    gap: 3px;
+    margin-left: auto;
+    max-width: 42vw;
+    position: static;
     transform-origin: bottom right;
   }
 
@@ -2639,6 +2731,13 @@ button:hover {
   .seat-top .meld-area .exposed-tiles,
   .seat-top .nuki-dora-area .exposed-tiles {
     gap: 7px;
+  }
+
+  .seat-bottom .meld-area .exposed-tiles,
+  .seat-bottom .nuki-dora-area .exposed-tiles {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 3px;
   }
 
   .seat-bottom .meld-set,
@@ -3120,4 +3219,21 @@ button:hover {
   .win-announcement > div {
     font-size: 72px;
   }
+}
+
+.player-seat .hand-row > .inline-exposed-row {
+  bottom: auto !important;
+  left: auto !important;
+  position: static !important;
+  right: auto !important;
+  top: auto !important;
+  transform: none !important;
+}
+
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area {
+  bottom: auto !important;
+  left: auto !important;
+  position: static !important;
+  right: auto !important;
+  top: auto !important;
 }

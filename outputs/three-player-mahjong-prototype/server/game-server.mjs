@@ -3807,6 +3807,28 @@ const beginServerFlowerAnnouncement = (state, player, tile) => {
   appendHandEvent(state, { type: "flowerAnnouncement", playerId: player.id, tile, turnIndex: state.turnIndex ?? 0 });
   return true;
 };
+const beginServerPonAnnouncement = (state, player, { fromPlayerId, sourceTile }) => {
+  if (!state || !player || !fromPlayerId || !sourceTile) return false;
+  const matchingTiles = ensureArray(player.hand).filter((tile) => sameTileKind(tile, sourceTile)).slice(0, 2);
+  if (matchingTiles.length < 2) throw new Error("ポンに必要な2枚がありません");
+  state.pendingAction = null;
+  state.phase = "showingCallAnnouncement";
+  state.serverAnnouncement = { text: "ポン", kind: "call-pon" };
+  state.isWaitingForHumanAction = false;
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.pendingServerEffect = {
+    type: "ponReveal",
+    playerId: player.id,
+    fromPlayerId,
+    sourceTile,
+    consumedTileIds: matchingTiles.map((tile) => tile.id),
+    resumeAt: Date.now() + 1350,
+  };
+  appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, consumedTiles: matchingTiles, turnIndex: state.turnIndex ?? 0 });
+  clearServerIppatsu(state, "pon");
+  return true;
+};
 const scheduleServerFeverForcedDiscard = (state, player, feverPlayer) => {
   if (!state || !player?.drawnTile || !feverPlayer || feverPlayer.id === player.id) return false;
   const flower = findAutoFlowerTile(player);
@@ -4039,6 +4061,59 @@ const applyServerFlowerEffect = (state) => {
   if (scheduleServerFeverForcedDiscard(state, player, feverPlayer)) return true;
   state.phase = "waitingForHumanDiscard";
   if (!queueServerSelfDrawOptions(state, player)) startServerClockForPlayer(state, player);
+  return true;
+};
+const applyServerPonRevealEffect = (state) => {
+  const effect = state.pendingServerEffect;
+  if (!effect || effect.type !== "ponReveal") return false;
+  state.pendingServerEffect = null;
+  state.serverAnnouncement = null;
+  const player = findPlayer(state, effect.playerId);
+  if (!player) {
+    state.phase = "playing";
+    return false;
+  }
+  const sourceTile = effect.sourceTile;
+  const fromPlayerId = effect.fromPlayerId;
+  const calledTile = removeLastMatchingDiscard(state, fromPlayerId, sourceTile) || sourceTile;
+  const consumedTileIds = new Set(ensureArray(effect.consumedTileIds).filter(Boolean));
+  const tiles = [calledTile];
+  const remainingHand = [];
+  for (const tile of ensureArray(player.hand)) {
+    if (tiles.length < 3 && consumedTileIds.has(tile?.id)) {
+      tiles.push(tile);
+      consumedTileIds.delete(tile?.id);
+    } else {
+      remainingHand.push(tile);
+    }
+  }
+  if (tiles.length < 3) {
+    const fallbackHand = [];
+    for (const tile of remainingHand) {
+      if (tiles.length < 3 && sameTileKind(tile, sourceTile)) tiles.push(tile);
+      else fallbackHand.push(tile);
+    }
+    player.hand = fallbackHand;
+  } else {
+    player.hand = remainingHand;
+  }
+  if (tiles.length < 3) {
+    state.phase = "playing";
+    appendHandEvent(state, { type: "ponRevealFailed", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
+    return false;
+  }
+  player.melds ??= [];
+  const meld = { type: "pon", tiles, calledTile, fromPlayerId };
+  player.melds.push(meld);
+  player.drawnTile = null;
+  player.hand = sortHandTiles(player.hand);
+  state.currentPlayerIndex = ensureArray(state.players).findIndex((p) => p.id === player.id);
+  state.players.forEach((p) => { p.status = p.id === player.id ? "active" : "waiting"; });
+  state.phase = "waitingForHumanDiscard";
+  updateServerPaoResponsibilityAfterOpenMeld(state, player, meld, fromPlayerId);
+  if (!queueServerDiscardTurnOptions(state, player, { type: "afterPon", fromPlayerId, sourceTile })) {
+    startServerClockForPlayer(state, player);
+  }
   return true;
 };
 const queueServerAfterDiscardOptions = (state, fromPlayerId, sourceTile) => {
@@ -4565,29 +4640,7 @@ const applyServerAction = (state, event) => {
     const sourceTile = option.sourceTile || payload.sourceTile;
     const fromPlayerId = option.fromPlayerId || payload.fromPlayerId;
     if (!sourceTile || !fromPlayerId) throw new Error("ポン元の牌がありません");
-    const same = (tile) => sameTileKind(tile, sourceTile);
-    const calledTile = removeLastMatchingDiscard(state, fromPlayerId, sourceTile) || sourceTile;
-    const tiles = [calledTile];
-    player.hand = ensureArray(player.hand).filter((tile) => {
-      if (same(tile) && tiles.length < 3) { tiles.push(tile); return false; }
-      return true;
-    });
-    if (tiles.length < 3) throw new Error("ポンに必要な2枚がありません");
-    player.melds ??= [];
-    const meld = { type: "pon", tiles, calledTile, fromPlayerId };
-    player.melds.push(meld);
-    player.drawnTile = null;
-    player.hand = sortHandTiles(player.hand);
-    state.currentPlayerIndex = state.players.findIndex((p) => p.id === player.id);
-    state.players.forEach((p) => { p.status = p.id === player.id ? "active" : "waiting"; });
-    state.pendingAction = null;
-    state.phase = "waitingForHumanDiscard";
-    appendHandEvent(state, { type: "pon", playerId: player.id, fromPlayerId, tile: sourceTile, turnIndex: state.turnIndex ?? 0 });
-    updateServerPaoResponsibilityAfterOpenMeld(state, player, meld, fromPlayerId);
-    clearServerIppatsu(state, "pon");
-    if (!queueServerDiscardTurnOptions(state, player, { type: "afterPon", fromPlayerId, sourceTile })) {
-      startServerClockForPlayer(state, player);
-    }
+    beginServerPonAnnouncement(state, player, { fromPlayerId, sourceTile });
     return state;
   }
 
@@ -5565,6 +5618,7 @@ const scheduleRoomResultTimeout = (room) => {
 const applyPendingRoomServerEffect = (room) => {
   if (!room?.state?.pendingServerEffect) return false;
   if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
+  else if (room.state.pendingServerEffect.type === "ponReveal") applyServerPonRevealEffect(room.state);
   else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
   else if (room.state.pendingServerEffect.type === "riichiAutoDiscard") applyServerRiichiAutoDiscardEffect(room.state);
   else if (room.state.pendingServerEffect.type === "winAnnouncement") {

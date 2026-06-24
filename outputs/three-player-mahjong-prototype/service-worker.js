@@ -1,12 +1,12 @@
-const CACHE_NAME = "anmika-pwa-20260624-lobby-status-hide-b";
+const CACHE_NAME = "anmika-pwa-20260624-discard-m4a-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v1";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-assist-left-a",
-  "/runtime/app.js?v=20260624-discard-sound-a",
+  "/styles.css?v=20260624-nuki-grid-a",
+  "/runtime/app.js?v=20260624-discard-m4a-a",
   "/runtime/online-debug.js?v=20260624-lobby-status-hide-b",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
@@ -18,7 +18,7 @@ const APP_SHELL = [
   "/sounds/tsumo.wav",
   "/sounds/riichi.wav",
   "/sounds/fever-riichi.wav",
-  "/sounds/discard.mp3",
+  "/sounds/discard.m4a",
 ];
 
 self.addEventListener("install", (event) => {
