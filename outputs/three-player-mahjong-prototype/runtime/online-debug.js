@@ -3853,10 +3853,7 @@
       }
     }
     if (has("pointRate")) {
-      const pointRateLabel = $("pointRate").closest("label");
-      if (pointRateLabel?.childNodes?.length) {
-        pointRateLabel.childNodes[0].textContent = tsumoLossless3ma ? "レート: 1000点 = " : "レート: 1点 = ";
-      }
+      if (has("pointRatePrefix")) $("pointRatePrefix").textContent = tsumoLossless3ma ? "レート: 1000点 = " : "レート: 1点 = ";
     }
     if (has("pointRateValue") && has("pointRate")) $("pointRateValue").textContent = Number($("pointRate").value || 1).toFixed(1);
     if (has("rakePercentValue") && has("rakePercent")) $("rakePercentValue").textContent = Number($("rakePercent").value || 0).toFixed(1);
@@ -5485,7 +5482,6 @@
     bind("collectPointButton", collectPoint);
     bind("globalBackButton", goBack);
     bind("backToClubsButton", goBack);
-    bind("backFromCreateTableButton", goBack);
     bind("backFromTableRoomButton", goBack);
     bind("backFromOnlineGameButton", goBack);
     bind("backFromSettingsPageButton", goBack);

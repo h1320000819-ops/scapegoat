@@ -68,6 +68,32 @@
         background: var(--panel);
       }
       label { display: grid; gap: 6px; margin: 8px 0; }
+      .inline-range-label {
+        align-items: center;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 10px;
+      }
+      .inline-range-label .range-text {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+      .inline-range-label input[type="range"] {
+        flex: 1 1 160px;
+        min-width: 140px;
+      }
+      .inline-checkbox-label {
+        align-items: center;
+        display: flex;
+        flex-direction: row-reverse;
+        gap: 10px;
+        justify-content: space-between;
+        max-width: 360px;
+        white-space: nowrap;
+      }
+      .inline-checkbox-label input[type="checkbox"] {
+        flex: 0 0 auto;
+      }
       input, select, button {
         font: inherit;
         border-radius: 8px;
@@ -354,9 +380,6 @@
         <p class="member-blocked muted">卓作成はクラブ管理者のみ可能です。</p>
 
         <section id="tableCreatePanel" class="modal-panel">
-          <div class="row">
-            <button id="backFromCreateTableButton" type="button" class="secondary">戻る</button>
-          </div>
           <h3>卓作成</h3>
           <label>卓名 <input id="tableName" placeholder="アンミカロケット卓" /></label>
           <label>ルール
@@ -367,17 +390,17 @@
           </label>
           <div id="anmikaRuleCreateFields">
             <div class="row">
-              <label>レート: 1点 = <span id="pointRateValue">1.0</span>ポイント
+              <label class="inline-range-label"><span class="range-text"><span id="pointRatePrefix">レート: 1点 = </span><span id="pointRateValue">1.0</span>ポイント</span>
                 <input id="pointRate" type="range" min="0.1" max="10" step="0.1" value="1.0" />
               </label>
-              <label>レーキ: <span id="rakePercentValue">5.0</span>%
+              <label class="inline-range-label"><span class="range-text">レーキ: <span id="rakePercentValue">5.0</span>%</span>
                 <input id="rakePercent" type="range" min="0" max="10" step="0.5" value="5" />
               </label>
             </div>
-            <label><input id="rocket19Enabled" type="checkbox" checked /> 1・9牌ロケット</label>
-            <label><input id="baibaEnabled" type="checkbox" checked /> 倍場</label>
-            <label><input id="otokogiEnabled" type="checkbox" checked /> 漢気ルール</label>
-            <label><input id="feverRiichiEnabled" type="checkbox" checked /> フィーバーリーチ</label>
+            <label class="inline-checkbox-label"><input id="rocket19Enabled" type="checkbox" checked /> 1・9牌ロケット</label>
+            <label class="inline-checkbox-label"><input id="baibaEnabled" type="checkbox" checked /> 倍場</label>
+            <label class="inline-checkbox-label"><input id="otokogiEnabled" type="checkbox" checked /> 漢気ルール</label>
+            <label class="inline-checkbox-label"><input id="feverRiichiEnabled" type="checkbox" checked /> フィーバーリーチ</label>
             <label>ターコイズ5p
               <select id="turquoise5pCount">
                 <option value="0">0枚</option>
@@ -468,7 +491,7 @@
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
     <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
-    <script src="../runtime/online-debug.js?v=20260624-disable-email-confirm-a"></script>
+    <script src="../runtime/online-debug.js?v=20260624-create-form-inline-a"></script>
   </body>
 </html>
 

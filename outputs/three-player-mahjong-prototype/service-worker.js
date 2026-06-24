@@ -1,13 +1,13 @@
-const CACHE_NAME = "anmika-pwa-20260624-disable-email-confirm-a";
+const CACHE_NAME = "anmika-pwa-20260624-create-form-inline-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v1";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-action-buttons-pos-a",
-  "/runtime/app.js?v=20260624-replay-effects-a",
-  "/runtime/online-debug.js?v=20260624-disable-email-confirm-a",
+  "/styles.css?v=20260624-create-form-inline-a",
+  "/runtime/app.js?v=20260624-rocket5-png-a",
+  "/runtime/online-debug.js?v=20260624-create-form-inline-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",

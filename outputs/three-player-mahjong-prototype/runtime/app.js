@@ -1963,7 +1963,7 @@ const playGameSound = (type, { key = "" } = {}) => {
     audio.play()?.catch?.(() => {});
   } catch {}
 };
-const rocketAssetExtension = (rank) => (rank === 1 || rank === 9) ? "png" : "jpg";
+const rocketAssetExtension = (rank) => (rank === 1 || rank === 5 || rank === 9) ? "png" : "jpg";
 const normalizeTileForView = (tile) => {
   if (!tile) return tile;
   if (tile.tile) tile = tile.tile;
