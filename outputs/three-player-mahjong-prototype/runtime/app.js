@@ -7289,11 +7289,16 @@ class GameView {
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
-    const reserveExposedSpace = true;
-    const exposedArea = this.exposedAreaClean(player, true, reserveExposedSpace);
+    const handRegion = `<span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}</span>`;
+    const drawnRegion = `<span class="drawn-tile-slot ${drawnTile ? "" : "empty-tile-slot"}">${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>`;
+    const meldRegion = this.meldAreaClean(player, true);
+    const nukiRegion = this.nukiAreaClean(player, true);
+    const layoutParts = seat === "bottom"
+      ? [handRegion, drawnRegion, meldRegion, nukiRegion]
+      : [nukiRegion, meldRegion, drawnRegion, handRegion];
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}"><span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>${exposedArea}</div></div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${layoutParts.join("")}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }
@@ -7318,14 +7323,25 @@ class GameView {
   }
   exposedAreaClean(player, inline = false, reserveSpace = false) {
     player = player.player ?? player;
-    const state = this.currentStateForClock;
-    const melds = [...player.melds].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
-    const nuki = player.nukiDoraTiles.map((tile) => renderTileView({ tile })).join("");
-    if (!melds && !nuki && !reserveSpace) return "";
+    const melds = this.meldAreaClean(player, reserveSpace);
+    const nuki = this.nukiAreaClean(player, reserveSpace);
+    if (!melds && !nuki) return "";
     return `<div class="exposed-row ${inline ? "inline-exposed-row" : ""} ${reserveSpace ? "reserved-exposed-row" : ""} ${!melds && !nuki ? "empty-exposed-row" : ""}">
-      <div class="meld-area"><div class="exposed-tiles">${melds}</div></div>
-      <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
+      ${melds}${nuki}
     </div>`;
+  }
+  meldAreaClean(player, reserveSpace = false) {
+    player = player.player ?? player;
+    const state = this.currentStateForClock;
+    const melds = [...(player.melds ?? [])].reverse().map((m) => state ? renderMeldSet(state, player.id, m) : `<span class="meld-set">${m.tiles.map((tile) => renderTileView({ tile })).join("")}</span>`).join("");
+    if (!melds && !reserveSpace) return "";
+    return `<div class="meld-area hand-region ${!melds ? "empty-hand-region" : ""}"><div class="exposed-tiles">${melds}</div></div>`;
+  }
+  nukiAreaClean(player, reserveSpace = false) {
+    player = player.player ?? player;
+    const nuki = (player.nukiDoraTiles ?? []).map((tile) => renderTileView({ tile })).join("");
+    if (!nuki && !reserveSpace) return "";
+    return `<div class="nuki-dora-area hand-region ${!nuki ? "empty-hand-region" : ""}"><div class="exposed-tiles">${nuki}</div></div>`;
   }
   mahjongTable(state, current, dealer) {
     return this.mahjongTableClean(state, current, dealer);

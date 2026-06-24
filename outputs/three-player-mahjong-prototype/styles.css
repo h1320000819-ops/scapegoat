@@ -3250,3 +3250,166 @@ button:hover {
   right: auto !important;
   top: auto !important;
 }
+
+.player-seat .hand-row {
+  overflow: visible !important;
+}
+
+.player-seat .hand-row > .concealed-hand-tiles,
+.player-seat .hand-row > .drawn-tile-slot,
+.player-seat .hand-row > .hand-region {
+  flex: 0 0 auto;
+  position: static !important;
+}
+
+.player-seat .drawn-tile-slot {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 54px;
+  min-width: 42px;
+}
+
+.player-seat .drawn-tile-slot.empty-tile-slot,
+.player-seat .hand-region.empty-hand-region {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player-seat .hand-row > .meld-area {
+  align-items: center;
+  display: flex;
+  min-height: 54px;
+  min-width: 174px;
+}
+
+.player-seat .hand-row > .nuki-dora-area {
+  align-items: center;
+  display: flex;
+  min-height: calc(var(--discard-tile-height) * 2 + 2px);
+  min-width: calc(var(--discard-tile-width) * 2 + 2px);
+}
+
+.player-seat .hand-row > .meld-area .exposed-tiles,
+.player-seat .hand-row > .meld-area .meld-tiles {
+  align-items: center !important;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 1px;
+}
+
+.player-seat .hand-row > .meld-area .meld-set {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  margin: 0 3px 0 0;
+  position: relative;
+}
+
+.player-seat .hand-row > .meld-area .meld-tile {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+}
+
+.player-seat .hand-row > .nuki-dora-area .exposed-tiles {
+  align-items: center !important;
+  display: grid !important;
+  gap: 2px;
+  grid-template-columns: repeat(2, var(--discard-tile-width));
+  grid-template-rows: repeat(2, var(--discard-tile-height));
+  justify-content: center;
+}
+
+.player-seat .hand-row > .nuki-dora-area .tile,
+.player-seat .hand-row > .nuki-dora-area .tile-image,
+.player-seat .hand-row > .nuki-dora-area .tile-fallback {
+  height: var(--discard-tile-height) !important;
+  min-width: var(--discard-tile-width) !important;
+  width: var(--discard-tile-width) !important;
+}
+
+.seat-bottom .hand-row {
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.seat-bottom .concealed-hand-tiles {
+  justify-content: flex-start;
+}
+
+.seat-bottom .drawn-tile-slot {
+  margin-right: 8px;
+}
+
+.seat-top .hand-row {
+  align-items: flex-start;
+  flex-direction: row;
+  height: 64px;
+  justify-content: flex-end;
+  min-height: 64px;
+}
+
+.seat-top .concealed-hand-tiles {
+  justify-content: flex-end;
+}
+
+.seat-top .drawn-tile-slot {
+  margin-left: 8px;
+}
+
+.seat-top .hand-row > .nuki-dora-area {
+  order: 1;
+}
+
+.seat-top .hand-row > .meld-area {
+  order: 2;
+}
+
+.seat-top .drawn-tile-slot {
+  order: 3;
+}
+
+.seat-top .concealed-hand-tiles {
+  order: 4;
+}
+
+.seat-right .hand-row {
+  align-items: flex-end;
+  flex-direction: column;
+  justify-content: flex-start;
+  max-height: none;
+  overflow: visible !important;
+  width: 184px;
+}
+
+.seat-right .hand-row > .nuki-dora-area {
+  order: 1;
+}
+
+.seat-right .hand-row > .meld-area {
+  order: 2;
+}
+
+.seat-right .drawn-tile-slot {
+  margin-bottom: 8px;
+  order: 3;
+}
+
+.seat-right .concealed-hand-tiles {
+  flex-direction: column;
+  order: 4;
+}
+
+.seat-right .hand-row > .meld-area {
+  justify-content: flex-end;
+  min-height: 30px;
+  min-width: 174px;
+}
+
+.seat-right .hand-row > .nuki-dora-area {
+  justify-content: flex-end;
+  min-height: calc(var(--discard-tile-height) * 2 + 2px);
+  min-width: calc(var(--discard-tile-width) * 2 + 2px);
+}
