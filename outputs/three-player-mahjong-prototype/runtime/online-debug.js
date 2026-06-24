@@ -6,7 +6,7 @@
     passwordTooShort: "パスワードは6文字以上で入力してください。",
     displayNameRequired: "プレイヤー名を入力してください。",
     userIdRequired: "ログインIDを入力してください。",
-    invalidLogin: "メールアドレスまたはパスワードが違います。",
+    invalidLogin: "メールアドレスまたはログインID、またはパスワードが違います。",
     profileNotFound: "ユーザー情報が見つかりません。",
     selectClub: "クラブを選択してください。",
     selectTable: "卓を選択してください。",
@@ -584,6 +584,9 @@
   const toJapaneseError = (message) => {
     if (!message) return "詳細不明のエラーです。";
     if (message.includes("invalid input syntax for type uuid")) return "空のIDが送信されました。クラブまたは卓を選択してから操作してください。";
+    if (message.includes("invalid_grant") || message.includes("Invalid login credentials")) return JA_MESSAGES.invalidLogin;
+    if (message.includes("Email not confirmed")) return "メール確認が完了していません。確認メールのリンクを開いてからログインしてください。";
+    if (message.includes("Unable to validate email address") || message.includes("invalid format")) return "メールアドレスまたはログインIDを確認してください。";
     if (message.includes("no empty seat")) return "空席がありません。";
     if (message.includes("not club member")) return "クラブに所属していないため着席できません。";
     if (message.includes("admin required")) return "管理者権限がありません。";
@@ -592,7 +595,6 @@
     if (message.includes("new row violates row-level security policy for table \"tables\"")) return "卓作成がDBの保護ルールにより拒否されました。patch_create_table_with_seats.sql を実行してください。";
     if (message.includes("create_table_with_seats") && message.includes("schema cache")) return "卓作成用のDB関数が見つかりません。patch_create_table_with_seats.sql を実行してください。";
     if (message.includes("Password should be at least") || message.includes("at least 6")) return JA_MESSAGES.passwordTooShort;
-    if (message.includes("Invalid login credentials")) return JA_MESSAGES.invalidLogin;
     if (message.includes("User already registered")) return "このユーザーはすでに登録されています。";
     if (message.includes("get_login_email") && message.includes("schema cache")) return "ログイン用のDB関数が見つかりません。最新版の schema.sql または該当パッチSQLを実行してください。";
     if (message.includes("ensure_user_profile") && message.includes("schema cache")) return "ユーザー情報作成用のDB関数が見つかりません。patch_auth_profile.sql を実行してください。";
@@ -618,6 +620,7 @@
     if (message.includes("club reserve would be negative")) return "クラブ保管ポイントが不足しています。送信でクラブ保管ポイントをマイナスにはできません。";
     if (message.includes("member balance would be negative")) return "対象プレイヤーのポイントが不足しています。送信・回収で残高をマイナスにはできません。";
     if (message.includes("amount must be positive")) return "ポイント数は1以上で入力してください。";
+    if (String(message).trim() === "400" || message.includes("Bad Request")) return "ログイン情報を確認してください。メールアドレスまたはログインIDとパスワードが正しいか確認してください。";
     return message;
   };
 
@@ -867,7 +870,7 @@
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
-      const error = new Error(data?.message || response.statusText);
+      const error = new Error(data?.message || data?.error_description || data?.error || response.statusText || String(response.status));
       error.status = response.status;
       error.data = data;
       if (retry && (response.status === 401 || data?.code === "PGRST303") && state.refreshToken) {
@@ -1324,6 +1327,33 @@
     const data = await rest("/rpc/get_login_email", { method: "POST", body: JSON.stringify({ p_user_id: loginId }) });
     return Array.isArray(data) ? data[0] : data;
   };
+  const extractLoginEmail = (value) => {
+    if (!value) return "";
+    if (typeof value === "string") return value.trim();
+    const candidates = [
+      value.email,
+      value.auth_email,
+      value.login_email,
+      value.get_login_email,
+      value.p_auth_email,
+    ];
+    return String(candidates.find(Boolean) || "").trim();
+  };
+  const resolveLoginEmail = async (loginInput) => {
+    const identifier = String(loginInput || "").trim();
+    if (!identifier) throw new Error("メールアドレスまたはログインIDを入力してください。");
+    if (identifier.includes("@")) return identifier;
+    let email = "";
+    try {
+      email = extractLoginEmail(await getLoginEmail(identifier));
+    } catch (error) {
+      const raw = rawErrorText(error);
+      if (isMissingRpcError(error, "get_login_email")) throw error;
+      throw new Error(toJapaneseError(raw));
+    }
+    if (!email || !email.includes("@")) throw new Error("ログインIDが見つかりません。メールアドレスまたはログインIDを確認してください。");
+    return email;
+  };
   const ensureProfileForAuthUser = async (authUser, displayName = "") => {
     if (!authUser?.id) throw new Error("認証ユーザー情報を取得できませんでした。");
     const email = authUser.email || `${authUser.id}@anmika.local`;
@@ -1373,6 +1403,7 @@
     if (password.length < 6) throw new Error(JA_MESSAGES.passwordTooShort);
     const email = has("email") ? $("email").value.trim() : "";
     if (!email) throw new Error("メールアドレスを入力してください。");
+    if (!email.includes("@")) throw new Error("アカウント作成時はメールアドレスを入力してください。ログインIDは作成後に自動発行されます。");
     try {
       const signUpData = await auth("/signup", { method: "POST", body: JSON.stringify({ email, password, data: { display_name: displayName } }) });
       const authUserId = signUpData.user?.id;
@@ -1424,16 +1455,17 @@
     await signInWithEmail();
   };
   const signInWithEmail = async () => {
-    const email = has("email") ? $("email").value.trim() : "";
+    const loginInput = has("email") ? $("email").value.trim() : "";
     const password = $("password").value;
-    if (!email) throw new Error("メールアドレスを入力してください。");
+    if (!loginInput) throw new Error("メールアドレスまたはログインIDを入力してください。");
     if (!password) throw new Error(JA_MESSAGES.passwordRequired);
+    const email = await resolveLoginEmail(loginInput);
     const session = await auth("/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
     saveSession(session, null);
     const authUser = session.user || await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");
     saveSession(session, profile);
-    log("メールアドレスでログインしました", state.user);
+    log("ログインしました", state.user);
     await loadClubs();
     startClubPolling();
   };
@@ -4747,12 +4779,16 @@
       snapshot.activeClubId === (state.activeClubId || "") &&
       snapshot.activeTableId === (state.activeTableId || "");
     if (!sameView || snapshot.y <= 0) return;
-    requestAnimationFrame(() => {
+    const restore = () => {
       const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
       const targetY = Math.min(snapshot.y, maxY);
       if (Math.abs((window.scrollY || 0) - targetY) > 2) {
         window.scrollTo({ left: snapshot.x, top: targetY, behavior: "auto" });
       }
+    };
+    requestAnimationFrame(() => {
+      restore();
+      setTimeout(restore, 80);
     });
   };
   const render = () => {

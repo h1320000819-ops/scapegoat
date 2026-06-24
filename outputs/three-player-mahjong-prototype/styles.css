@@ -2192,8 +2192,8 @@ button:hover {
     --center-info-height: 78px;
     --center-info-width: 126px;
     --discard-gap: 2px;
-    --discard-tile-height: 22px;
-    --discard-tile-width: 15px;
+    --discard-tile-height: 23px;
+    --discard-tile-width: 16px;
     --river-center-gap: 0px;
     --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
     --river-width: calc(var(--discard-tile-width) * 8 + var(--discard-gap) * 7);

@@ -49,6 +49,7 @@ as $anmika_get_login_email$
   select auth_email
   from public.users
   where user_id::text = p_user_id
+     or login_id = upper(p_user_id)
   limit 1;
 $anmika_get_login_email$;
 

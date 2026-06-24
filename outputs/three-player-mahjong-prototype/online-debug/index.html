@@ -237,10 +237,10 @@
 
       <section class="screen screen-auth">
         <h2>ログイン / アカウント作成</h2>
-        <p class="muted">メールアドレスとパスワードでログインします。ログインIDは識別用に自動発行されます。</p>
+        <p class="muted">ログインはメールアドレスまたはログインIDとパスワードで行えます。アカウント作成時はメールアドレスを入力してください。</p>
         <div class="row">
           <label>プレイヤー名 <input id="displayName" autocomplete="name" value="Player" /></label>
-          <label>メールアドレス <input id="email" type="email" autocomplete="email" placeholder="必須" required /></label>
+          <label>メールアドレス / ログインID <input id="email" type="text" autocomplete="username" placeholder="必須" required /></label>
           <label>パスワード <input id="password" type="password" autocomplete="current-password" /></label>
         </div>
         <div class="row">
@@ -400,8 +400,8 @@
     </main>
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
-    <script src="../runtime/pwa.js?v=20260622-auto-start-filled-seats-a"></script>
-    <script src="../runtime/online-debug.js?v=20260624-mobile-scroll-lock-a"></script>
+    <script src="../runtime/pwa.js?v=20260624-no-auto-scroll-a"></script>
+    <script src="../runtime/online-debug.js?v=20260624-no-auto-scroll-a"></script>
   </body>
 </html>
 

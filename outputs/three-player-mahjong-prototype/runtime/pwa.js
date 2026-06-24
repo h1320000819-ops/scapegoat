@@ -72,11 +72,6 @@
   const hideBrowserChrome = () => {
     if (!isMobile()) return;
     updateViewportSize();
-    setTimeout(() => {
-      try {
-        window.scrollTo(0, 1);
-      } catch {}
-    }, 50);
   };
 
   const showFullscreenToast = (message) => {
