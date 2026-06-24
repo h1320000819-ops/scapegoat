@@ -5918,6 +5918,9 @@ io.on("connection", (socket) => {
       playerIdForAck = playerId || playerIdForAck;
       room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
+      if (applyDueRoomServerEffect(room)) {
+        broadcastState(room);
+      }
       if (ACTION_DEBUG_LOGS) {
         console.log("[Action] received", {
           socketId: socket.id,

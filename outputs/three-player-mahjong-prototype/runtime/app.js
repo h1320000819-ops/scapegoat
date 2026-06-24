@@ -4299,6 +4299,19 @@ class GameController {
       clearTimeout(this.flowerAnnouncementWatchdog);
       this.flowerAnnouncementWatchdog = null;
     }
+    if (this.state.phase === "showingCallAnnouncement" && isSocketAuthoritativeGame()) {
+      if (this.callAnnouncementWatchdog) clearTimeout(this.callAnnouncementWatchdog);
+      const effectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.pendingServerEffect?.playerId || ""}:${this.state.pendingServerEffect?.fromPlayerId || ""}:${this.state.pendingServerEffect?.sourceTile?.id || ""}:${this.state.turnIndex || 0}`;
+      this.callAnnouncementWatchdog = setTimeout(() => {
+        if (this.state.phase !== "showingCallAnnouncement") return;
+        const currentEffectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.pendingServerEffect?.playerId || ""}:${this.state.pendingServerEffect?.fromPlayerId || ""}:${this.state.pendingServerEffect?.sourceTile?.id || ""}:${this.state.turnIndex || 0}`;
+        if (currentEffectId !== effectId) return;
+        this.resyncSocketGameState("callAnnouncementWatchdog").catch(() => {});
+      }, 1800);
+    } else if (this.callAnnouncementWatchdog) {
+      clearTimeout(this.callAnnouncementWatchdog);
+      this.callAnnouncementWatchdog = null;
+    }
     if (this.state.phase === "showingWinAnnouncement" && isSocketAuthoritativeGame()) {
       if (this.winAnnouncementWatchdog) clearTimeout(this.winAnnouncementWatchdog);
       const effectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.turnIndex || 0}:${this.state.handLog?.result?.resultId || ""}`;
@@ -5540,7 +5553,7 @@ class GameController {
     if (!discardStatus.can) {
       this.state.selectedDiscardTileId = null;
       this.state.discardDebugMessage = `打牌できません: ${discardStatus.reason}`;
-      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction/.test(discardStatus.reason)) {
+      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction|演出/.test(discardStatus.reason)) {
         this.resyncSocketGameState("discardSelectBlocked").then((synced) => {
           if (!synced) this.emit();
         });
@@ -5594,7 +5607,7 @@ class GameController {
       this.state.selectedDiscardTileId = null;
       this.state.discardDebugMessage = `打牌できません: ${discardStatus.reason}`;
       console.warn("[Discard] blocked", { tileId, reason: discardStatus.reason, pendingAction: this.state.pendingAction, phase: this.state.phase, version: this.state.version });
-      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction/.test(discardStatus.reason)) {
+      if (isSocketAuthoritativeGame() && /バージョン|局面|手番|フェーズ|pendingAction|演出/.test(discardStatus.reason)) {
         this.resyncSocketGameState("discardBlocked").then((synced) => {
           if (!synced) this.emit();
         });

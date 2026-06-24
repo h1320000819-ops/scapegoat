@@ -2986,12 +2986,13 @@ button:hover {
   }
 
   .seat-right .hand-row > .meld-area .exposed-tiles {
-    gap: 10px !important;
+    gap: var(--right-meld-gap) !important;
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - var(--nuki-slot-height) - var(--draw-slot-width) - 112px);
   }
 
   .seat-right .hand-row > .meld-area .meld-set {
     justify-content: flex-start;
-    min-height: 40px;
+    min-height: var(--right-meld-set-height);
     width: var(--exposed-slot-width);
   }
 
@@ -3300,6 +3301,12 @@ button:hover {
 
   .final-score-line {
     font-size: 12px;
+  }
+
+  .big-final-score {
+    font-size: clamp(96px, 49vw, 360px);
+    letter-spacing: 0;
+    line-height: 0.88;
   }
 
   .score-payments {
@@ -3617,7 +3624,18 @@ button:hover {
   --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 4px);
   --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 4px);
   --other-hand-slot-width: 310px;
-  --self-hand-slot-width: min(58vw, 545px);
+  --self-tile-gap: 3px;
+  --self-tile-width: 38px;
+  --self-tile-step: calc(var(--self-tile-width) + var(--self-tile-gap));
+  --draw-tile-gap: 6px;
+  --self-hand-slot-width: calc(
+    var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+    var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+    var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+    var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) +
+    var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) +
+    var(--self-tile-gap) + var(--self-tile-gap)
+  );
   align-items: stretch !important;
   display: grid !important;
   overflow: visible !important;
@@ -3725,11 +3743,19 @@ button:hover {
   align-self: end;
 }
 
-.seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(2vw); }
-.seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(calc(2vw - min(11.6vw, 109px))); }
-.seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(calc(2vw - min(23.2vw, 218px))); }
-.seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(calc(2vw - min(34.8vw, 327px))); }
-.seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(calc(2vw - min(46.4vw, 436px))); }
+.seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(var(--draw-tile-gap)); }
+.seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot {
+  transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+}
+.seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot {
+  transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+}
+.seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot {
+  transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+}
+.seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot {
+  transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+}
 
 .seat-top .hand-row {
   grid-template-areas: "nuki meld draw hand";
@@ -3767,6 +3793,8 @@ button:hover {
 .seat-top .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(0); }
 
 .seat-right .hand-row {
+  --right-meld-gap: clamp(18px, 4dvh, 64px);
+  --right-meld-set-height: clamp(52px, 13dvh, 112px);
   grid-template-areas:
     "nuki"
     "meld"
@@ -3776,8 +3804,8 @@ button:hover {
   grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(360px, 1fr);
   justify-content: end !important;
   justify-items: end;
-  max-height: calc(100dvh - 44px);
-  min-height: 560px;
+  max-height: calc(var(--anmika-viewport-height, 100dvh) - 44px);
+  min-height: min(560px, calc(var(--anmika-viewport-height, 100dvh) - 44px));
   width: var(--exposed-slot-width) !important;
 }
 
@@ -3813,14 +3841,16 @@ button:hover {
 .seat-right .hand-row > .meld-area .exposed-tiles {
   align-items: flex-end !important;
   flex-direction: column !important;
-  gap: 64px;
+  gap: var(--right-meld-gap);
   justify-content: flex-start !important;
+  max-height: calc(var(--anmika-viewport-height, 100dvh) - var(--nuki-slot-height) - var(--draw-slot-width) - 130px);
+  overflow: visible;
 }
 
 .seat-right .hand-row > .meld-area .meld-set {
   justify-content: flex-start;
   margin-bottom: 0;
-  min-height: 112px;
+  min-height: var(--right-meld-set-height);
   width: var(--exposed-slot-width);
 }
 
@@ -3847,19 +3877,42 @@ button:hover {
     --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 4px);
     --nuki-slot-height: calc(var(--discard-tile-height) * 2 + 4px);
     --other-hand-slot-width: 150px;
-    --self-hand-slot-width: min(58vw, 500px);
+    --self-tile-gap: 3px;
+    --self-tile-width: clamp(34px, 9dvh, 44px);
+    --self-tile-step: calc(var(--self-tile-width) + var(--self-tile-gap));
+    --draw-tile-gap: 5px;
+    --self-hand-slot-width: calc(
+      var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+      var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+      var(--self-tile-width) + var(--self-tile-width) + var(--self-tile-width) +
+      var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) +
+      var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) + var(--self-tile-gap) +
+      var(--self-tile-gap) + var(--self-tile-gap)
+    );
   }
 
   .seat-right .hand-row {
+    --right-meld-gap: clamp(4px, 1.8dvh, 10px);
+    --right-meld-set-height: clamp(28px, 8.5dvh, 38px);
     grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(220px, 1fr);
-    min-height: 328px;
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - 12px);
+    min-height: min(328px, calc(var(--anmika-viewport-height, 100dvh) - 12px));
     width: var(--exposed-slot-width) !important;
   }
 
-  .seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot { transform: translateX(calc(2vw - min(11.6vw, 100px))); }
-  .seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot { transform: translateX(calc(2vw - min(23.2vw, 200px))); }
-  .seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot { transform: translateX(calc(2vw - min(34.8vw, 300px))); }
-  .seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(calc(2vw - min(46.4vw, 400px))); }
+  .seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(var(--draw-tile-gap)); }
+  .seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot {
+    transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+  }
+  .seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot {
+    transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+  }
+  .seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot {
+    transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+  }
+  .seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot {
+    transform: translateX(calc(var(--draw-tile-gap) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step) - var(--self-tile-step)));
+  }
 
   .seat-top .hand-row.hand-count-10 > .drawn-tile-slot,
   .seat-top .hand-row.hand-count-7 > .drawn-tile-slot,
