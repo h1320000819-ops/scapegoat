@@ -533,17 +533,14 @@ button:hover {
   width: auto;
 }
 
-.seat-bottom .hand-row > .inline-exposed-row {
-  margin-left: auto;
-}
-
+.seat-bottom .hand-row > .inline-exposed-row,
 .seat-top .hand-row > .inline-exposed-row {
-  margin-right: auto;
+  margin-left: auto;
   min-width: calc(var(--discard-tile-width) * 2 + 42px);
 }
 
 .seat-right .hand-row > .inline-exposed-row {
-  margin-bottom: auto;
+  margin-top: auto;
   min-height: calc(var(--discard-tile-height) * 2 + 42px);
 }
 
@@ -553,6 +550,9 @@ button:hover {
 }
 
 .seat-top .hand-row {
+  height: 64px;
+  min-height: 64px;
+  overflow: visible;
   transform: translateY(-18px);
 }
 
@@ -564,9 +564,14 @@ button:hover {
   margin-left: auto;
   max-height: 70vh;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   padding: 8px 4px;
-  width: 58px;
+  width: 72px;
+}
+
+.seat-right .concealed-hand-tiles {
+  flex-direction: column;
+  gap: 1px;
 }
 
 .seat-right .concealed-hand-tiles > .tile,
@@ -1359,12 +1364,10 @@ button:hover {
   flex: 0 0 auto;
 }
 
-.seat-bottom .hand-row > .inline-exposed-row .meld-area { order: 1; }
-.seat-bottom .hand-row > .inline-exposed-row .nuki-dora-area { order: 2; }
+.player-seat .hand-row > .inline-exposed-row .meld-area { order: 1; }
+.player-seat .hand-row > .inline-exposed-row .nuki-dora-area { order: 2; }
 .seat-top .hand-row > .inline-exposed-row .nuki-dora-area { order: 1; }
 .seat-top .hand-row > .inline-exposed-row .meld-area { order: 2; }
-.seat-right .hand-row > .inline-exposed-row .nuki-dora-area { order: 1; }
-.seat-right .hand-row > .inline-exposed-row .meld-area { order: 2; }
 
 .player-seat .hand-row > .inline-exposed-row .nuki-dora-area .exposed-tiles {
   align-items: end;
@@ -2553,7 +2556,9 @@ button:hover {
   }
 
   .seat-top .hand-row {
+    height: 32px;
     min-height: 29px;
+    overflow: visible;
     padding: 1px;
   }
 
@@ -2721,8 +2726,9 @@ button:hover {
 
   .seat-right .hand-row {
     max-height: 48vh;
+    overflow: visible;
     padding: 2px 1px;
-    width: 26px;
+    width: 44px;
   }
 
   .seat-bottom .exposed-row {

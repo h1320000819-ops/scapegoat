@@ -7289,13 +7289,11 @@ class GameView {
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
-    const reserveExposedSpace = seat === "top" || seat === "right";
+    const reserveExposedSpace = true;
     const exposedArea = this.exposedAreaClean(player, true, reserveExposedSpace);
-    const exposedBeforeHand = seat === "top" || seat === "right" ? exposedArea : "";
-    const exposedAfterHand = seat === "bottom" ? exposedArea : "";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}">${exposedBeforeHand}<span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>${exposedAfterHand}</div></div>
+      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"}"><span class="concealed-hand-tiles">${handTiles.map((item) => this.hand(item.tile, active, false, Boolean(item.faceDown), player)).join("")}${drawnTile ? `<span class="drawn-tile">${this.hand(drawnTile.tile, active, true, Boolean(drawnTile.faceDown), player)}</span>` : ""}</span>${exposedArea}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }
@@ -7325,8 +7323,8 @@ class GameView {
     const nuki = player.nukiDoraTiles.map((tile) => renderTileView({ tile })).join("");
     if (!melds && !nuki && !reserveSpace) return "";
     return `<div class="exposed-row ${inline ? "inline-exposed-row" : ""} ${reserveSpace ? "reserved-exposed-row" : ""} ${!melds && !nuki ? "empty-exposed-row" : ""}">
-      <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
       <div class="meld-area"><div class="exposed-tiles">${melds}</div></div>
+      <div class="nuki-dora-area"><div class="exposed-tiles">${nuki}</div></div>
     </div>`;
   }
   mahjongTable(state, current, dealer) {
