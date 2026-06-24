@@ -1,12 +1,12 @@
-const CACHE_NAME = "anmika-pwa-20260624-effect-seat-rotation-a";
-const TILE_CACHE_NAME = "anmika-tile-assets-v1";
+const CACHE_NAME = "anmika-pwa-20260624-dapai-sound-a";
+const TILE_CACHE_NAME = "anmika-tile-assets-v3";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260624-effect-seat-rotation-a",
-  "/runtime/app.js?v=20260624-effect-seat-rotation-a",
+  "/styles.css?v=20260624-dapai-sound-a",
+  "/runtime/app.js?v=20260624-dapai-sound-a",
   "/runtime/online-debug.js?v=20260624-reseat-reset-a",
   "/runtime/pwa.js?v=20260624-large-result-ok-a",
   "/runtime/supabase-public-config.js",
@@ -18,6 +18,7 @@ const APP_SHELL = [
   "/sounds/tsumo.wav",
   "/sounds/riichi.wav",
   "/sounds/fever-riichi.wav",
+  "/sounds/dapai.m4a",
   "/sounds/discard.m4a",
   "/sounds/discard.mp3",
 ];

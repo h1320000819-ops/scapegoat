@@ -1907,7 +1907,7 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: ["discard.m4a", "discard.mp3"] };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
 const soundFileNamesForType = (type) => {
   const files = GAME_SOUND_FILES[type];
@@ -2000,6 +2000,8 @@ const getTileImagePath = (tile, faceDown = false) => {
   if (tile.isRocket && tile.suit === "manzu") return tileAssetPath(`man${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
+  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "pinzu") return tileAssetPath("pin5_rocket.png");
+  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "souzu") return tileAssetPath("sou5_rocket.png");
   if (tile.suit === "manzu") return tileAssetPath(`man${tile.rank}.png`);
   if (tile.suit === "pinzu" && tile.color === "turquoise") return tileAssetPath(`pin${tile.rank}_turquoise.jpg`);
   if (tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}${colorSuffix(tile)}.png`);
@@ -6366,7 +6368,22 @@ const replayEventText = (event, state, nameFn = null) => {
     if (event.type === "win") return `${name(event.winnerId)} 和了 ${event.winType}`;
     return "流局";
 };
+const setRenderSeatMap = (state, seats) => {
+  if (!state || !seats) return;
+  const map = Object.fromEntries(
+    Object.entries(seats)
+      .map(([seat, seatView]) => [seatView?.playerId || seatView?.player?.id || "", seat])
+      .filter(([playerId]) => playerId)
+  );
+  try {
+    Object.defineProperty(state, "__renderSeatByPlayerId", { value: map, configurable: true });
+  } catch {
+    state.__renderSeatByPlayerId = map;
+  }
+};
 const seatPositionForPlayer = (state, playerId) => {
+  const renderSeat = state?.__renderSeatByPlayerId?.[playerId];
+  if (renderSeat) return renderSeat;
   const human = state.players.find((player) => player.type === "human") ?? state.players[0];
   const cpus = state.players.filter((player) => player.id !== human.id);
   if (playerId === human?.id) return "bottom";
@@ -6421,10 +6438,19 @@ const meldDisplaySpec = (state, ownerId, meld, tileCount) => {
     ),
   };
 };
-const renderMeldSet = (state, ownerId, meld, extraClass = "") => {
+const renderMeldSet = (state, ownerId, meld, extraClass = "", options = {}) => {
   const calledTile = meld.calledTile ?? (meld.fromPlayerId ? meld.tiles.at(-1) : null);
   const tileCount = meld.type === "minkan" ? 4 : 3;
-  const displaySpec = meldDisplaySpec(state, ownerId, meld, tileCount);
+  let displaySpec = meldDisplaySpec(state, ownerId, meld, tileCount);
+  if (options.noSeatRotation) {
+    displaySpec = {
+      ...displaySpec,
+      setRotation: "0",
+      rotations: Array.from({ length: tileCount }, (_, index) =>
+        index === displaySpec.calledIndex ? "cw90" : "0"
+      ),
+    };
+  }
   const sidewaysIndex = displaySpec.calledIndex;
   let baseTiles = meld.type === "kakan" ? meld.tiles.slice(0, 3) : [...(meld.tiles || [])];
   if (calledTile && sidewaysIndex >= 0 && baseTiles.length > sidewaysIndex) {
@@ -6467,11 +6493,11 @@ const resultHand13Tiles = (score, winner, winningTile) => {
   return sortHandTiles(fromWinningTiles).slice(0, 13);
 };
 const resultMeldsView = (state, winner) => {
-  const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld)).join("");
+  const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld, "result-meld-set", { noSeatRotation: true })).join("");
   return melds ? `<div class="score-meld-block"><strong>副露</strong><div class="result-melds exposed-tiles">${melds}</div></div>` : "";
 };
 const resultMeldsInlineView = (state, winner) => {
-  const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld)).join("");
+  const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld, "result-meld-set", { noSeatRotation: true })).join("");
   return melds ? `<span class="result-hand-meld-separator"></span><span class="result-melds-inline exposed-tiles">${melds}</span>` : "";
 };
 class GameView {
@@ -7142,6 +7168,7 @@ class GameView {
     viewerPlayerId ??= getLocalHumanPlayerId(state);
     const viewer = state.players.find((player) => player.id === viewerPlayerId) ?? state.players.find((player) => player.type !== "cpu") ?? state.players[0];
     const viewState = buildViewStateForPlayer(state, viewer.id);
+    setRenderSeatMap(state, viewState.seats);
     if (state.isReplayRevealHands) {
       for (const [seatName, seatView] of Object.entries(viewState.seats ?? {})) {
         seatView.handTiles = (seatView.handTiles ?? []).map((item) => ({ ...item, faceDown: false }));

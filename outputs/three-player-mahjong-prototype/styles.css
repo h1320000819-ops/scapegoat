@@ -12,7 +12,7 @@
   --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
   --river-center-gap: 0px;
   --river-x-offset: 0px;
-  --center-y-offset: 6px;
+  --center-y-offset: 18px;
 }
 
 * {
@@ -2625,7 +2625,7 @@ button:hover {
     max-height: none;
     overflow: hidden;
     padding: 1px 2px;
-    top: 40%;
+    top: 42%;
     width: var(--center-info-width);
   }
 
@@ -2749,20 +2749,20 @@ button:hover {
 
   .discard-bottom {
     left: calc(50% + var(--discard-tile-width));
-    top: calc(40% + (var(--center-info-height) / 2) + var(--river-center-gap) + 4px);
+    top: calc(42% + (var(--center-info-height) / 2) + var(--river-center-gap) + 4px);
     transform: translateX(-50%) rotate(0deg);
   }
 
   .discard-top {
     left: calc(50% + (var(--center-info-width) / 2) - (var(--river-width) / 2));
-    top: calc(40% - (var(--center-info-height) / 2) - var(--river-height) - 4px);
+    top: calc(42% - (var(--center-info-height) / 2) - var(--river-height) - 4px);
     transform: translateX(-50%) rotate(180deg);
   }
 
   .discard-right {
     left: calc(50% + (var(--center-info-width) / 2) - 36px);
     right: auto;
-    top: calc(40% + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 6px);
+    top: calc(42% + (var(--center-info-height) / 2) - (var(--river-width) / 2) + 6px);
     transform: translateY(-50%) rotate(-90deg);
   }
 
@@ -3606,7 +3606,7 @@ button:hover {
     "draw"
     "hand";
   grid-template-columns: var(--exposed-slot-width);
-  grid-template-rows: var(--nuki-slot-height) 58px var(--draw-slot-width) minmax(360px, 1fr);
+  grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(360px, 1fr);
   justify-content: end !important;
   justify-items: end;
   min-height: 560px;
@@ -3637,6 +3637,17 @@ button:hover {
   flex-direction: row !important;
 }
 
+.seat-right .hand-row > .meld-area .exposed-tiles {
+  align-items: flex-end !important;
+  flex-direction: column !important;
+  gap: 8px;
+  justify-content: flex-start !important;
+}
+
+.seat-right .hand-row > .meld-area {
+  min-height: 0;
+}
+
 .seat-right .hand-row > .nuki-dora-area {
   justify-content: flex-end;
 }
@@ -3652,7 +3663,7 @@ button:hover {
   }
 
   .seat-right .hand-row {
-    grid-template-rows: var(--nuki-slot-height) 34px var(--draw-slot-width) minmax(220px, 1fr);
+    grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(220px, 1fr);
     min-height: 328px;
     width: var(--exposed-slot-width) !important;
   }
