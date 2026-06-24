@@ -3304,9 +3304,9 @@ button:hover {
   }
 
   .big-final-score {
-    font-size: clamp(96px, 49vw, 360px);
+    font-size: clamp(29px, 15vw, 108px);
     letter-spacing: 0;
-    line-height: 0.88;
+    line-height: 0.96;
   }
 
   .score-payments {
