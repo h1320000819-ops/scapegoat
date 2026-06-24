@@ -469,8 +469,8 @@ button:hover {
 
 .hand-row {
   align-items: center;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  border: 0;
   border-radius: 10px;
   display: flex;
   flex-wrap: nowrap;
@@ -1414,7 +1414,7 @@ button:hover {
   padding: 8px;
   position: fixed;
   top: calc(50% + var(--center-y-offset));
-  transform: translate(-30%, -100%);
+  transform: translate(-60%, -150%);
   z-index: 26;
 }
 
@@ -2976,7 +2976,7 @@ button:hover {
     left: calc(50% - (var(--center-info-width) / 2) - 84px);
     padding: 5px;
     top: 42%;
-    transform: translate(-30%, -100%);
+    transform: translate(-60%, -150%);
   }
 
   .assist-controls label {
@@ -3602,11 +3602,11 @@ button:hover {
   align-self: end;
 }
 
-.seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(5vw); }
+.seat-bottom .hand-row > .drawn-tile-slot { transform: translateX(2vw); }
 .seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot,
 .seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot,
 .seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot,
-.seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(5vw); }
+.seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(2vw); }
 
 .seat-top .hand-row {
   grid-template-areas: "nuki meld draw hand";
@@ -3736,7 +3736,7 @@ button:hover {
   .seat-bottom .hand-row.hand-count-10 > .drawn-tile-slot,
   .seat-bottom .hand-row.hand-count-7 > .drawn-tile-slot,
   .seat-bottom .hand-row.hand-count-4 > .drawn-tile-slot,
-  .seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(5vw); }
+  .seat-bottom .hand-row.hand-count-1 > .drawn-tile-slot { transform: translateX(2vw); }
 
   .seat-top .hand-row.hand-count-10 > .drawn-tile-slot,
   .seat-top .hand-row.hand-count-7 > .drawn-tile-slot,
