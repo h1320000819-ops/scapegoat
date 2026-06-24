@@ -52,9 +52,13 @@ const pochiTsumoAnnouncementText = {
   yellow: "悲しそうなツモ",
   red: "超悲しそうなツモ",
 };
+const isPochiResolvedAsWhite = (scoreResult) => {
+  const tile = scoreResult?.selectedWait ?? scoreResult?.scoringWinningTile ?? scoreResult?.winningTile;
+  return tile?.suit === "honor" && tile?.kind === "white";
+};
 const pochiTsumoAnnouncement = (scoreResult) => {
   const color = scoreResult?.pochiActivated ? scoreResult?.pochiColor : null;
-  return color && pochiTsumoAnnouncementText[color]
+  return color && !isPochiResolvedAsWhite(scoreResult) && pochiTsumoAnnouncementText[color]
     ? { text: pochiTsumoAnnouncementText[color], kind: `pochi-tsumo-${color}` }
     : null;
 };

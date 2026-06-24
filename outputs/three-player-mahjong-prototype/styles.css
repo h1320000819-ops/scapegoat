@@ -2253,6 +2253,44 @@ button:hover {
   padding-left: 0;
 }
 
+.score-summary-layout {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(160px, 0.78fr) minmax(220px, 1fr);
+  margin-top: 6px;
+}
+
+.vertical-yaku {
+  align-content: start;
+  background: rgba(18, 63, 98, 0.08);
+  border-radius: 6px;
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 7px 9px;
+}
+
+.vertical-yaku li {
+  line-height: 1.15;
+}
+
+.score-big-panel {
+  align-items: center;
+  background: rgba(255, 209, 92, 0.13);
+  border-radius: 8px;
+  display: grid;
+  justify-items: center;
+  min-height: 112px;
+  padding: 8px;
+  text-align: center;
+}
+
+.score-big-panel p {
+  margin: 1px 0;
+}
+
 .compact-score-lines {
   background: rgba(18, 63, 98, 0.08);
   border-radius: 6px;
@@ -2267,6 +2305,17 @@ button:hover {
 .final-score-line {
   font-size: 17px;
   font-weight: 900;
+}
+
+.big-final-score {
+  color: #123f62;
+  font-size: clamp(46px, 8.8vw, 96px);
+  line-height: 0.98;
+}
+
+.final-score-negative {
+  color: #d92323;
+  text-shadow: 0 2px 0 rgba(90, 0, 0, 0.16);
 }
 
 .score-payments {
@@ -3215,6 +3264,28 @@ button:hover {
     gap: 0 4px;
     line-height: 1.05;
     margin: 0;
+  }
+
+  .score-summary-layout {
+    gap: 4px;
+    grid-template-columns: minmax(150px, 0.72fr) minmax(210px, 1fr);
+    margin-top: 2px;
+  }
+
+  .vertical-yaku {
+    gap: 1px;
+    line-height: 1.03;
+    padding: 3px 5px;
+  }
+
+  .score-big-panel {
+    border-radius: 5px;
+    min-height: 70px;
+    padding: 3px 5px;
+  }
+
+  .big-final-score {
+    font-size: clamp(38px, 9.8vw, 72px);
   }
 
   .compact-score-lines {

@@ -49,11 +49,30 @@ const pochiTsumoAnnouncementText = {
   yellow: "悲しそうなツモ",
   red: "超悲しそうなツモ",
 };
+const isPochiResolvedAsWhite = (scoreResult) => {
+  const tile = scoreResult?.selectedWait ?? scoreResult?.scoringWinningTile ?? scoreResult?.winningTile;
+  return tile?.suit === "honor" && tile?.kind === "white";
+};
 const pochiTsumoAnnouncement = (scoreResult) => {
   const color = scoreResult?.pochiActivated ? scoreResult?.pochiColor : null;
-  return color && pochiTsumoAnnouncementText[color]
+  return color && !isPochiResolvedAsWhite(scoreResult) && pochiTsumoAnnouncementText[color]
     ? { text: pochiTsumoAnnouncementText[color], kind: `pochi-tsumo-${color}` }
     : null;
+};
+const soundTypeForPochiTsumo = (scoreResult) => {
+  if (isPochiResolvedAsWhite(scoreResult)) return "";
+  const color = scoreResult?.pochiActivated ? scoreResult?.pochiColor : null;
+  if (color === "red") return "pochiTsumoRed";
+  if (color === "blue") return "pochiTsumoBlue";
+  return "";
+};
+const soundTypeForWinAnnouncementKind = (kind) => {
+  if (kind === "pochi-tsumo-red") return "pochiTsumoRed";
+  if (kind === "pochi-tsumo-blue") return "pochiTsumoBlue";
+  if (String(kind || "").startsWith("pochi-tsumo-")) return "tsumo";
+  if (kind === "tsumo") return "tsumo";
+  if (kind === "ron" || kind === "double-ron") return "ron";
+  return "";
 };
 const TERMINAL_HONOR = new Set(["manzu-1", "manzu-9", "pinzu-1", "pinzu-9", "souzu-1", "souzu-9", "honor-east", "honor-south", "honor-west", "honor-north", "honor-white", "honor-green", "honor-red"]);
 const UI_ASSETS = {
@@ -1919,7 +1938,7 @@ const sortHandTiles = (hand) => {
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
-const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
+const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
 const soundFileNamesForType = (type) => {
   const files = GAME_SOUND_FILES[type];
@@ -1941,9 +1960,9 @@ const soundTypeForEvent = (event) => {
   if (event.type === "discard") return "discard";
   if (event.type === "pon") return "pon";
   if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return "kan";
-  if (event.type === "tsumo") return "tsumo";
+  if (event.type === "tsumo") return soundTypeForPochiTsumo(event.scoreResult) || "tsumo";
   if (event.type === "ron") return "ron";
-  if (event.type === "win") return event.winType === "tsumo" ? "tsumo" : event.winType === "ron" ? "ron" : "";
+  if (event.type === "win") return event.winType === "tsumo" ? (soundTypeForPochiTsumo(event.scoreResult) || "tsumo") : event.winType === "ron" ? "ron" : "";
   if (event.type === "riichi" || event.type === "fever_riichi") return event.feverRiichiActive || event.type === "fever_riichi" ? "feverRiichi" : "riichi";
   return "";
 };
@@ -4216,9 +4235,9 @@ class GameController {
     const announcementKind = next.phase === "showingWinAnnouncement"
       ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
       : "";
-    const isPochiTsumoAnnouncement = String(announcementKind || "").startsWith("pochi-tsumo-");
-    if (announcementKind === "tsumo" || isPochiTsumoAnnouncement || announcementKind === "ron" || announcementKind === "double-ron") {
-      playGameSound(announcementKind === "tsumo" || isPochiTsumoAnnouncement ? "tsumo" : "ron", {
+    const winSoundType = soundTypeForWinAnnouncementKind(announcementKind);
+    if (winSoundType) {
+      playGameSound(winSoundType, {
         key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
       });
     }
@@ -5814,7 +5833,7 @@ class GameController {
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
     this.state.cpuThinkingMessage = "";
-    playGameSound(input.winType, { key: `local-win:${this.state.handLog.result?.resultId || this.state.turnIndex}:${input.winType}` });
+    playGameSound(soundTypeForPochiTsumo(score) || input.winType, { key: `local-win:${this.state.handLog.result?.resultId || this.state.turnIndex}:${input.winType}` });
     this.emit();
     setTimeout(() => {
       if (this.state.phase !== "showingWinAnnouncement") return;
@@ -7551,10 +7570,6 @@ class GameView {
       }).join("");
       return `<section class="score-result result-modal win-result-modal compact-score-result double-ron-result"><h2>ダブロン</h2>
         ${winBlocks}
-        <h3>点数の移動</h3>
-        <ul class="score-payments">
-          ${state.players.map((player) => `<li>${player.name} <strong>${formatPointDisplay(player.score)}点</strong> <span>（${signed(combinedPayments[player.id] ?? 0)}）</span></li>`).join("")}
-        </ul>
         ${renderResultOkButton(state)}
       </section>`;
     }
@@ -7619,6 +7634,8 @@ class GameView {
         ? score.limitType
         : `${Number(score.han ?? score.totalHan ?? 0)}翻`;
       const scoreLabel = `${allRedScoreRank}${score.isTsumo ? "ツモ" : "ロン"}`;
+      const allRedFinalPoints = Number(score.finalPoints ?? score.totalPoints ?? 0);
+      const allRedFinalScoreClass = allRedFinalPoints < 0 ? " final-score-negative" : "";
       return `<section class="score-result result-modal win-result-modal allred-score-result">
         <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
         <div class="allred-result-grid">
@@ -7626,17 +7643,12 @@ class GameView {
           <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
           <div><strong>裏ドラ表示牌</strong><div class="result-tiles">${winnerRiichi ? state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし" : "リーチなし"}</div></div>
         </div>
-        <h3>役</h3>
-        <ul>${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
-        <p class="final-score-line">${scoreLabel}</p>
-        <h3>点数の移動</h3>
-        <ul>${state.players.map((player) => `<li>${player.name} <strong>${formatPoint(player.score)}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}</ul>
-        <h3>祝儀の移動</h3>
-        <ul>${state.players.map((player) => {
-          const totalChips = pointToChips(totalChipPayments[player.id]);
-          const currentChips = pointToChips(currentChipPayments[player.id]);
-          return `<li>${player.name} ${signedChips(totalChips)}（${signedChips(currentChips)}）</li>`;
-        }).join("")}</ul>
+        <div class="score-summary-layout">
+          <ul class="score-yaku vertical-yaku">${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
+          <div class="score-big-panel">
+            <p class="final-score-line big-final-score${allRedFinalScoreClass}">${scoreLabel}</p>
+          </div>
+        </div>
         ${renderAgariYameButton(state)}${renderResultOkButton(state)}
       </section>`;
     }
@@ -7660,22 +7672,8 @@ class GameView {
     const selectedWaitLine = score.pochiActivated && scoringWinningTile
       ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(scoringWinningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
       : "";
-    const chipSettlement = result?.chipSettlement || score.chipSettlement;
-    const tobiPrize = result?.tobiPrize || score.tobiPrize;
-    const chipLines = chipSettlement ? `<section class="score-extra-settlement">
-      <h3>祝儀</h3>
-      <p>1枚 ${formatPoint(chipSettlement.chipPoint ?? 0)}pt / 支払い ${formatPoint(chipSettlement.chipsPerPayer ?? 0)}枚</p>
-      <ul>${state.players.map((player) => `<li>${player.name}: ${Number(chipSettlement.payments?.[player.id] || 0) >= 0 ? "+" : ""}${formatPoint(chipSettlement.payments?.[player.id] || 0)}pt</li>`).join("")}</ul>
-    </section>` : "";
-    const tobiLines = tobiPrize ? `<section class="score-extra-settlement">
-      <h3>飛び賞</h3>
-      <p>2枚相当: ${tobiPrize.entries?.map((entry) => `${playerName(entry.payerId)} → ${playerName(entry.recipientId)} ${formatPoint(entry.points)}pt`).join(" / ") || ""}</p>
-    </section>` : "";
-    const finalSettlement = result?.finalResult?.settlement;
-    const finalLines = finalSettlement ? `<section class="score-extra-settlement">
-      <h3>半荘精算</h3>
-      <ul>${finalSettlement.details.map((item) => `<li>${playerName(item.playerId)} ${item.rank}着: ${Number(item.pointDelta || 0) >= 0 ? "+" : ""}${formatPoint(item.pointDelta)}pt</li>`).join("")}</ul>
-    </section>` : "";
+    const finalScoreValue = Number(score.finalPoints ?? score.totalPoints ?? 0);
+    const finalScoreClass = finalScoreValue < 0 ? " final-score-negative" : "";
     return `<section class="score-result result-modal win-result-modal compact-score-result">
       <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
       ${selectedWaitLine}
@@ -7685,19 +7683,14 @@ class GameView {
         <div><strong>表ドラ表示牌</strong><div class="result-tiles">${state.doraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>
         ${winnerRiichi ? `<div><strong>裏ドラ表示牌</strong><div class="result-tiles">${state.uraDoraIndicators.map((tile) => renderTileView({ tile })).join("") || "なし"}</div></div>` : ""}
       </div>
-      <h3>役</h3>
-      <ul class="score-yaku compact-yaku">${yakuRows.join("")}</ul>
-      <div class="compact-score-lines">
-        <p>追加点合計 ${formatPoint(score.bonusPoints ?? 0)}</p>
-        <p>倍率合計 ×${multiplierTotal}${multiplierLabels}</p>
-        <p class="final-score-line">点数 ${formatPoint(score.finalPoints ?? score.totalPoints ?? 0)}点</p>
+      <div class="score-summary-layout">
+        <ul class="score-yaku vertical-yaku">${yakuRows.join("")}</ul>
+        <div class="score-big-panel">
+          <p class="final-score-line big-final-score${finalScoreClass}">${formatPoint(finalScoreValue)}点</p>
+          <p>追加点合計 ${formatPoint(score.bonusPoints ?? 0)}</p>
+          <p>倍率合計 ×${multiplierTotal}${multiplierLabels}</p>
+        </div>
       </div>
-      <ul class="score-payments">
-        ${state.players.map((player) => `<li>${player.name} <strong>${formatPoint(player.score)}点</strong> <span>（${signed(payments[player.id] ?? 0)}）</span></li>`).join("")}
-      </ul>
-      ${chipLines}
-      ${tobiLines}
-      ${finalLines}
       ${renderAgariYameButton(state)}${renderResultOkButton(state)}
     </section>`;
   }
