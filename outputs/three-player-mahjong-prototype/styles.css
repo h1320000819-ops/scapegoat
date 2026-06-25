@@ -25,6 +25,29 @@ body {
   font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
 }
 
+html[data-game-screen="on"],
+html[data-game-screen="on"] body,
+body[data-game-screen="on"] {
+  height: var(--anmika-viewport-height, 100dvh);
+  inset: 0;
+  max-height: var(--anmika-viewport-height, 100dvh);
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  position: fixed;
+  touch-action: none;
+  width: var(--anmika-viewport-width, 100vw);
+}
+
+html[data-game-screen="on"] .app-shell,
+body[data-game-screen="on"] .app-shell,
+html[data-game-screen="on"] .game-root,
+body[data-game-screen="on"] .game-root {
+  height: var(--anmika-viewport-height, 100dvh);
+  max-height: var(--anmika-viewport-height, 100dvh);
+  overflow: hidden !important;
+  width: var(--anmika-viewport-width, 100vw);
+}
+
 button {
   border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 8px;
@@ -381,13 +404,28 @@ button:hover {
   line-height: 1.2;
 }
 
+.seat-identity {
+  align-items: center;
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  pointer-events: none;
+}
+
+.seat-player-icon {
+  font-size: 17px;
+  height: 34px;
+  line-height: 1;
+  width: 34px;
+}
+
 .seat-mini-name {
   align-self: center;
   color: rgba(247, 250, 245, 0.86);
-  font-size: 11px;
+  font-size: 22px;
   font-weight: 800;
   line-height: 1;
-  max-width: 120px;
+  max-width: 220px;
   overflow: hidden;
   pointer-events: none;
   text-align: center;
@@ -415,7 +453,7 @@ button:hover {
 }
 
 .seat-bottom .seat-mini-name {
-  font-size: 12px;
+  font-size: 24px;
   margin-bottom: 2px;
 }
 
@@ -1431,6 +1469,28 @@ button:hover {
   line-height: 1;
   min-width: 92px;
   white-space: nowrap;
+}
+
+.assist-seat-status {
+  align-items: center;
+  color: #fff8d7;
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  line-height: 1;
+  margin-bottom: 4px;
+  text-shadow: 0 2px 7px rgba(0, 0, 0, 0.86);
+}
+
+.assist-seat-status span {
+  font-size: 26px;
+  font-weight: 950;
+}
+
+.assist-seat-status strong {
+  color: #ffffff;
+  font-size: 25px;
+  font-weight: 950;
 }
 
 .assist-controls input[type="checkbox"] {
@@ -4321,4 +4381,93 @@ button:hover {
 
 .mahjong-table .seat-right .hand-row > .meld-area .meld-tile.meld-rotate-ccw90 .tile {
   transform: rotate(-90deg) !important;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .mahjong-table .seat-top .hand-row > .drawn-tile-slot,
+  .mahjong-table .seat-top .hand-row.hand-count-10 > .drawn-tile-slot,
+  .mahjong-table .seat-top .hand-row.hand-count-7 > .drawn-tile-slot,
+  .mahjong-table .seat-top .hand-row.hand-count-4 > .drawn-tile-slot,
+  .mahjong-table .seat-top .hand-row.hand-count-1 > .drawn-tile-slot {
+    transform: translateX(-42vw) !important;
+  }
+
+  body[data-pwa="standalone"] .mahjong-table,
+  html[data-pwa="standalone"] .mahjong-table {
+    --safe-right-lane-width: clamp(92px, 15dvw, 124px);
+    --safe-right-meld-gap: clamp(10px, 2.4dvh, 16px);
+    --safe-right-meld-height: calc(var(--safe-other-tile-width) * 4 + 8px);
+  }
+
+  body[data-pwa="standalone"] .mahjong-table.layout-tight-right,
+  html[data-pwa="standalone"] .mahjong-table.layout-tight-right,
+  body[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right,
+  html[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right {
+    --safe-right-lane-width: clamp(88px, 14dvw, 118px);
+    --safe-right-meld-gap: clamp(8px, 2dvh, 14px);
+    --safe-right-meld-height: calc(var(--safe-other-tile-width) * 4 + 6px);
+  }
+
+  body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles,
+  html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles {
+    gap: var(--safe-right-meld-gap) !important;
+    justify-content: end !important;
+    max-height: none;
+  }
+
+  body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set,
+  html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set {
+    flex: 0 0 var(--safe-right-meld-height);
+    min-height: var(--safe-right-meld-height);
+  }
+}
+
+.mahjong-table .seat-identity {
+  min-width: 0;
+}
+
+.mahjong-table .seat-mini-name {
+  font-size: 22px;
+  max-width: min(240px, 26vw);
+}
+
+.mahjong-table .seat-bottom .seat-mini-name {
+  font-size: 24px;
+}
+
+.mahjong-table .seat-right .seat-mini-name {
+  font-size: 22px !important;
+  max-width: var(--safe-right-lane-width, 180px);
+  text-align: center;
+}
+
+.mahjong-table .seat-player-icon {
+  height: 34px;
+  width: 34px;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .mahjong-table .seat-mini-name,
+  .mahjong-table .seat-right .seat-mini-name {
+    font-size: 18px !important;
+    max-width: 120px;
+  }
+
+  .mahjong-table .seat-bottom .seat-mini-name {
+    font-size: 20px !important;
+  }
+
+  .mahjong-table .seat-player-icon {
+    font-size: 14px;
+    height: 28px;
+    width: 28px;
+  }
+
+  .assist-seat-status span {
+    font-size: 22px;
+  }
+
+  .assist-seat-status strong {
+    font-size: 21px;
+  }
 }

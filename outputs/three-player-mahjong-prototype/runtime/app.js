@@ -5331,7 +5331,6 @@ class GameController {
   }
   startNextHand() {
     const result = this.state.handLog.result;
-    const dealerWon = result?.type === "win" && result.winnerId === this.state.round.dealerPlayerId;
     const isDraw = result?.type === "exhaustiveDraw";
     if (isTsumoLossless3maState(this.state)) {
       const dealerContinues = isTsumoLosslessDealerContinuation(this.state, result);
@@ -5346,7 +5345,14 @@ class GameController {
       this.startGame({ preserveScores: true });
       return;
     }
-    const nextDealerId = dealerWon ? this.state.round.dealerPlayerId : (result?.type === "win" ? result.winnerId : this.state.round.dealerPlayerId);
+    const winnerIds = result?.type === "win"
+      ? [
+        ...(Array.isArray(result.winners) ? result.winners.map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "") : []),
+        result.winnerId,
+      ].filter(Boolean)
+      : [];
+    const dealerWon = winnerIds.includes(this.state.round.dealerPlayerId);
+    const nextDealerId = winnerIds[0] || this.state.round.dealerPlayerId;
     this.state.round.honba = dealerWon || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
     this.state.round.dealerPlayerId = nextDealerId;
     this.state.round.handNumber++;
@@ -5687,6 +5693,11 @@ class GameController {
     if (!player?.hand?.some((tile) => tile.id === tileId) && player?.drawnTile?.id !== tileId) return;
     this.state.selectedDiscardTileId = tileId;
     this.state.discardDebugMessage = "";
+    if (isSocketAuthoritativeGame() && this.state.phase === "waitingForRiichiDiscard" && player?.id === viewerPlayerId) {
+      submitOnlineGameAction("selectDiscard", { tileId, localPlayerId: player.id, reason: "riichiSelection" }, { timeoutMs: 3000 }).catch((error) => {
+        console.warn("[SocketGame] selected riichi discard sync failed", error);
+      });
+    }
     this.emit();
   }
   drawTile({ suppressEmit = false } = {}) {
@@ -6743,12 +6754,15 @@ class GameView {
   render(state) {
     if (globalThis.document) {
       globalThis.document.title = state.screen === "replayViewer" ? "牌譜" : "アンミカロケット";
+      globalThis.document.documentElement.dataset.gameScreen = state.screen === "game" ? "on" : "off";
+      globalThis.document.body.dataset.gameScreen = state.screen === "game" ? "on" : "off";
     }
     if (state.screen !== "game") {
       this.root.innerHTML = this.appShell(state);
       this.bindAppControls();
       return;
     }
+    globalThis.dispatchEvent?.(new CustomEvent("anmika-game-screen-active"));
     const current = getCurrentPlayer(state);
     const dealer = state.players.find((p) => p.id === state.round.dealerPlayerId);
     this.root.innerHTML = this.mahjongTableClean(state, current, dealer, getLocalHumanPlayerId(state));
@@ -7621,8 +7635,12 @@ class GameView {
     const layoutParts = seat === "bottom"
       ? [handRegion, drawnRegion, meldRegion, nukiRegion]
       : [nukiRegion, meldRegion, drawnRegion, handRegion];
+    const playerInitial = escapeHtml((player.name || "?").trim().charAt(0) || "?");
+    const avatarClass = player.type === "cpu"
+      ? (player.id?.includes("2") || player.name?.includes("2") ? "avatar-cpu2" : "avatar-cpu1")
+      : "avatar-human";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
-      <div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div>
+      <div class="seat-identity"><span class="seat-player-icon player-avatar ${avatarClass}" aria-hidden="true">${playerInitial}</span><div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div></div>
       <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""} hand-count-${handCountBucket}" style="--hand-count:${handCount};">${layoutParts.join("")}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
@@ -7630,7 +7648,9 @@ class GameView {
   assistControls(player) {
     const assist = player.assistSettings ?? {};
     const autoWinChecked = Boolean(assist.autoWin || player.isRiichi);
+    const roleLabel = getSeatRoleLabel(this.currentStateForClock, player.id).replace(/家$/, "") || "";
     return `<div class="assist-controls">
+      <div class="assist-seat-status"><span>${escapeHtml(roleLabel)}</span><strong>${formatPointDisplay(player.score)}点</strong></div>
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
       <label><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
     </div>`;

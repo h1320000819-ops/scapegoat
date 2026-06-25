@@ -9,6 +9,10 @@
   const isLandscape = () =>
     window.matchMedia?.("(orientation: landscape)")?.matches ||
     window.innerWidth > window.innerHeight;
+  const isGameScreen = () =>
+    document.documentElement.dataset.gameScreen === "on" ||
+    document.body.dataset.gameScreen === "on" ||
+    Boolean(document.querySelector(".mahjong-table"));
   const fullscreenTarget = () =>
     document.documentElement ||
     document.body ||
@@ -64,7 +68,7 @@
   };
   const shouldOfferFullscreen = () =>
     isMobile() &&
-    isLandscape() &&
+    (isLandscape() || isGameScreen()) &&
     !isStandalone() &&
     !isFullscreen() &&
     !isPseudoFullscreen();
@@ -130,6 +134,14 @@
     requestFullscreen().catch(() => false);
   };
 
+  const lockLandscapeForGame = async () => {
+    if (!isMobile() || !isGameScreen()) return false;
+    updateViewportSize();
+    hideBrowserChrome();
+    await screen.orientation?.lock?.("landscape").catch(() => null);
+    return requestFullscreen().catch(() => false);
+  };
+
   const ensureFullscreenButton = () => {
     ensureHintStyles();
     let button = document.querySelector(".pwa-fullscreen-button");
@@ -157,11 +169,18 @@
     const onFirstInteraction = (event) => {
       if (!shouldOfferFullscreen()) return;
       if (event.target?.closest?.("input,select,textarea,[data-pwa-dismiss],[data-pwa-install],[data-pwa-fullscreen]")) return;
-      requestFullscreenSoon();
+      if (isGameScreen()) lockLandscapeForGame();
+      else requestFullscreenSoon();
     };
     document.addEventListener("pointerdown", onFirstInteraction, { capture: true });
     document.addEventListener("touchend", onFirstInteraction, { capture: true, passive: true });
     document.addEventListener("click", onFirstInteraction, { capture: true });
+  };
+
+  const preventGameScroll = (event) => {
+    if (!isGameScreen() || !isMobile()) return;
+    if (event.target?.closest?.("select,input,textarea,.replay-toolbar,.settings-panel,.bottom-actions")) return;
+    event.preventDefault();
   };
 
   const showInstallHint = () => {
@@ -224,7 +243,8 @@
     updateViewportSize();
     updateMode();
     ensureFullscreenButton();
-    requestFullscreenSoon();
+    if (isGameScreen()) lockLandscapeForGame();
+    else requestFullscreenSoon();
   });
   window.visualViewport?.addEventListener?.("resize", () => {
     updateViewportSize();
@@ -239,22 +259,34 @@
       updateViewportSize();
       updateMode();
       ensureFullscreenButton();
-      requestFullscreenSoon();
+      if (isGameScreen()) lockLandscapeForGame();
+      else requestFullscreenSoon();
     }, 250);
   });
   window.addEventListener("pageshow", () => {
     updateMode();
     updateViewportSize();
     ensureFullscreenButton();
-    requestFullscreenSoon();
+    if (isGameScreen()) lockLandscapeForGame();
+    else requestFullscreenSoon();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     updateMode();
     updateViewportSize();
     ensureFullscreenButton();
-    requestFullscreenSoon();
+    if (isGameScreen()) lockLandscapeForGame();
+    else requestFullscreenSoon();
   });
+  window.addEventListener("anmika-game-screen-active", () => {
+    updateMode();
+    updateViewportSize();
+    ensureFullscreenButton();
+    lockLandscapeForGame();
+    setTimeout(lockLandscapeForGame, 350);
+  });
+  document.addEventListener("touchmove", preventGameScroll, { passive: false, capture: true });
+  document.addEventListener("wheel", preventGameScroll, { passive: false, capture: true });
   document.addEventListener("fullscreenchange", () => {
     updateMode();
     updateViewportSize();
@@ -271,8 +303,12 @@
     registerServiceWorker();
     bindAutoFullscreenGesture();
     ensureFullscreenButton();
-    requestFullscreenSoon();
-    setTimeout(requestFullscreenSoon, 450);
+    if (isGameScreen()) lockLandscapeForGame();
+    else requestFullscreenSoon();
+    setTimeout(() => {
+      if (isGameScreen()) lockLandscapeForGame();
+      else requestFullscreenSoon();
+    }, 450);
     setTimeout(showInstallHint, 900);
   });
 })();

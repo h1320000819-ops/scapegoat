@@ -2451,7 +2451,7 @@ const queueResultSideEffectsOnce = (room, resultId, reason = "resultOk") => {
   return true;
 };
 
-const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand", "assistSettings"]);
+const ACTION_TYPES = new Set(["draw", "discard", "ron", "tsumo", "pon", "kan", "riichi", "skip", "flower", "nukiDora", "resultOk", "agariYame", "declareLastHand", "assistSettings", "selectDiscard"]);
 const GUARDED_ACTION_TYPES = new Set(["discard", "ron", "tsumo", "pon", "kan", "riichi", "flower", "nukiDora"]);
 const RESULT_AUTO_OK_DELAY_MS = 15000;
 const getCurrentResultId = (state) => state?.handLog?.result?.resultId || "";
@@ -2682,10 +2682,16 @@ const applyAnmikaRoundAdvance = (state, result) => {
   if (!state || isTsumoLossless3maState(state)) return;
   state.round ??= {};
   const dealerId = state.round.dealerPlayerId || ensureArray(state.players)[0]?.id || "";
-  const winnerIds = result?.type === "win" ? [result.winnerId, ...ensureArray(result.winners)].filter(Boolean) : [];
+  const winnerIds = result?.type === "win"
+    ? [
+      ...ensureArray(result.winners).map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "").filter(Boolean),
+      result.winnerId,
+    ].filter(Boolean)
+    : [];
   const dealerWon = winnerIds.includes(dealerId);
   const isDraw = result?.type === "exhaustiveDraw";
   state.round.honba = dealerWon || isDraw ? Number(state.round.honba || 0) + 1 : 0;
+  if (winnerIds[0]) state.round.dealerPlayerId = winnerIds[0];
 };
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
   const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
@@ -4257,6 +4263,31 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   enterCurrentTurnOnServer(state);
   return tile;
 };
+const applyServerRiichiDiscard = (state, player, tileId) => {
+  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+  if (!riichiDiscardTileIds.length) throw new Error("リーチできる打牌がありません");
+  if (!tileId || !riichiDiscardTileIds.includes(tileId)) throw new Error("その牌ではリーチできません");
+  player.riichiDiscardTileIds = riichiDiscardTileIds;
+  let riichiStickPoints = 0;
+  player.isRiichi = true;
+  player.ippatsu = true;
+  player.riichiTurnIndex = state.turnIndex ?? 0;
+  player.ippatsuOwnDrawStarted = false;
+  player.feverWinCount = 0;
+  player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
+  if (isTsumoLossless3maState(state) && !player.riichiStickPaid) {
+    player.score = Number(player.score || 0) - 1000;
+    player.riichiStickPaid = true;
+    state.riichiStickCount = Number(state.riichiStickCount || 0) + 1;
+    riichiStickPoints = 1000;
+  }
+  const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== tileId);
+  player.feverRiichiActive = isServerFeverRiichiEligibleAfterDiscard(state, player, afterRiichiDiscardTiles);
+  discardForServer(state, player, tileId, { isRiichiDiscard: true });
+  appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, riichiStickPoints, turnIndex: state.turnIndex ?? 0 });
+  player.riichiDiscardTileIds = [];
+  player.selectedRiichiDiscardTileId = "";
+};
 const continueAfterServerFeverWin = (state) => {
   const result = state.handLog?.result;
   if (!result?.isFeverContinuation) return false;
@@ -4453,6 +4484,17 @@ const applyServerAction = (state, event) => {
     return state;
   }
 
+  if (action === "selectDiscard") {
+    if (active?.id !== player.id || state.phase !== "waitingForRiichiDiscard") return state;
+    const tileId = payload.tileId || payload.tile?.id || "";
+    const riichiDiscardTileIds = ensureArray(player.riichiDiscardTileIds);
+    if (tileId && riichiDiscardTileIds.includes(tileId)) {
+      player.selectedRiichiDiscardTileId = tileId;
+      appendHandEvent(state, { type: "selectDiscard", playerId: player.id, tileId, reason: payload.reason || "riichiSelection", turnIndex: state.turnIndex ?? 0 });
+    }
+    return state;
+  }
+
   const isCallKan = action === "kan" && Boolean(payload.action?.fromPlayerId || payload.fromPlayerId);
   if (["draw", "discard", "riichi", "flower", "nukiDora", "tsumo"].includes(action) && active?.id !== player.id) {
     throw new Error("現在の手番ではありません");
@@ -4510,24 +4552,7 @@ const applyServerAction = (state, event) => {
     }
     player.riichiDiscardTileIds = riichiDiscardTileIds;
     if (payload.tileId) {
-      let riichiStickPoints = 0;
-      player.isRiichi = true;
-      player.ippatsu = true;
-      player.riichiTurnIndex = state.turnIndex ?? 0;
-      player.ippatsuOwnDrawStarted = false;
-      player.feverWinCount = 0;
-      player.assistSettings = { ...(player.assistSettings || {}), autoWin: true };
-      if (isTsumoLossless3maState(state) && !player.riichiStickPaid) {
-        player.score = Number(player.score || 0) - 1000;
-        player.riichiStickPaid = true;
-        state.riichiStickCount = Number(state.riichiStickCount || 0) + 1;
-        riichiStickPoints = 1000;
-      }
-      const afterRiichiDiscardTiles = combinedHandTiles(player).filter((item) => item.id !== payload.tileId);
-      player.feverRiichiActive = isServerFeverRiichiEligibleAfterDiscard(state, player, afterRiichiDiscardTiles);
-      discardForServer(state, player, payload.tileId, { isRiichiDiscard: true });
-      appendHandEvent(state, { type: "riichi", playerId: player.id, feverRiichiActive: player.feverRiichiActive, riichiStickPoints, turnIndex: state.turnIndex ?? 0 });
-      player.riichiDiscardTileIds = [];
+      applyServerRiichiDiscard(state, player, payload.tileId);
     } else {
       state.pendingAction = null;
       state.phase = "waitingForRiichiDiscard";
@@ -4846,6 +4871,15 @@ const applyServerClockTimeout = (state) => {
   }
   const active = currentPlayer(state);
   if (active?.id !== playerId) return false;
+  if (state.phase === "waitingForRiichiDiscard") {
+    const riichiDiscardTileIds = ensureArray(player.riichiDiscardTileIds);
+    const selectedTileId = riichiDiscardTileIds.includes(player.selectedRiichiDiscardTileId) ? player.selectedRiichiDiscardTileId : "";
+    const fallbackTileId = riichiDiscardTileIds.includes(player.drawnTile?.id) ? player.drawnTile.id : riichiDiscardTileIds[0];
+    const tileId = selectedTileId || fallbackTileId;
+    if (!tileId) return false;
+    applyServerRiichiDiscard(state, player, tileId);
+    return true;
+  }
   const tileId = player.drawnTile?.id || player.hand?.at(-1)?.id;
   if (!tileId) return false;
   discardForServer(state, player, tileId);
