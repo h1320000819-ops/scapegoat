@@ -3504,6 +3504,7 @@ class GameController {
     this.replayAnnouncementTimer = null;
     this.replayEffectQueueTimer = null;
     this.lastDisplayedResultKey = "";
+    this.lastPlayedResultSoundKey = "";
     this.lastDisplayedAnnouncementKey = "";
     this.lastDisplayedBaibaHandId = "";
     this.announcementClearTimer = null;
@@ -3551,6 +3552,21 @@ class GameController {
       }
     }, 1500);
     if (emit) this.emit();
+    return true;
+  }
+  playResultSoundOnce(state, source = "result") {
+    const result = state?.handLog?.result;
+    if (!result) return false;
+    const resultId = result.resultId || `${result.type || "result"}:${result.winnerId || result.winners?.map?.((item) => item?.winnerId).join(",") || ""}:${result.winType || ""}:${state.turnIndex ?? ""}`;
+    const winType = result.winType || (Array.isArray(result.winners) && result.winners.length ? "ron" : "");
+    const soundType = result.scoreResult
+      ? (soundTypeForPochiTsumo(result.scoreResult) || (winType === "tsumo" ? "tsumo" : winType === "ron" ? "ron" : ""))
+      : (winType === "tsumo" ? "tsumo" : winType === "ron" ? "ron" : "");
+    if (!soundType) return false;
+    const soundKey = `${resultId}:${soundType}`;
+    if (this.lastPlayedResultSoundKey === soundKey) return false;
+    this.lastPlayedResultSoundKey = soundKey;
+    playGameSound(soundType, { key: `result:${source}:${soundKey}` });
     return true;
   }
   showLatestCallAnnouncement(events, { targetState = this.state } = {}) {
@@ -4339,12 +4355,15 @@ class GameController {
       : "";
     const winSoundType = soundTypeForWinAnnouncementKind(announcementKind);
     if (winSoundType) {
-      playGameSound(winSoundType, {
-        key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
-      });
+      if (!this.playResultSoundOnce(next, "announcement")) {
+        playGameSound(winSoundType, {
+          key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
+        });
+      }
     }
     this.showLatestCallAnnouncement(next.handLog?.events?.slice?.(-8) ?? [], { targetState: next });
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
+      this.playResultSoundOnce(next, "snapshot");
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Number(next.resultCountdownStartedAt || 0) || Date.now();
       next.resultCountdownResultId = getCurrentResultId(next);
@@ -4357,6 +4376,7 @@ class GameController {
     }
     if (!next.handLog?.result) {
       this.lastDisplayedResultKey = "";
+      this.lastPlayedResultSoundKey = "";
       next.resultCountdownResultId = "";
       next.resultAutoCloseHandledResultId = "";
     }

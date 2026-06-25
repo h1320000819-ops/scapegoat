@@ -1249,6 +1249,12 @@ button:hover {
   z-index: 30;
 }
 
+@media (max-width: 920px) and (orientation: landscape) {
+  .replay-toolbar-bottom {
+    bottom: calc(80px + (var(--discard-tile-height) * 0.5));
+  }
+}
+
 .replay-toolbar button,
 .replay-toolbar .button-link {
   border-radius: 6px;
@@ -3970,7 +3976,7 @@ button:hover {
   --safe-right-meld-gap: clamp(10px, 2.1dvh, 28px);
   --safe-right-meld-height: calc(var(--safe-other-tile-width) * 3 + 2px);
   --safe-river-side-gap: var(--center-river-margin);
-  --right-river-left-pull: clamp(24px, 3vw, 54px);
+  --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
 }
 
 .mahjong-table .center-info {
@@ -4152,7 +4158,7 @@ button:hover {
     --safe-other-tile-width: clamp(14px, 4.2dvh, 19px);
     --safe-right-meld-gap: clamp(3px, 1.3dvh, 8px);
     --safe-river-side-gap: var(--center-river-margin);
-    --right-river-left-pull: clamp(14px, 4.8dvh, 28px);
+    --right-river-left-pull: calc(clamp(14px, 4.8dvh, 28px) + (var(--discard-tile-width) * 0.5));
   }
 
   .mahjong-table .seat-right {
