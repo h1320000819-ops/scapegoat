@@ -1076,7 +1076,9 @@ const authRepository = {
   },
   getUser: (id) => loadUsers().find((user) => user.id === id),
   login: ({ userId, password } = {}) => {
-    const user = loadUsers().find((item) => item.id === userId && item.passwordHash === hashPassword(password ?? ""));
+    const loginKey = String(userId ?? "").trim();
+    const normalizedEmail = loginKey.toLowerCase();
+    const user = loadUsers().find((item) => (item.id === loginKey || item.loginId === loginKey || String(item.email ?? "").toLowerCase() === normalizedEmail || String(item.authEmail ?? "").toLowerCase() === normalizedEmail) && item.passwordHash === hashPassword(password ?? ""));
     if (!user) return null;
     setCurrentUserSession(user);
     return user;
@@ -1092,11 +1094,12 @@ const authRepository = {
     setCurrentUserSession(user);
     return user;
   },
-  createAccount: ({ displayName, password, iconUrl } = {}) => {
+  createAccount: ({ displayName, email, password, iconUrl } = {}) => {
     const users = loadUsers();
     let id;
     do { id = createReadableId("P"); } while (users.some((user) => user.id === id));
-    const user = { id, displayName: displayName || "プレイヤー", passwordHash: hashPassword(password || "password"), iconUrl, createdAt: now() };
+    const trimmedEmail = String(email ?? "").trim();
+    const user = { id, displayName: displayName || "プレイヤー", email: trimmedEmail, authEmail: trimmedEmail, passwordHash: hashPassword(password ?? ""), iconUrl, createdAt: now() };
     users.push(user);
     saveUsers(users);
     setCurrentUserSession(user);
@@ -3877,8 +3880,8 @@ class GameController {
     this.state.screen = "clubSelect";
     this.emit();
   }
-  createAccount(displayName = "プレイヤー1", password = "password") {
-    this.state.currentUser = authRepository.createAccount({ displayName, password });
+  createAccount(displayName = "", email = "", password = "") {
+    this.state.currentUser = authRepository.createAccount({ displayName, email, password });
     this.refreshStoredData();
     this.state.screen = "clubSelect";
     this.emit();
@@ -6814,6 +6817,8 @@ class GameView {
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
     this.stabilizeTableLayout();
+    window.setTimeout?.(() => this.stabilizeTableLayout(), 80);
+    window.setTimeout?.(() => this.stabilizeTableLayout(), 240);
   }
   stabilizeTableLayout() {
     if (typeof window === "undefined") return;
@@ -6830,20 +6835,67 @@ class GameView {
         a.right > b.left - pad &&
         a.top < b.bottom + pad &&
         a.bottom > b.top - pad;
-      table.classList.remove("layout-tight-right", "layout-ultra-tight-right");
+      const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+      const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+      const rectOf = (selector) => {
+        const element = table.querySelector(selector);
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        return rect;
+      };
+      const visibleRects = () => [
+        rectOf(".center-info"),
+        rectOf(".seat-bottom .hand-row"),
+        rectOf(".seat-bottom .meld-area .exposed-tiles"),
+        rectOf(".seat-bottom .nuki-dora-area .exposed-tiles"),
+        rectOf(".discard-bottom"),
+        rectOf(".seat-right .hand-row"),
+        rectOf(".seat-right .meld-area .exposed-tiles"),
+        rectOf(".seat-right .nuki-dora-area .exposed-tiles"),
+        rectOf(".discard-right"),
+        rectOf(".seat-top .hand-row"),
+        rectOf(".seat-top .meld-area .exposed-tiles"),
+        rectOf(".seat-top .nuki-dora-area .exposed-tiles"),
+        rectOf(".discard-top"),
+      ].filter(Boolean);
+      const isOffscreen = (rect, pad = 2) =>
+        rect.left < pad ||
+        rect.top < pad ||
+        rect.right > viewportWidth - pad ||
+        rect.bottom > viewportHeight - pad;
+      const layoutIsBad = () => {
+        const rects = visibleRects();
+        if (rects.some((rect) => isOffscreen(rect, 2))) return true;
+        const centerBox = center.getBoundingClientRect();
+        const rightRiverBox = rightRiver.getBoundingClientRect();
+        const rightSeatBox = rightSeat.getBoundingClientRect();
+        const rightMeldBox = rightMelds.getBoundingClientRect();
+        const bottomHand = rectOf(".seat-bottom .hand-row");
+        const bottomRiver = rectOf(".discard-bottom");
+        const topHand = rectOf(".seat-top .hand-row");
+        const topRiver = rectOf(".discard-top");
+        return (
+          intersects(rightMeldBox, centerBox, 6) ||
+          intersects(rightMeldBox, rightRiverBox, 6) ||
+          intersects(rightSeatBox, rightRiverBox, 2) ||
+          (bottomHand && bottomRiver && intersects(bottomHand, bottomRiver, 2)) ||
+          (topHand && topRiver && intersects(topHand, topRiver, 2))
+        );
+      };
+      table.classList.remove("layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen");
       const seatBox = rightSeat.getBoundingClientRect();
       const meldBox = rightMelds.getBoundingClientRect();
       const centerBox = center.getBoundingClientRect();
       const riverBox = rightRiver.getBoundingClientRect();
-      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
       const offscreen =
         meldBox.right > viewportWidth - 2 ||
         meldBox.left < 2 ||
         meldBox.top < 2 ||
         meldBox.bottom > viewportHeight - 2;
       const overlapping = intersects(meldBox, centerBox, 6) || intersects(meldBox, riverBox, 6) || intersects(seatBox, riverBox, 2);
-      if (!offscreen && !overlapping) return;
+      const wholeLayoutBad = layoutIsBad();
+      if (!offscreen && !overlapping && !wholeLayoutBad) return;
       table.classList.add("layout-tight-right");
       window.requestAnimationFrame(() => {
         const nextMeldBox = rightMelds.getBoundingClientRect();
@@ -6857,8 +6909,13 @@ class GameView {
           nextMeldBox.bottom > viewportHeight - 2 ||
           intersects(nextMeldBox, nextCenterBox, 4) ||
           intersects(nextMeldBox, nextRiverBox, 4) ||
-          intersects(nextSeatBox, nextRiverBox, 2);
-        if (stillBad) table.classList.add("layout-ultra-tight-right");
+          intersects(nextSeatBox, nextRiverBox, 2) ||
+          layoutIsBad();
+        if (!stillBad) return;
+        table.classList.add("layout-ultra-tight-right");
+        window.requestAnimationFrame(() => {
+          if (layoutIsBad()) table.classList.add("layout-fit-screen");
+        });
       });
     });
   }
@@ -6869,7 +6926,11 @@ class GameView {
       this.handlers.onLoginAccount(this.root.querySelector("[data-login-user-id]")?.value ?? "", this.root.querySelector("[data-login-password]")?.value ?? "");
     }));
     this.root.querySelectorAll("[data-create-account]").forEach((b) => b.addEventListener("click", () => {
-      this.handlers.onCreateAccount(this.root.querySelector("[data-create-display-name]")?.value ?? "プレイヤー", this.root.querySelector("[data-create-password]")?.value ?? "password");
+      this.handlers.onCreateAccount(
+        this.root.querySelector("[data-create-display-name]")?.value ?? "",
+        this.root.querySelector("[data-create-email]")?.value ?? "",
+        this.root.querySelector("[data-create-password]")?.value ?? ""
+      );
     }));
     this.root.querySelectorAll("[data-update-account]").forEach((b) => b.addEventListener("click", () => {
       this.handlers.onUpdateAccount({
@@ -6887,6 +6948,7 @@ class GameView {
     this.root.querySelectorAll("[data-copy-user-id]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyText(b.dataset.copyUserId, "IDをコピーしました")));
     this.root.querySelectorAll("[data-copy-club-id]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyText(b.dataset.copyClubId, "クラブIDをコピーしました")));
     this.root.querySelectorAll("[data-copy-table-url]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyTableUrl(b.dataset.copyTableUrl)));
+    this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
     this.root.querySelectorAll("[data-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenLogoutConfirm()));
     this.root.querySelectorAll("[data-confirm-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onConfirmLogout()));
     this.root.querySelectorAll("[data-cancel-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onCancelLogout()));
@@ -6917,6 +6979,24 @@ class GameView {
     this.root.querySelectorAll("[data-open-table]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenTable(b.dataset.openTable)));
     this.root.querySelectorAll("[data-rule-help]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenRuleHelp()));
     this.root.querySelectorAll("[data-close-rule-help]").forEach((b) => b.addEventListener("click", () => this.handlers.onCloseRuleHelp()));
+    this.root.querySelectorAll("[data-rule-detail-toggle]").forEach((b) => b.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = b.closest(".rule-check-item, .rule-text-item");
+      const popover = item?.querySelector(".rule-detail-popover");
+      if (!popover) return;
+      this.root.querySelectorAll(".rule-detail-popover").forEach((node) => {
+        if (node !== popover) node.hidden = true;
+      });
+      popover.hidden = !popover.hidden;
+    }));
+    if (this.root.querySelector(".rule-detail-popover") && !this.ruleDetailOutsideBound) {
+      this.ruleDetailOutsideBound = true;
+      this.root.addEventListener("click", (event) => {
+        if (event.target.closest("[data-rule-detail-toggle], .rule-detail-popover")) return;
+        this.root.querySelectorAll(".rule-detail-popover").forEach((node) => node.hidden = true);
+      });
+    }
     this.root.querySelectorAll("[data-join-seat]").forEach((b) => b.addEventListener("click", () => this.handlers.onJoinSeat(b.dataset.tableId, Number(b.dataset.joinSeat))));
     this.root.querySelectorAll("[data-fill-cpu]").forEach((b) => b.addEventListener("click", () => this.handlers.onFillCpu(b.dataset.fillCpu)));
     this.root.querySelectorAll("[data-leave-seat]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveSeat(b.dataset.leaveSeat)));
@@ -7000,27 +7080,40 @@ class GameView {
   }
   appShell(state) {
     if (state.screen === "replayViewer") return this.replayViewerScreen(state);
-    const title = { auth: "ログイン", clubSelect: "クラブ選択", accountSettings: "アカウント設定", onlineTodo: "未決定仕様", clubHome: "クラブ内ホーム", clubTables: "クラブ内卓一覧", createTable: "卓作成", memberManagement: "メンバー管理", home: "ホーム", tableList: "卓一覧", tableRoom: "卓詳細", replayList: "牌譜一覧", replayViewer: "牌譜再生", clubList: "クラブ一覧", clubDetail: "クラブ詳細" }[state.screen] ?? "ホーム";
+    const title = { auth: "ログイン", clubSelect: "クラブ選択", accountSettings: "アカウント設定", onlineTodo: "未決定仕様", clubHome: "クラブ内ホーム", clubTables: "クラブ内卓一覧", createTable: "卓作成", memberManagement: "メンバー管理", clubManagement: "クラブ管理", clubPoints: "クラブポイント", rakeCheck: "レーキ確認", pointHistory: "ポイント収支", stats: "スタッツ", deleteLog: "削除ログ", home: "ホーム", tableList: "卓一覧", tableRoom: "卓詳細", replayList: "牌譜一覧", replayViewer: "牌譜再生", clubList: "クラブ一覧", clubDetail: "クラブ詳細" }[state.screen] ?? "ホーム";
+    const content = this.screenContent(state);
     return `<section class="lobby-shell">
       <header class="lobby-header"><h2>アンミカロケット</h2><p>${title}</p></header>
-      ${state.screen === "auth" ? this.authScreen(state) : ""}
-      ${state.screen === "clubSelect" ? this.clubSelectScreen(state) : ""}
-      ${state.screen === "accountSettings" ? this.accountSettingsScreen(state) : ""}
-      ${state.screen === "onlineTodo" ? this.onlineTodoScreen(state) : ""}
-      ${state.screen === "clubHome" ? this.clubHomeScreen(state) : ""}
-      ${state.screen === "clubTables" ? this.clubTableListScreen(state) : ""}
-      ${state.screen === "createTable" ? this.createTableScreen(state) : ""}
-      ${state.screen === "memberManagement" ? this.memberManagementScreen(state) : ""}
-      ${state.screen === "home" ? this.homeScreen() : ""}
-      ${state.screen === "tableList" ? this.tableListScreen(state) : ""}
-      ${state.screen === "tableRoom" ? this.tableRoomScreen(state) : ""}
-      ${state.screen === "replayList" ? this.replayListScreen(state) : ""}
-      ${state.screen === "clubList" ? this.clubListScreen(state) : ""}
-      ${state.screen === "clubDetail" ? this.clubDetailScreen(state) : ""}
+      <main class="page-content" data-page="${escapeHtml(state.screen ?? "home")}">${content}</main>
       ${state.ruleHelpOpen ? this.ruleHelpModal() : ""}
       ${state.logoutConfirmOpen ? this.logoutConfirmModal() : ""}
       ${state.toastMessage ? `<div class="toast-message">${state.toastMessage}</div>` : ""}
     </section>`;
+  }
+  screenContent(state) {
+    switch (state.screen) {
+      case "auth": return this.authScreen(state);
+      case "clubSelect": return this.clubSelectScreen(state);
+      case "accountSettings": return this.accountSettingsScreen(state);
+      case "onlineTodo": return this.onlineTodoScreen(state);
+      case "clubHome": return this.clubHomeScreen(state);
+      case "clubTables": return this.clubTableListScreen(state);
+      case "createTable": return this.createTableScreen(state);
+      case "memberManagement": return this.memberManagementScreen(state);
+      case "clubManagement": return this.clubManagementScreen(state);
+      case "clubPoints": return this.clubPointsScreen(state);
+      case "rakeCheck": return this.rakeCheckScreen(state);
+      case "pointHistory": return this.pointHistoryScreen(state);
+      case "stats": return this.statsScreen(state);
+      case "deleteLog": return this.deleteLogScreen(state);
+      case "home": return this.homeScreen();
+      case "tableList": return this.tableListScreen(state);
+      case "tableRoom": return this.tableRoomScreen(state);
+      case "replayList": return this.replayListScreen(state);
+      case "clubList": return this.clubListScreen(state);
+      case "clubDetail": return this.clubDetailScreen(state);
+      default: return this.homeScreen();
+    }
   }
   logoutConfirmModal() {
     return `<div class="result-backdrop">
@@ -7070,22 +7163,21 @@ class GameView {
   authScreen(_state) {
     return `<section class="lobby-panel auth-screen">
       <h2>アンミカロケット</h2>
-      <p>ログイン済みの場合は次回起動時に自動でクラブ選択へ進みます。現在はlocalStorage認証です。</p>
-      <div class="auth-grid">
+      <div class="auth-stack">
         <section class="auth-box">
           <h3>ログイン</h3>
-          <label>ユーザーID<input type="text" data-login-user-id placeholder="P-8F1D3A" /></label>
-          <label>パスワード<input type="password" data-login-password /></label>
+          <label>メールアドレス/ログインID<input type="text" data-login-user-id value="" /></label>
+          <label>パスワード<input type="password" data-login-password value="" /></label>
           <button type="button" data-login-account>ログイン</button>
         </section>
         <section class="auth-box">
           <h3>アカウント作成</h3>
-          <label>プレイヤー名<input type="text" data-create-display-name placeholder="プレイヤー名" /></label>
-          <label>パスワード<input type="password" data-create-password /></label>
-          <button type="button" data-create-account>作成してログイン</button>
+          <label>プレイヤー名<input type="text" data-create-display-name value="" /></label>
+          <label>メールアドレス<input type="email" data-create-email value="" /></label>
+          <label>パスワード<input type="password" data-create-password value="" /></label>
+          <button type="button" data-create-account>アカウント作成</button>
         </section>
       </div>
-      <button type="button" data-debug-login>デバッグログイン</button>
     </section>`;
   }
   accountSettingsScreen(state) {
@@ -7135,22 +7227,33 @@ class GameView {
     const user = state.currentUser;
     const myClubs = user ? clubRepository.listMyClubs(user.id) : [];
     const ownedClub = user ? loadClubs().find((club) => club.ownerUserId === user.id) : null;
-    const pendingClubs = state.clubs.filter((club) => normalizeClub(club).pendingApplicants.includes(user?.id));
+    const adminClubs = user ? myClubs.filter((club) => getClubRole(user.id, club) === "admin") : [];
+    const showAdminMenu = adminClubs.length > 0 || Boolean(ownedClub);
+    const pendingAdminClubs = adminClubs.filter((club) => normalizeClub(club).pendingApplicants.length > 0);
     const found = state.clubSearchResultId ? clubRepository.getClub(state.clubSearchResultId) : null;
-    return `<section class="lobby-panel">
-      <div class="screen-actions"><button type="button" data-nav="accountSettings">設定</button><button type="button" data-nav="onlineTodo">未決定仕様</button><button type="button" data-nav="auth">ログイン画面</button></div>
-      <h3>所属クラブ</h3>
-      <div class="card-grid">${myClubs.map((club) => `<article class="lobby-card">
+    const displayName = user?.displayName || user?.name || "Player";
+    const loginId = user?.loginId || user?.id || "";
+    const adminMenu = showAdminMenu ? `<h3 class="club-select-heading">管理者メニュー</h3>
+      <section class="admin-club-tools">
+        <h4>クラブ作成</h4>
+        ${ownedClub ? `<p>作成済み: ${ownedClub.name} (${ownedClub.id}) <button type="button" data-copy-club-id="${ownedClub.id}">コピー</button></p>` : `<div class="club-search"><input type="text" data-create-club-name placeholder="クラブ名" /><button type="button" data-create-club>クラブ作成</button></div>`}
+        <h4>加入申請中</h4>
+        <ul>${pendingAdminClubs.flatMap((club) => normalizeClub(club).pendingApplicants.map((id) => `<li>${club.name} / ${getPlayerNameById(id)} (${id})</li>`)).join("") || "<li>なし</li>"}</ul>
+      </section>` : "";
+    return `<section class="lobby-panel club-select-panel">
+      <p class="current-user-line">現在のユーザー:${escapeHtml(displayName)} / ${escapeHtml(loginId)}</p>
+      <div class="screen-actions"><button type="button" data-nav="auth">戻る</button><button type="button" data-page-reload>画面更新</button></div>
+      <h2 class="club-select-title">クラブ選択</h2>
+      <h3 class="club-select-heading">加入済みクラブ</h3>
+      <div class="card-grid joined-club-list">${myClubs.map((club) => `<article class="lobby-card">
         <h3>${club.name}</h3><p>ID: ${club.id} <button type="button" data-copy-club-id="${club.id}">コピー</button></p><p>${club.description ?? ""}</p>
         <button type="button" data-enter-club="${club.id}">入る</button>
       </article>`).join("") || "<p>所属クラブがありません。</p>"}</div>
-      <h3>クラブIDで検索して加入申請</h3>
-      <div class="club-search"><input type="text" data-club-search-input value="${state.clubSearchId ?? ""}" placeholder="club-demo" /><button type="button" data-club-search>検索</button></div>
+      <h3 class="club-select-heading">クラブ検索</h3>
+      <label class="club-id-search-label">クラブID</label>
+      <div class="club-search"><input type="text" data-club-search-input value="${state.clubSearchId ?? ""}" placeholder="C-XXXXXX" /><button type="button" data-club-search>検索</button></div>
       ${found ? `<article class="lobby-card"><h3>${found.name}</h3><p>ID: ${found.id} <button type="button" data-copy-club-id="${found.id}">コピー</button></p><p>${found.description ?? ""}</p>${isClubMember(user?.id, found) ? `<button type="button" data-enter-club="${found.id}">入る</button>` : `<button type="button" data-apply-club="${found.id}">加入申請</button>`}</article>` : ""}
-      <h3>クラブ作成</h3>
-      ${ownedClub ? `<p>クラブ作成は1アカウントにつき1つまでです。作成済み: ${ownedClub.name} (${ownedClub.id}) <button type="button" data-copy-club-id="${ownedClub.id}">コピー</button></p>` : `<div class="club-search"><input type="text" data-create-club-name placeholder="クラブ名" /><button type="button" data-create-club>クラブ作成</button></div>`}
-      <h3>加入申請中</h3>
-      <ul>${pendingClubs.map((club) => `<li>${club.name} (${club.id})</li>`).join("") || "<li>なし</li>"}</ul>
+      ${adminMenu}
     </section>`;
   }
   selectedClub(state) {
@@ -7159,22 +7262,12 @@ class GameView {
   clubHomeScreen(state) {
     const club = this.selectedClub(state);
     if (!club || !state.currentUser || !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><button type="button" data-nav="clubSelect">クラブ選択へ</button><p>クラブを選択してください。</p></section>`;
-    const role = getClubRole(state.currentUser.id, club);
-    const replays = replayRepository.listReplaysByClub(club.id);
-    return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="clubSelect">クラブ選択へ</button></div>
-      <h2>${club.name}</h2>
-      <p>ID: ${club.id} <button type="button" data-copy-club-id="${club.id}">コピー</button></p>
-      <p>${club.description ?? ""}</p>
-      <p>自分の権限: ${role === "admin" ? "管理者" : "メンバー"} / 自分のクラブポイント: ${getClubMemberPoint(state.currentUser.id, club)}</p>
-      <p>クラブポイント: ${club.clubPointBalance} / レーキ残高: ${club.rakeBalance}</p>
+    return `<section class="lobby-panel club-home-panel">
+      <h2 class="club-home-title">${escapeHtml(club.name)}</h2>
+      <h3 class="club-home-heading">卓一覧</h3>
       <div class="screen-actions">
         <button type="button" data-nav="clubTables">卓一覧</button>
-        <button type="button" data-nav="replayList">牌譜一覧</button>
-        <button type="button" data-nav="memberManagement">メンバー一覧</button>
-        ${canCreateTable(state.currentUser.id, club) ? `<button type="button" data-open-create-table>卓作成</button>` : ""}
       </div>
-      <h3>最近の牌譜</h3>
-      <ul>${replays.slice(0, 5).map((summary) => `<li>${summary.resultLabel} <a href="${replayUrlFor(summary.replayId)}" data-open-replay="${summary.replayId}">再生</a></li>`).join("") || "<li>なし</li>"}</ul>
     </section>`;
   }
   clubTableListScreen(state) {
@@ -7190,6 +7283,7 @@ class GameView {
         const waiting = table.waitingList?.includes(currentUserId);
         const rule = GAME_RULE_DEFINITIONS.find((item) => item.id === table.ruleId)?.name ?? table.ruleId;
         return `<article class="lobby-card"><h3>${table.name}</h3><p>${rule} / 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ ${table.rakePercent ?? 0}% / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
+          <div class="table-rule-details">${this.ruleConfigSummary(table.ruleConfig)}</div>
           <p>着席: ${table.seats.filter((seat) => seat.playerId).length} / 3</p>
           <div class="screen-actions"><button type="button" data-open-table="${table.id}">開く</button><button type="button" data-rule-help>ルール</button>
           ${seated ? `<button type="button" data-leave-seat="${table.id}">卓を抜ける</button>` : canSitAtTable(table) && emptySeat ? `<button type="button" data-table-id="${table.id}" data-join-seat="${emptySeat.seatIndex}">座る</button>` : ""}
@@ -7261,6 +7355,58 @@ class GameView {
       <ul>${normalizeClub(club).pendingApplicants.map((id) => `<li>${getPlayerNameById(id)} ${isAdmin ? `<button type="button" data-club-id="${club.id}" data-approve-applicant="${id}">承認</button><button type="button" data-club-id="${club.id}" data-reject-applicant="${id}">拒否</button>` : ""}</li>`).join("") || "<li>なし</li>"}</ul>
     </section>`;
   }
+  clubManagementScreen(state) {
+    const club = this.selectedClub(state);
+    if (!club || !state.currentUser || !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><p>クラブを選択してください。</p></section>`;
+    const isAdmin = canCreateTable(state.currentUser.id, club);
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>クラブ管理</h2>
+      <p>${escapeHtml(club.name)}</p>
+      <p>ID: ${escapeHtml(club.id)} <button type="button" data-copy-club-id="${club.id}">コピー</button></p>
+      <p>${isAdmin ? "管理者としてクラブ情報を確認できます。" : "管理者権限がありません。"}</p>
+    </section>`;
+  }
+  clubPointsScreen(state) {
+    const club = this.selectedClub(state);
+    if (!club || !state.currentUser || !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><p>クラブを選択してください。</p></section>`;
+    const isAdmin = canCreateTable(state.currentUser.id, club);
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>クラブポイント</h2>
+      <p>クラブ残高: ${Number(club.clubPointBalance ?? 0)}pt</p>
+      <ul>${normalizeClub(club).members.map((member) => `<li>${escapeHtml(getPlayerNameById(member.userId))}: ${Number(member.pointBalance ?? 0)}pt ${isAdmin ? `<button type="button" data-club-id="${club.id}" data-transfer-points="${member.userId}">+100</button><button type="button" data-club-id="${club.id}" data-collect-points="${member.userId}">-100</button>` : ""}</li>`).join("")}</ul>
+    </section>`;
+  }
+  rakeCheckScreen(state) {
+    const club = this.selectedClub(state);
+    if (!club || !state.currentUser || !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><p>クラブを選択してください。</p></section>`;
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>レーキ確認</h2>
+      <p>累積レーキ: ${Number(club.rakeBalance ?? 0)}pt</p>
+      <p>プレイヤー別レーキは記録データがある場合にここへ表示します。</p>
+    </section>`;
+  }
+  pointHistoryScreen(state) {
+    const club = this.selectedClub(state);
+    if (!club || !state.currentUser || !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><p>クラブを選択してください。</p></section>`;
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>ポイント収支</h2>
+      <ul>${normalizeClub(club).members.map((member) => `<li>${escapeHtml(getPlayerNameById(member.userId))}: ${Number(member.pointBalance ?? 0)}pt</li>`).join("")}</ul>
+    </section>`;
+  }
+  statsScreen(state) {
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>スタッツ</h2>
+      <p>スタッツは独立ページとして表示します。</p>
+    </section>`;
+  }
+  deleteLogScreen(state) {
+    const club = this.selectedClub(state);
+    return `<section class="lobby-panel page-panel"><div class="screen-actions"><button type="button" data-nav="clubHome">クラブホーム</button></div>
+      <h2>削除ログ</h2>
+      <p>${club ? `${escapeHtml(club.name)} の削除ログ` : "クラブを選択してください。"}</p>
+      <ul><li>表示できる削除ログはまだありません。</li></ul>
+    </section>`;
+  }
   homeScreen() {
     return `<nav class="home-menu">
       <button type="button" data-nav="clubSelect">クラブ選択</button>
@@ -7277,6 +7423,7 @@ class GameView {
         return `<article class="lobby-card">
           <h3>${table.name}</h3>
           <p>${table.clubId ? "クラブ卓" : "フリー卓"} / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
+          <div class="table-rule-details">${this.ruleConfigSummary(table.ruleConfig)}</div>
           <p>着席: ${table.seats.filter((seat) => seat.playerId).length} / 3</p>
           <p>待機: ${table.waitingList?.map(getPlayerNameById).join("、") || "なし"}</p>
           <div class="screen-actions">
@@ -7291,6 +7438,8 @@ class GameView {
     </section>`;
   }
   ruleConfigSummary(config) {
+    const detailButton = (detail) => `<button type="button" class="rule-detail-button" data-rule-detail-toggle aria-label="詳細ルール">?</button><span class="rule-detail-popover" hidden>${escapeHtml(detail)}</span>`;
+    const check = (label, checked, detail = "") => `<span class="rule-check-item"><span class="rule-check-box ${checked ? "checked" : ""}" aria-hidden="true">${checked ? "✓" : ""}</span><span>${label}</span>${checked && detail ? detailButton(detail) : ""}</span>`;
     const maybeRuleId = config?.ruleId || config?.gameType;
     if (maybeRuleId === TSUMO_LOSSLESS_3MA_RULE_ID || config?.fiveTileComposition || config?.flowerComposition) {
       const ruleConfig = normalizeTsumoLossless3maRuleConfig(config);
@@ -7298,21 +7447,21 @@ class GameView {
       const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[ruleConfig.flowerComposition];
       const umaLabel = String(ruleConfig.umaType).replace("--", "-▲");
       return [
-        `5の内訳 ${fiveLabel}`,
-        `華牌 ${flowerLabel}`,
-        `開始時レーキ ${Number(ruleConfig.entryRakePoints).toFixed(1)}pt`,
-        `ウマ ${umaLabel}`,
-        `祝儀 ${Number(ruleConfig.chipValuePoints).toLocaleString()}点`,
-        ruleConfig.northNukiDoraEnabled ? "北抜きON" : "北抜きOFF",
+        `<span>5の内訳 ${fiveLabel}</span>`,
+        `<span>華牌 ${flowerLabel}</span>`,
+        `<span>開始時レーキ ${Number(ruleConfig.entryRakePoints).toFixed(1)}pt</span>`,
+        `<span>ウマ ${umaLabel}</span>`,
+        `<span>祝儀 ${Number(ruleConfig.chipValuePoints).toLocaleString()}点</span>`,
+        check("北抜きドラ", ruleConfig.northNukiDoraEnabled),
       ].join(" / ");
     }
     const ruleConfig = normalizeAnmikaRocketRuleConfig(config);
     return [
-      ruleConfig.rocket19Enabled ? "1・9牌ロケット" : null,
-      ruleConfig.baibaEnabled ? "倍場" : null,
-      ruleConfig.otokogiEnabled ? "漢気ON" : "漢気OFF",
-      ruleConfig.feverRiichiEnabled ? "フィーバーリーチ" : null,
-      `ターコイズ5p ${ruleConfig.turquoise5pCount}枚`,
+      check("1・9牌ロケット", ruleConfig.rocket19Enabled, "1m・9m・1p・9p・1s・9sに一枚ずつロケット牌を追加するかどうか"),
+      check("倍場", ruleConfig.baibaEnabled, "表ドラ表示牌または裏ドラ表示牌に特殊牌（ロケット牌、金牌、ターコイズ牌、白ぽっち）がめくれたときに発動する。その局の和了の点数が倍になる。表ドラや裏ドラに二枚以上特殊牌がめくれても効果は重複せず、表ドラと裏ドラで一回ずつ。表ドラ、裏ドラ、倍ぽっちでの効果は掛け算ではなく足し算で増え、2倍、3倍、4倍となる"),
+      check("フィーバーリーチ", ruleConfig.feverRiichiEnabled, "7pまたは7sが完全暗刻（孤立した暗刻の時。待ちに複合して、取り方によっては対子＋1枚みたいになるやつはだめ）の時にテンパイすると打てる特殊なリーチ。フィーバーリーチが発動すると他家は強制ツモ切りになり、和了や副露ができない。また、フィーバーリーチ者は二回あがれる"),
+      check("漢気ルール", ruleConfig.otokogiEnabled, "門前でのダマでの和了ができない。門前時にあがるにはリーチを打つ必要がある。副露時は関係ない"),
+      `<span class="rule-text-item"><span>ターコイズ5p</span>${detailButton("ターコイズ5pを手牌で使用時には副露リーチが打てる。ポンした瞬間にテンパイの時もリーチが打てる。副露リーチも役扱いとなる。また、ツモった時にツモの1翻がつく")}<span>${ruleConfig.turquoise5pCount}枚</span></span>`,
     ].filter(Boolean).join(" / ");
   }
   tableRoomScreen(state) {
@@ -7962,7 +8111,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onCloseRuleHelp: () => controller.closeRuleHelp(),
   onDebugLogin: () => controller.loginDebug(),
   onLoginAccount: (userId, password) => controller.loginWithPassword(userId, password),
-  onCreateAccount: (displayName, password) => controller.createAccount(displayName, password),
+  onCreateAccount: (displayName, email, password) => controller.createAccount(displayName, email, password),
   onUpdateAccount: (partial) => controller.updateAccountSettings(partial),
   onCopyText: (text, successMessage) => controller.copyText(text, successMessage),
   onOpenLogoutConfirm: () => controller.openLogoutConfirm(),
