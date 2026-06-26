@@ -94,6 +94,8 @@ const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
   turquoise5pCount: 2,
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
+const MIN_ANMIKA_RAKE_PERCENT = 0.5;
+const MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS = 0.5;
 const TSUMO_LOSSLESS_ROUNDS = ["東1局", "東2局", "東3局", "南1局", "南2局", "南3局"];
 const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
   fiveTileComposition: "red3blue1",
@@ -122,7 +124,7 @@ const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   ...(config || {}),
   fiveTileComposition: ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.fiveTileComposition,
   flowerComposition: ["red3blue1", "red4", "red2blue2"].includes(config?.flowerComposition) ? config.flowerComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.flowerComposition,
-  entryRakePoints: Math.max(0.1, Math.min(10, Number(config?.entryRakePoints ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.entryRakePoints))),
+  entryRakePoints: Math.max(MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS, Math.min(10, Number(config?.entryRakePoints ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.entryRakePoints))),
   chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.chipValuePoints,
   northNukiDoraEnabled: Boolean(config?.northNukiDoraEnabled),
   umaType: ["20-0--20", "30-0--30", "20-10--30"].includes(config?.umaType) ? config.umaType : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.umaType,
@@ -137,7 +139,7 @@ const isNukiDoraTileForState = (state, tile) => isFlowerTile(tile) || isNorthNuk
 const createDefaultTableSettings = () => ({
   ruleId: "anmika-rocket",
   gameType: "anmika-rocket",
-  rakePercent: 0,
+  rakePercent: MIN_ANMIKA_RAKE_PERCENT,
   pointRate: 1,
   ruleConfig: normalizeAnmikaRocketRuleConfig(),
 });
@@ -985,7 +987,7 @@ const createDefaultTables = () => ([
     name: "デモ卓 1",
     ruleId: "anmika-rocket",
     gameType: "anmika-rocket",
-    rakePercent: 0,
+    rakePercent: MIN_ANMIKA_RAKE_PERCENT,
     pointRate: 1,
     ruleConfig: normalizeAnmikaRocketRuleConfig(),
     createdBy: CURRENT_USER_ID,
@@ -1299,7 +1301,7 @@ const mergeReplaysIntoLocalStore = (incoming = []) => {
   saveReplays([...byId.values()].slice(0, 200));
   return replayRepository.listReplays();
 };
-const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType = ruleId, rakePercent = 0, pointRate = 1, ruleConfig = normalizeRuleConfigForRule(ruleId), createdBy } = {}) => ({
+const createTableRoom = ({ id, name, clubId, ruleId = "anmika-rocket", gameType = ruleId, rakePercent = MIN_ANMIKA_RAKE_PERCENT, pointRate = 1, ruleConfig = normalizeRuleConfigForRule(ruleId), createdBy } = {}) => ({
   id: id ?? `table-${now()}`,
   name: name ?? `卓 ${new Date().toLocaleTimeString("ja-JP")}`,
   clubId,
@@ -2055,6 +2057,8 @@ const playGameSound = (type, { key = "" } = {}) => {
   const nowMs = Date.now();
   const cacheKey = key || `${type}:${nowMs}`;
   globalThis.__anmikaSoundHistory ??= {};
+  const oneActionSound = ["riichi", "feverRiichi", "pon", "kan"].includes(type);
+  if (oneActionSound && key && globalThis.__anmikaSoundHistory[cacheKey]) return;
   if (key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < (type === "discard" ? 60 : 450)) return;
   if (!key && globalThis.__anmikaSoundHistory[cacheKey] && nowMs - globalThis.__anmikaSoundHistory[cacheKey] < 450) return;
   globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
@@ -4007,7 +4011,7 @@ class GameController {
       clubId: club.id,
       ruleId: settings.ruleId,
       gameType: settings.gameType ?? settings.ruleId,
-      rakePercent: settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 0 : Math.max(0, Math.min(10, Number(settings.rakePercent) || 0)),
+      rakePercent: settings.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? 0 : Math.max(MIN_ANMIKA_RAKE_PERCENT, Math.min(10, Number(settings.rakePercent) || MIN_ANMIKA_RAKE_PERCENT)),
       pointRate: Math.max(0.1, Math.min(10, Number(settings.pointRate) || 1)),
       ruleConfig: normalizeRuleConfigForRule(settings.ruleId, settings.ruleConfig),
       createdBy: this.state.currentUser.id,
@@ -4175,7 +4179,7 @@ class GameController {
         player.id = seat.playerId ?? `cpu${index}`;
         player.name = getPlayerNameById(player.id) || seat.displayName || (isCpuPlayerId(player.id) ? `CPU${index}` : "プレイヤー");
         player.type = isCpuPlayerId(player.id) || seat.playerType === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote";
-        player.iconUrl = seat.iconUrl || seat.icon_url || authRepository.getUser(player.id)?.iconUrl || (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || "";
+        player.iconUrl = (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || authRepository.getUser(player.id)?.iconUrl || seat.iconUrl || seat.icon_url || "";
       }
       this.onlineInitialPublisher = normalizedSeats[0]?.playerId === currentUserId;
       let sync = loadOnlineSync();
@@ -4308,7 +4312,7 @@ class GameController {
     next.players = (next.players ?? []).map((player) => ({
       ...player,
       type: isCpuPlayerId(player.id) || player.type === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote",
-      iconUrl: player.iconUrl || this.state.players?.find((item) => item.id === player.id)?.iconUrl || authRepository.getUser(player.id)?.iconUrl || (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || "",
+      iconUrl: (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || this.state.players?.find((item) => item.id === player.id)?.iconUrl || "",
     }));
     const previousResultKey = this.state.handLog?.result
       ? JSON.stringify({
@@ -5595,6 +5599,11 @@ class GameController {
     this.state.settingsOpen = !this.state.settingsOpen;
     this.emit();
   }
+  closeSettings() {
+    if (!this.state.settingsOpen) return;
+    this.state.settingsOpen = false;
+    this.emit();
+  }
   updateSettings(partial) {
     this.state.settings = { ...this.state.settings, ...partial };
     if (Object.prototype.hasOwnProperty.call(partial, "isLastHand") && this.state.activeTableId) {
@@ -5864,7 +5873,7 @@ class GameController {
           this.emit();
         }
       }, player.feverRiichiActive ? 2400 : 1500);
-      playGameSound(player.feverRiichiActive ? "feverRiichi" : "riichi", { key: `local-riichi:${player.id}:${this.state.turnIndex}:${player.feverRiichiActive ? "fever" : "normal"}` });
+      playGameSound(player.feverRiichiActive ? "feverRiichi" : "riichi", { key: `riichi:${player.id}:${this.state.turnIndex}:${player.feverRiichiActive ? "fever" : "normal"}` });
       this.state.log.unshift(player.feverRiichiActive ? `${player.name} フィーバーリーチ` : `${player.name} リーチ`);
     }
     player.riichiDiscardTileIds = [];
@@ -5878,9 +5887,6 @@ class GameController {
     if (!pending) return;
     const action = actionType ? getActionOptions(pending).find((option) => option.type === actionType) : getActionOptions(pending)[0];
     if (!action) return;
-    if (action.type === "riichi") {
-      playGameSound("riichi", { key: `riichi-confirm:${action.playerId}:${this.state.turnIndex}` });
-    }
     if (isSocketAuthoritativeGame()) {
       submitOnlineGameAction(action.type, { action, localPlayerId: action.playerId }).catch((error) => {
         if (action.type === "ron") console.warn("[Ron] rejected", error);
@@ -6090,7 +6096,6 @@ class GameController {
     this.state.phase = "waitingForRiichiDiscard";
     this.state.isWaitingForHumanAction = true;
     this.startClockForPlayer(player.id);
-    playGameSound("riichi", { key: `riichi-button:${player.id}:${this.state.turnIndex}` });
     this.emit();
   }
   confirmPon(action) {
@@ -6743,8 +6748,7 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
   ["discard.self", "自分の捨て牌", ".discard-bottom"],
   ["discard.right", "右側プレイヤーの捨て牌", ".discard-right"],
   ["discard.top", "上側プレイヤーの捨て牌", ".discard-top"],
-  ["assist.autoWin", "自動和了", ".assist-auto-win-control"],
-  ["assist.noCall", "鳴きなし", ".assist-no-call-control"],
+  ["assist.controls", "自動和了・鳴きなし", ".assist-controls"],
   ["control.reload", "画面再読み込み", ".table-reload-button"],
   ...["self", "right", "top"].flatMap((seat) =>
     [1, 4, 7, 10, 13].map((count) => [
@@ -6793,6 +6797,24 @@ class GameView {
     this.tableFitClasses = [];
     this.tableRelayoutFrame = null;
     this.lastRelayoutViewport = null;
+    this.currentRenderedState = null;
+    this.suppressSettingsOutsideClickUntil = 0;
+    this.boundSettingsOutsidePointer = (event) => {
+      if (event.type === "click" && Date.now() < this.suppressSettingsOutsideClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!this.currentRenderedState?.settingsOpen) return;
+      const target = event.target;
+      if (target?.closest?.(".settings-panel, [data-settings-toggle]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.type === "pointerdown") this.suppressSettingsOutsideClickUntil = Date.now() + 500;
+      this.handlers.onCloseSettings?.();
+    };
+    this.root.addEventListener("pointerdown", this.boundSettingsOutsidePointer, true);
+    this.root.addEventListener("click", this.boundSettingsOutsidePointer, true);
     if (typeof window !== "undefined" && !window.__anmikaSafeLayoutBound) {
       window.__anmikaSafeLayoutBound = true;
       window.addEventListener("resize", this.boundTableRelayout, { passive: true });
@@ -6834,6 +6856,7 @@ class GameView {
     });
   }
   render(state) {
+    this.currentRenderedState = state;
     if (globalThis.document) {
       globalThis.document.title = state.screen === "replayViewer" ? "牌譜" : "アンミカロケット";
       globalThis.document.documentElement.dataset.gameScreen = state.screen === "game" ? "on" : "off";
@@ -7218,12 +7241,20 @@ class GameView {
   }
   loadLayoutAdjustmentProfile(layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
+    const normalizeProfile = (saved) => {
+      if (!saved?.adjustments) return saved;
+      if (!saved.adjustments["assist.controls"]) {
+        const legacyAssist = saved.adjustments["assist.autoWin"] || saved.adjustments["assist.noCall"];
+        if (legacyAssist) saved.adjustments["assist.controls"] = { ...legacyAssist };
+      }
+      return saved;
+    };
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
-      if (saved?.version >= 1 && saved.adjustments) return saved;
+      if (saved?.version >= 1 && saved.adjustments) return normalizeProfile(saved);
     } catch {}
     const legacy = this.loadLegacyLayoutAdjustmentProfile(layout);
-    if (legacy) return { ...legacy, version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), migratedFrom: legacy.deviceKey || "" };
+    if (legacy) return normalizeProfile({ ...legacy, version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), migratedFrom: legacy.deviceKey || "" });
     return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
   }
   saveLayoutAdjustmentProfile(profile, layout = null) {
@@ -7381,7 +7412,7 @@ class GameView {
       <div class="layout-adjust-hit-layer" data-layout-hit-layer></div>
       <div class="layout-adjust-frame" data-layout-drag-frame><span data-layout-frame-label></span></div>
       <aside class="layout-adjust-panel">
-        <h2>表示位置調整</h2>
+        <h2 data-layout-panel-drag-handle>表示位置調整</h2>
         <label>調整する項目を選択
           <select data-layout-adjust-select>${LAYOUT_ADJUSTMENT_ITEMS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join("")}</select>
         </label>
@@ -7417,8 +7448,31 @@ class GameView {
     const frame = overlay.querySelector("[data-layout-drag-frame]");
     const frameLabel = overlay.querySelector("[data-layout-frame-label]");
     const hitLayer = overlay.querySelector("[data-layout-hit-layer]");
+    const panel = overlay.querySelector(".layout-adjust-panel");
+    const panelHandle = overlay.querySelector("[data-layout-panel-drag-handle]");
     select.value = selectedKey;
     snapSelect.value = snap;
+    const panelPositionKey = "anmikaLayoutAdjustmentPanelPosition";
+    const clampPanelPosition = (left, top) => {
+      const rect = panel.getBoundingClientRect();
+      const maxLeft = Math.max(0, (window.innerWidth || document.documentElement.clientWidth || 0) - rect.width - 4);
+      const maxTop = Math.max(0, (window.innerHeight || document.documentElement.clientHeight || 0) - rect.height - 4);
+      return {
+        left: Math.max(4, Math.min(maxLeft, Number(left) || 4)),
+        top: Math.max(4, Math.min(maxTop, Number(top) || 4)),
+      };
+    };
+    const applyPanelPosition = (position) => {
+      if (!position) return;
+      const next = clampPanelPosition(position.left, position.top);
+      panel.style.left = `${next.left}px`;
+      panel.style.top = `${next.top}px`;
+      panel.style.right = "auto";
+      session.panelPosition = next;
+    };
+    try {
+      applyPanelPosition(session.panelPosition || JSON.parse(localStorage.getItem(panelPositionKey) || "null"));
+    } catch {}
     const currentItem = () => LAYOUT_ADJUSTMENT_ITEMS.find((item) => item.key === selectedKey) || LAYOUT_ADJUSTMENT_ITEMS[0];
     const ensureAdjustment = () => {
       profile.adjustments[selectedKey] ||= defaultLayoutAdjustment();
@@ -7508,6 +7562,7 @@ class GameView {
       updateFrame();
     };
     let dragStart = null;
+    let panelDragStart = null;
     const beginDrag = (event, key = "") => {
       event.preventDefault();
       event.stopPropagation();
@@ -7516,6 +7571,13 @@ class GameView {
       overlay.setPointerCapture?.(event.pointerId);
       updateFrame();
     };
+    panelHandle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = panel.getBoundingClientRect();
+      panelDragStart = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+      overlay.setPointerCapture?.(event.pointerId);
+    });
     frame.addEventListener("pointerdown", (event) => {
       beginDrag(event);
     });
@@ -7525,6 +7587,15 @@ class GameView {
       beginDrag(event, key);
     });
     overlay.addEventListener("pointermove", (event) => {
+      if (panelDragStart) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyPanelPosition({
+          left: panelDragStart.left + event.clientX - panelDragStart.x,
+          top: panelDragStart.top + event.clientY - panelDragStart.y,
+        });
+        return;
+      }
       if (!dragStart) return;
       event.preventDefault();
       event.stopPropagation();
@@ -7534,8 +7605,15 @@ class GameView {
       moveSelected(dx, dy);
       dragStart = { x: event.clientX, y: event.clientY };
     });
-    overlay.addEventListener("pointerup", () => { dragStart = null; });
-    overlay.addEventListener("pointercancel", () => { dragStart = null; });
+    const endOverlayDrag = () => {
+      if (panelDragStart && session.panelPosition) {
+        localStorage.setItem(panelPositionKey, JSON.stringify(session.panelPosition));
+      }
+      dragStart = null;
+      panelDragStart = null;
+    };
+    overlay.addEventListener("pointerup", endOverlayDrag);
+    overlay.addEventListener("pointercancel", endOverlayDrag);
     select.addEventListener("change", () => {
       selectLayoutKey(select.value);
       updateFrame();
@@ -7548,12 +7626,10 @@ class GameView {
     overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
       if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
-      if (!validation.ok) {
-        warning.textContent = `保存できません。画面外に出ています: ${validation.outside.join("、")}`;
-        return;
-      }
       this.saveLayoutAdjustmentProfile(profile, layout);
-      warning.textContent = "この端末用に保存しました";
+      warning.textContent = validation.ok
+        ? "この端末用に保存しました"
+        : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
       setTimeout(() => {
         this.layoutAdjustmentSession = null;
         this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
@@ -8136,7 +8212,7 @@ class GameView {
           <label class="setting-row"><span>華牌の構成</span><select data-rule-config-key="flowerComposition">
             ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.flowerComposition === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt</span><input type="range" min="0.1" max="10" step="0.1" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
+          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt</span><input type="range" min="${MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS}" max="10" step="0.5" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
           <label class="setting-row"><span>ウマ</span><select data-rule-config-key="umaType">
             ${[["20-0--20", "20-0-▲20"], ["30-0--30", "30-0-▲30"], ["20-10--30", "20-10-▲30"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.umaType === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
@@ -8154,7 +8230,7 @@ class GameView {
           </select></label>
         `}
       </section>
-      ${isTsumoLossless ? "" : `<label class="setting-row"><span>レーキ: ${Number(settings.rakePercent ?? 0).toFixed(1)}%</span><input type="range" min="0" max="10" step="0.5" value="${settings.rakePercent ?? 0}" data-create-table-rake /></label>`}
+      ${isTsumoLossless ? "" : `<label class="setting-row"><span>レーキ: ${Math.max(MIN_ANMIKA_RAKE_PERCENT, Number(settings.rakePercent ?? MIN_ANMIKA_RAKE_PERCENT)).toFixed(1)}%</span><input type="range" min="${MIN_ANMIKA_RAKE_PERCENT}" max="10" step="0.5" value="${Math.max(MIN_ANMIKA_RAKE_PERCENT, Number(settings.rakePercent ?? MIN_ANMIKA_RAKE_PERCENT))}" data-create-table-rake /></label>`}
       <button type="button" class="primary-action" data-create-table-submit>作成</button>
     </section>`;
   }
@@ -8583,7 +8659,9 @@ class GameView {
   }
   playerIconUrl(player) {
     if (!player || player.type === "cpu") return "";
-    return player.iconUrl || authRepository.getUser(player.id)?.iconUrl || (this.currentStateForClock?.currentUser?.id === player.id ? this.currentStateForClock.currentUser.iconUrl : "") || "";
+    const currentUser = this.currentStateForClock?.currentUser;
+    if (currentUser?.id === player.id) return currentUser.iconUrl || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || "";
+    return authRepository.getUser(player.id)?.iconUrl || player.iconUrl || "";
   }
   playerIconClean(player) {
     const iconUrl = this.playerIconUrl(player);
@@ -8944,6 +9022,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
   onForceTableLeave: () => controller.leaveOnlineGameToLobby(),
   onToggleSettings: () => controller.toggleSettings(),
+  onCloseSettings: () => controller.closeSettings(),
   onUpdateSettings: (partial) => controller.updateSettings(partial),
   onAssistSettings: (playerId, partial) => controller.updateAssistSettings(playerId, partial),
   onOpenRuleHelp: () => controller.openRuleHelp(),

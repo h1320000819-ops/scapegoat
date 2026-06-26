@@ -122,8 +122,14 @@ body {
 }
 
 .layout-adjust-panel h2 {
+  cursor: grab;
   font-size: 16px;
   margin: 0;
+  user-select: none;
+}
+
+.layout-adjust-panel h2:active {
+  cursor: grabbing;
 }
 
 .layout-adjust-panel label {
@@ -1518,10 +1524,10 @@ button:hover {
 
 .rule-check-box {
   align-items: center;
-  background: rgba(255, 255, 255, 0.13);
-  border: 1px solid rgba(255, 255, 255, 0.42);
+  background: #ffffff;
+  border: 1px solid rgba(24, 169, 87, 0.72);
   border-radius: 4px;
-  color: #fff;
+  color: transparent;
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 13px;
@@ -1533,10 +1539,10 @@ button:hover {
 }
 
 .rule-check-box.checked {
-  background: #18a957;
+  background: #ffffff;
   border-color: #18a957;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3) inset;
-  color: #fff;
+  box-shadow: 0 0 0 2px rgba(24, 169, 87, 0.18);
+  color: #128646;
 }
 
 .rule-detail-button {
@@ -5334,8 +5340,14 @@ button:hover {
 }
 
 .layout-adjust-panel h2 {
+  cursor: grab;
   font-size: 16px;
   margin: 0;
+  user-select: none;
+}
+
+.layout-adjust-panel h2:active {
+  cursor: grabbing;
 }
 
 .layout-adjust-panel label {

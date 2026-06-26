@@ -386,6 +386,31 @@
     }]));
     return emptySeatRows(tableId).map((emptySeat) => ({ ...emptySeat, ...(byIndex.get(emptySeat.seat_index) || {}) }));
   };
+  const enrichSeatRowsWithUserProfiles = async (rows) => {
+    const userIds = [...new Set((rows || []).map((seat) => seat.user_id).filter(Boolean))];
+    if (!userIds.length) return rows;
+    try {
+      const profiles = await rest(
+        "/users?select=user_id,display_name,login_id,icon_url&user_id=in.(" +
+          userIds.map(encodeURIComponent).join(",") +
+          ")"
+      );
+      const byUserId = new Map((profiles || []).map((profile) => [profile.user_id, profile]));
+      return rows.map((seat) => {
+        const profile = byUserId.get(seat.user_id);
+        if (!profile) return seat;
+        return {
+          ...seat,
+          display_name: seat.display_name || profile.display_name || profile.login_id || seat.display_name,
+          icon_url: seat.icon_url || profile.icon_url || "",
+          users: { ...(seat.users || {}), ...profile },
+        };
+      });
+    } catch (error) {
+      log("席のアイコン情報取得に失敗しました。", rawErrorText(error));
+      return rows;
+    }
+  };
   const getLocalSeats = (tableId) => normalizeSeats(state.localSeatsByTable[localSeatKey(tableId)] || [], tableId);
   const getKnownSeats = (tableId) => {
     const table = state.tables.find((item) => item.table_id === tableId);
@@ -2711,7 +2736,7 @@
         if (!raw.includes("shared_get_table_seats") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw rpcError;
         rows = await rest("/table_seats?select=*&table_id=eq." + encodeURIComponent(tableId) + "&order=seat_index.asc");
       }
-      const normalizedFromDb = normalizeSeats(rows, tableId);
+      const normalizedFromDb = await enrichSeatRowsWithUserProfiles(normalizeSeats(rows, tableId));
       renderSeatRows(normalizedFromDb, tableId);
       saveLocalSeats(tableId, normalizedFromDb);
       queueAutoStartCheckForTable(tableId, normalizedFromDb, "席取得");
@@ -2826,6 +2851,7 @@
       target.user_id = requireUser().id;
       target.player_type = "human";
       target.display_name = requireUser().displayName || "あなた";
+      target.icon_url = requireUser().iconUrl || "";
       target.is_last_hand_declared = false;
       await clearMyWaiting().catch(() => {});
       saveLocalSeats(tableId, rows);
