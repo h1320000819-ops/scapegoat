@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260626-layout-direct-drag-a";
-const TILE_CACHE_NAME = "anmika-tile-assets-v6";
+const CACHE_NAME = "anmika-pwa-20260627-reload-control-layout-a";
+const TILE_CACHE_NAME = "anmika-tile-assets-v7";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260626-layout-direct-drag-a",
-  "/runtime/app.js?v=20260626-layout-direct-drag-a",
-  "/runtime/online-debug.js?v=20260626-independent-pages-a",
-  "/runtime/pwa.js?v=20260626-layout-direct-drag-a",
+  "/styles.css?v=20260627-reload-control-layout-a",
+  "/runtime/app.js?v=20260627-reload-control-layout-a",
+  "/runtime/online-debug.js?v=20260627-layout-assist-icons-a",
+  "/runtime/pwa.js?v=20260627-reload-control-layout-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

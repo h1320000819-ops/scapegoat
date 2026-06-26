@@ -3482,10 +3482,11 @@ const isFeverRiichiEligibleAfterDiscard = (state, player, hand13) => {
 const getActiveFeverRiichiPlayer = (state) => state.players.find((player) => player.feverRiichiActive && (player.feverWinCount ?? 0) < 2);
 
 class GameController {
-  constructor(players, ruleEngine, onStateChanged = () => {}, cpuStrategy = new TsumogiriCpuStrategy()) {
+  constructor(players, ruleEngine, onStateChanged = () => {}, cpuStrategy = new TsumogiriCpuStrategy(), onClockChanged = () => {}) {
     this.state = createInitialGameState(players);
     this.ruleEngine = ruleEngine;
     this.onStateChanged = onStateChanged;
+    this.onClockChanged = onClockChanged;
     this.cpuStrategy = cpuStrategy;
     this.onlineSyncTimer = null;
     this.onlinePublishTimer = null;
@@ -3700,13 +3701,13 @@ class GameController {
       const renderTick = Math.ceil(remainingMs / 500);
       if (renderTick === this.state.lastClockRenderTick) return;
       this.state.lastClockRenderTick = renderTick;
-      this.onStateChanged(this.state);
+      this.onClockChanged(this.state);
       return;
     }
     if (player?.type !== "human") {
       if (this.state.lastClockRenderTick !== 0) {
         this.state.lastClockRenderTick = 0;
-        this.onStateChanged(this.state);
+        this.onClockChanged(this.state);
       }
       return;
     }
@@ -4174,6 +4175,7 @@ class GameController {
         player.id = seat.playerId ?? `cpu${index}`;
         player.name = getPlayerNameById(player.id) || seat.displayName || (isCpuPlayerId(player.id) ? `CPU${index}` : "プレイヤー");
         player.type = isCpuPlayerId(player.id) || seat.playerType === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote";
+        player.iconUrl = seat.iconUrl || seat.icon_url || authRepository.getUser(player.id)?.iconUrl || (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || "";
       }
       this.onlineInitialPublisher = normalizedSeats[0]?.playerId === currentUserId;
       let sync = loadOnlineSync();
@@ -4306,6 +4308,7 @@ class GameController {
     next.players = (next.players ?? []).map((player) => ({
       ...player,
       type: isCpuPlayerId(player.id) || player.type === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote",
+      iconUrl: player.iconUrl || this.state.players?.find((item) => item.id === player.id)?.iconUrl || authRepository.getUser(player.id)?.iconUrl || (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || "",
     }));
     const previousResultKey = this.state.handLog?.result
       ? JSON.stringify({
@@ -5393,12 +5396,8 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultOkSubmittedResultId = currentResultId;
       this.state.resultAutoCloseHandled = true;
-      this.state.resultOkPlayerIds = [...new Set([...(this.state.resultOkPlayerIds || []), localPlayerId])];
-      if (this.state.handLog?.result) {
-        this.state.handLog.result.resultOkPlayerIds = [...new Set([...(this.state.handLog.result.resultOkPlayerIds || []), localPlayerId])];
-      }
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 5000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? loadOnlineSync()?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
           this.applyOnlineStateSnapshot(response.state);
@@ -6744,6 +6743,9 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
   ["discard.self", "自分の捨て牌", ".discard-bottom"],
   ["discard.right", "右側プレイヤーの捨て牌", ".discard-right"],
   ["discard.top", "上側プレイヤーの捨て牌", ".discard-top"],
+  ["assist.autoWin", "自動和了", ".assist-auto-win-control"],
+  ["assist.noCall", "鳴きなし", ".assist-no-call-control"],
+  ["control.reload", "画面再読み込み", ".table-reload-button"],
   ...["self", "right", "top"].flatMap((seat) =>
     [1, 4, 7, 10, 13].map((count) => [
       `hand.${seat}.count${count}`,
@@ -6779,6 +6781,8 @@ const layoutBucketFromCount = (count) => {
   if (numeric <= 10) return 10;
   return 13;
 };
+const SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION = 2;
+const SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:sharedTable";
 const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
 class GameView {
   constructor(root, handlers) {
@@ -6894,11 +6898,23 @@ class GameView {
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
-    this.stabilizeTableLayout();
-    window.setTimeout?.(() => this.stabilizeTableLayout(), 80);
-    window.setTimeout?.(() => this.stabilizeTableLayout(), 240);
+    this.scheduleTableRelayout({ force: true });
     this.restoreLayoutAdjustmentMode();
     window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
+  }
+  updateClockBadges(state) {
+    if (!this.root?.querySelector?.(".mahjong-table")) return false;
+    this.currentStateForClock = state;
+    let updated = false;
+    this.root.querySelectorAll("[data-clock-player-id]").forEach((badge) => {
+      const playerId = badge.dataset.clockPlayerId;
+      const remainingMs = getClockRemainingMs(state, playerId);
+      const nextText = formatClock(state, playerId);
+      if (badge.textContent !== nextText) badge.textContent = nextText;
+      badge.classList.toggle("low", remainingMs <= 5000);
+      updated = true;
+    });
+    return updated;
   }
   safeAreaInsets() {
     if (typeof window === "undefined" || typeof document === "undefined") return { top: 0, right: 0, bottom: 0, left: 0 };
@@ -7163,23 +7179,69 @@ class GameView {
     const profile = layout?.profile?.name || "auto";
     return `${orientation}:w${viewportWidth}:h${viewportHeight}:dpr${dpr}:${standalone ? "standalone" : "browser"}:${profile}`;
   }
-  layoutAdjustmentStorageKey(layout = null) {
+  sharedLayoutDeviceKey() {
+    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
+    const orientation = viewportWidth >= viewportHeight ? "landscape" : "portrait";
+    const family = viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches ? "mobile" : "desktop";
+    return `${family}:${orientation}`;
+  }
+  legacyLayoutAdjustmentStorageKey(layout = null) {
     return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
+  }
+  layoutAdjustmentStorageKey(layout = null) {
+    return `${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
+  }
+  loadLegacyLayoutAdjustmentProfile(layout = null) {
+    const readSaved = (key) => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(key) || "null");
+        if (saved?.version === 1 && saved.adjustments) return saved;
+      } catch {}
+      return null;
+    };
+    const exactLegacy = readSaved(this.legacyLayoutAdjustmentStorageKey(layout));
+    if (exactLegacy) return exactLegacy;
+    let best = null;
+    let bestCount = 0;
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index) || "";
+      if (!key.startsWith("anmikaLayoutAdjustments:") || key.startsWith(SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX)) continue;
+      const saved = readSaved(key);
+      const count = saved ? Object.keys(saved.adjustments || {}).length : 0;
+      if (count > bestCount) {
+        best = saved;
+        bestCount = count;
+      }
+    }
+    return best;
   }
   loadLayoutAdjustmentProfile(layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
-      if (saved?.version === 1 && saved.adjustments) return saved;
+      if (saved?.version >= 1 && saved.adjustments) return saved;
     } catch {}
-    return { version: 1, deviceKey: this.layoutDeviceKey(layout), adjustments: {} };
+    const legacy = this.loadLegacyLayoutAdjustmentProfile(layout);
+    if (legacy) return { ...legacy, version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), migratedFrom: legacy.deviceKey || "" };
+    return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
   }
   saveLayoutAdjustmentProfile(profile, layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
-    localStorage.setItem(key, JSON.stringify({ version: 1, deviceKey: this.layoutDeviceKey(layout), adjustments: profile.adjustments || {} }));
+    localStorage.setItem(key, JSON.stringify({
+      version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+      scope: "all-tables",
+      rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      deviceKey: this.sharedLayoutDeviceKey(),
+      selectedKey: profile.selectedKey || "",
+      adjustments: profile.adjustments || {},
+      updatedAt: Date.now(),
+    }));
   }
   actualLayoutKeyForItem(table, item) {
     if (item.key.startsWith("discard.")) return item.key;
+    if (item.key.startsWith("assist.")) return item.key;
+    if (item.key.startsWith("control.")) return item.key;
     const seatClass = layoutSeatClassFromKey(item.key);
     const seat = table.querySelector(`.seat-${seatClass}`);
     if (!seat) return "";
@@ -8392,6 +8454,7 @@ class GameView {
         ${state.discardDebugMessage ? `<div class="discard-debug-message">${escapeHtml(state.discardDebugMessage)}${state.discardRecoveryVisible ? ` <button type="button" data-force-discard-resync>再同期</button>` : ""}</div>` : ""}
       </section>`}
       ${state.phase === "idle" ? this.startOverlay() : ""}
+      ${state.isReplayView ? "" : this.reloadButton(state)}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
       ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
@@ -8436,6 +8499,9 @@ class GameView {
   settingsButton(_state) {
     return `<button type="button" class="settings-toggle" data-settings-toggle>設定</button>`;
   }
+  reloadButton(_state) {
+    return `<button type="button" class="table-reload-button" data-page-reload>画面再読み込み</button>`;
+  }
   settingsPanel(state) {
     const sync = loadOnlineSync();
     const showDebugLeave = Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
@@ -8446,7 +8512,6 @@ class GameView {
       <h2>設定</h2>
       ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
       <button type="button" class="secondary" data-layout-adjust-open>表示位置調整</button>
-      <button type="button" class="secondary" data-page-reload>画面更新</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
   }
@@ -8516,6 +8581,18 @@ class GameView {
       </div>
     </section>`;
   }
+  playerIconUrl(player) {
+    if (!player || player.type === "cpu") return "";
+    return player.iconUrl || authRepository.getUser(player.id)?.iconUrl || (this.currentStateForClock?.currentUser?.id === player.id ? this.currentStateForClock.currentUser.iconUrl : "") || "";
+  }
+  playerIconClean(player) {
+    const iconUrl = this.playerIconUrl(player);
+    const initial = escapeHtml((player?.name || "?").trim().charAt(0) || "?");
+    const avatarClass = player?.type === "cpu"
+      ? (player.id?.includes("2") || player.name?.includes("2") ? "avatar-cpu2" : "avatar-cpu1")
+      : "avatar-human";
+    return `<span class="seat-player-icon player-avatar ${avatarClass}" aria-hidden="true">${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" draggable="false" />` : initial}</span>`;
+  }
   playerSeatClean(player, seat, current, dealer) {
     if (!player) return "";
     const seatView = player.player ? player : null;
@@ -8528,8 +8605,9 @@ class GameView {
     const isDealer = player.id === dealer?.id;
     const clockMs = this.currentStateForClock ? getClockRemainingMs(this.currentStateForClock, player.id) : null;
     const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
-      ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}">${formatClock(this.currentStateForClock, player.id)}</span>`
+      ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}" data-clock-player-id="${escapeHtml(player.id)}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
+    const handIcon = seat === "bottom" && !this.currentStateForClock?.isReplayView ? `<span class="hand-player-icon">${this.playerIconClean(player)}</span>` : "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
     const hasMelds = (player.melds ?? []).length > 0;
     const handCount = Math.max(0, Math.min(13, handTiles.length));
@@ -8541,13 +8619,9 @@ class GameView {
     const layoutParts = seat === "bottom"
       ? [handRegion, drawnRegion, meldRegion, nukiRegion]
       : [nukiRegion, meldRegion, drawnRegion, handRegion];
-    const playerInitial = escapeHtml((player.name || "?").trim().charAt(0) || "?");
-    const avatarClass = player.type === "cpu"
-      ? (player.id?.includes("2") || player.name?.includes("2") ? "avatar-cpu2" : "avatar-cpu1")
-      : "avatar-human";
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
-      <div class="seat-identity"><span class="seat-player-icon player-avatar ${avatarClass}" aria-hidden="true">${playerInitial}</span><div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div></div>
-      <div class="hand-zone">${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""} hand-count-${handCountBucket}" style="--hand-count:${handCount};">${layoutParts.join("")}</div></div>
+      <div class="seat-identity">${seat === "bottom" ? "" : this.playerIconClean(player)}<div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div></div>
+      <div class="hand-zone">${handIcon}${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""} hand-count-${handCountBucket}" style="--hand-count:${handCount};">${layoutParts.join("")}</div></div>
       ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }
@@ -8557,8 +8631,8 @@ class GameView {
     const roleLabel = getSeatRoleLabel(this.currentStateForClock, player.id).replace(/家$/, "") || "";
     return `<div class="assist-controls">
       <div class="assist-seat-status"><span>${escapeHtml(roleLabel)}</span><strong>${formatPointDisplay(player.score)}点</strong></div>
-      <label><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
-      <label><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
+      <label class="assist-auto-win-control"><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
+      <label class="assist-no-call-control"><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
     </div>`;
   }
   discardAreaClean(player, seat) {
@@ -8845,7 +8919,15 @@ class GameView {
 
 const players = [createPlayer("p1", "プレイヤー1", "human"), createPlayer("p2", "CPU1", "cpu"), createPlayer("p3", "CPU2", "cpu")];
 let view;
-const controller = new GameController(players, new RuleEngine(), (state) => view.render(state));
+const controller = new GameController(
+  players,
+  new RuleEngine(),
+  (state) => view.render(state),
+  new TsumogiriCpuStrategy(),
+  (state) => {
+    if (!view.updateClockBadges(state)) view.render(state);
+  }
+);
 globalThis.__anmikaController = controller;
 if (typeof window !== "undefined") window.__anmikaController = controller;
 view = new GameView(document.querySelector("#game-root"), {

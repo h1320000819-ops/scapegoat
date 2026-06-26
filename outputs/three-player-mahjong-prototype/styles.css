@@ -528,13 +528,15 @@ button:hover {
   align-items: center;
   background: linear-gradient(135deg, #ffe2a7, #d06d66);
   border: 2px solid rgba(255, 231, 169, 0.95);
-  border-radius: 50%;
+  border-radius: 4px;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  color: #fff7d6;
   display: inline-flex;
   font-weight: 900;
   height: 46px;
   justify-content: center;
   overflow: hidden;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.62);
   width: 46px;
 }
 
@@ -682,6 +684,41 @@ button:hover {
 
 .hand-zone {
   position: relative;
+}
+
+.hand-player-icon {
+  display: inline-flex;
+  left: 4px;
+  pointer-events: none;
+  position: absolute;
+  top: -54px;
+  z-index: 13;
+}
+
+.hand-player-icon .seat-player-icon {
+  height: 38px;
+  width: 38px;
+}
+
+.table-reload-button {
+  background: rgba(3, 9, 16, 0.82);
+  border: 1px solid rgba(191, 239, 255, 0.52);
+  border-radius: 6px;
+  color: #d8f7ff;
+  font-size: 12px;
+  font-weight: 900;
+  left: max(12px, env(safe-area-inset-left));
+  line-height: 1;
+  padding: 8px 10px;
+  position: fixed;
+  top: calc(50% + var(--center-y-offset) + 72px);
+  touch-action: manipulation;
+  z-index: 28;
+}
+
+.table-reload-button:hover {
+  border-color: rgba(255, 209, 92, 0.84);
+  color: #fff5c7;
 }
 
 .hand-clock-badge {

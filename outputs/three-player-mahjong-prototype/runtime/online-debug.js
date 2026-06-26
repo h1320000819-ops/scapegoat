@@ -381,6 +381,7 @@
       user_id: seat.user_id ?? seat.userId ?? null,
       player_type: seat.player_type ?? seat.playerType ?? "empty",
       display_name: seat.display_name ?? seat.displayName ?? null,
+      icon_url: seat.icon_url ?? seat.iconUrl ?? seat.users?.icon_url ?? null,
       is_last_hand_declared: Boolean(seat.is_last_hand_declared ?? seat.isLastHandDeclared),
     }]));
     return emptySeatRows(tableId).map((emptySeat) => ({ ...emptySeat, ...(byIndex.get(emptySeat.seat_index) || {}) }));
@@ -3235,6 +3236,7 @@
     const humanUser = {
       id: currentUser.id,
       displayName: currentUser.displayName || "プレイヤー1",
+      iconUrl: currentUser.iconUrl || "",
       createdAt: Date.now(),
       ownedClubIds: [],
       joinedClubIds: [],
@@ -3244,6 +3246,7 @@
       .map((seat) => ({
         id: seat.user_id,
         displayName: seat.display_name || `Player ${String(seat.user_id).slice(0, 8)}`,
+        iconUrl: seat.icon_url || "",
         createdAt: Date.now(),
         ownedClubIds: [],
         joinedClubIds: [],
@@ -3257,6 +3260,7 @@
         seatIndex: index,
         playerId: isRealPlayerSeat ? seat.user_id : `cpu${index}`,
         playerType: seat.player_type === "cpu" ? "cpu" : isOwnHumanSeat ? "human" : "remote",
+        iconUrl: seat.icon_url || (isOwnHumanSeat ? currentUser.iconUrl || "" : ""),
         isOccupied: true,
         isReady: true,
         isLastHandDeclared: false,
