@@ -1,5 +1,5 @@
 ﻿const MAX_AUTO_TURNS = 200;
-const INITIAL_TIME_MS = 20000;
+const INITIAL_TIME_MS = 30000;
 const RESULT_COUNTDOWN_SECONDS = 15;
 const ONLINE_LOADING_DISPLAY_DELAY_MS = 5000;
 const SOCKET_STARTUP_RESYNC_DELAYS_MS = [600, 1400, 2600, 4200, 6500];
@@ -3642,9 +3642,12 @@ class GameController {
   getPlayer(id) { const player = this.state.players.find((p) => p.id === id); if (!player) throw new Error(`Player not found: ${id}`); return player; }
   currentUserId() { return this.state.currentUser?.id ?? CURRENT_USER_ID; }
   ensureClocks() {
-    this.state.playerClocks ??= createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
+    this.state.settings ??= {};
+    const initialClockMs = Math.max(INITIAL_TIME_MS, Number(this.state.settings.initialClockMs || INITIAL_TIME_MS));
+    this.state.settings.initialClockMs = initialClockMs;
+    this.state.playerClocks ??= createPlayerClocks(this.state.players, initialClockMs);
     for (const player of this.state.players) {
-      if (!this.state.playerClocks[player.id]) this.state.playerClocks[player.id] = { playerId: player.id, remainingMs: this.state.settings?.initialClockMs ?? INITIAL_TIME_MS, isInByoyomi: false };
+      if (!this.state.playerClocks[player.id]) this.state.playerClocks[player.id] = { playerId: player.id, remainingMs: initialClockMs, isInByoyomi: false };
     }
   }
   startClockForPlayer(playerId) {
@@ -3677,7 +3680,7 @@ class GameController {
     const clock = this.state.playerClocks[playerId];
     if (!clock) return;
     const roundedSeconds = Math.ceil((clock.remainingMs ?? 0) / 1000);
-    clock.remainingMs = Math.min(roundedSeconds + 2, 20) * 1000;
+    clock.remainingMs = Math.min(roundedSeconds + 2, 30) * 1000;
   }
   tickClock() {
     if (this.state.handLog.result && this.state.phase !== "showingWinAnnouncement") {
@@ -6781,7 +6784,11 @@ class GameView {
   constructor(root, handlers) {
     this.root = root;
     this.handlers = handlers;
-    this.boundTableRelayout = () => this.stabilizeTableLayout();
+    this.boundTableRelayout = () => this.scheduleTableRelayout();
+    this.layoutAdjustmentSession = null;
+    this.tableFitClasses = [];
+    this.tableRelayoutFrame = null;
+    this.lastRelayoutViewport = null;
     if (typeof window !== "undefined" && !window.__anmikaSafeLayoutBound) {
       window.__anmikaSafeLayoutBound = true;
       window.addEventListener("resize", this.boundTableRelayout, { passive: true });
@@ -6801,6 +6808,26 @@ class GameView {
   bindStaticControls(start, draw) {
     start?.addEventListener("click", this.handlers.onStart);
     draw?.addEventListener("click", this.handlers.onDraw);
+  }
+  scheduleTableRelayout({ force = false } = {}) {
+    if (typeof window === "undefined") return;
+    const viewport = {
+      width: Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0),
+      height: Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0),
+    };
+    const isMobileLandscape = viewport.width > viewport.height && (viewport.width <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
+    if (isMobileLandscape && this.lastRelayoutViewport && !force) {
+      const widthDelta = Math.abs(viewport.width - this.lastRelayoutViewport.width);
+      const heightDelta = Math.abs(viewport.height - this.lastRelayoutViewport.height);
+      if (widthDelta <= 2 && heightDelta <= 14) return;
+    }
+    this.lastRelayoutViewport = viewport;
+    if (this.tableRelayoutFrame) return;
+    this.tableRelayoutFrame = window.requestAnimationFrame(() => {
+      this.tableRelayoutFrame = null;
+      this.stabilizeTableLayout();
+      this.restoreLayoutAdjustmentMode();
+    });
   }
   render(state) {
     if (globalThis.document) {
@@ -6868,6 +6895,8 @@ class GameView {
     this.stabilizeTableLayout();
     window.setTimeout?.(() => this.stabilizeTableLayout(), 80);
     window.setTimeout?.(() => this.stabilizeTableLayout(), 240);
+    this.restoreLayoutAdjustmentMode();
+    window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
   }
   safeAreaInsets() {
     if (typeof window === "undefined" || typeof document === "undefined") return { top: 0, right: 0, bottom: 0, left: 0 };
@@ -7241,14 +7270,29 @@ class GameView {
     if (snapValue === "tile1") return selfTile;
     return Number(snapValue || 4) || 4;
   }
-  openLayoutAdjustmentMode() {
+  restoreLayoutAdjustmentMode() {
+    if (!this.layoutAdjustmentSession) return;
+    const table = this.root.querySelector(".mahjong-table");
+    if (!table) return;
+    this.openLayoutAdjustmentMode({ restore: true });
+  }
+  openLayoutAdjustmentMode(options = {}) {
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
     this.stabilizeTableLayout();
     const layout = this.calculateSafeTableLayout();
-    const profile = typeof structuredClone === "function" ? structuredClone(this.loadLayoutAdjustmentProfile(layout)) : JSON.parse(JSON.stringify(this.loadLayoutAdjustmentProfile(layout)));
-    let selectedKey = profile.selectedKey || "discard.self";
-    let snap = localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4";
+    const cloneProfile = (value) => (typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value)));
+    const session = options.restore && this.layoutAdjustmentSession
+      ? this.layoutAdjustmentSession
+      : {
+          profile: cloneProfile(this.loadLayoutAdjustmentProfile(layout)),
+          selectedKey: this.loadLayoutAdjustmentProfile(layout).selectedKey || "discard.self",
+          snap: localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4",
+        };
+    this.layoutAdjustmentSession = session;
+    const profile = session.profile;
+    let selectedKey = session.selectedKey || profile.selectedKey || "discard.self";
+    let snap = session.snap || localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4";
     table.classList.add("layout-adjusting");
     this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
     table.querySelector(".layout-adjust-overlay")?.remove();
@@ -7371,11 +7415,13 @@ class GameView {
     frame.addEventListener("pointerup", () => { dragStart = null; });
     select.addEventListener("change", () => {
       selectedKey = select.value;
+      session.selectedKey = selectedKey;
       profile.selectedKey = selectedKey;
       updateFrame();
     });
     snapSelect.addEventListener("change", () => {
       snap = snapSelect.value;
+      session.snap = snap;
       localStorage.setItem("anmikaLayoutAdjustmentSnap", snap);
     });
     overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
@@ -7387,12 +7433,14 @@ class GameView {
       this.saveLayoutAdjustmentProfile(profile, layout);
       warning.textContent = "この端末用に保存しました";
       setTimeout(() => {
+        this.layoutAdjustmentSession = null;
         table.classList.remove("layout-adjusting");
         overlay.remove();
         this.stabilizeTableLayout();
       }, 450);
     });
     overlay.querySelector("[data-layout-cancel]").addEventListener("click", () => {
+      this.layoutAdjustmentSession = null;
       table.classList.remove("layout-adjusting");
       overlay.remove();
       this.applyUserLayoutAdjustments(table, layout);
@@ -7435,13 +7483,15 @@ class GameView {
     if (typeof window === "undefined") return;
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
+    const fitClasses = ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
     const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
     const isMobileLandscape = viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
     if (isMobileLandscape) {
+      table.classList.add(...(this.tableFitClasses || []));
       const layout = this.calculateSafeTableLayout();
       this.applySafeTableLayout(table, layout);
-      this.applyUserLayoutAdjustments(table, layout);
+      this.applyUserLayoutAdjustments(table, layout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
       if (!layout.validation.ok) {
         console.warn("[Layout] fallback still has unsafe rects", {
           profile: layout.profile.name,
@@ -7458,6 +7508,8 @@ class GameView {
       }
     } else {
       table.classList.remove("auto-safe-layout");
+      table.classList.remove(...fitClasses);
+      this.tableFitClasses = [];
       delete table.dataset.layoutProfile;
       delete table.dataset.layoutAdjustment;
     }
@@ -7520,7 +7572,6 @@ class GameView {
           (topHand && topRiver && intersects(topHand, topRiver, 2))
         );
       };
-      table.classList.remove("layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen");
       const seatBox = rightSeat.getBoundingClientRect();
       const meldBox = rightMelds.getBoundingClientRect();
       const centerBox = center.getBoundingClientRect();
@@ -7534,6 +7585,7 @@ class GameView {
       const wholeLayoutBad = layoutIsBad();
       if (!offscreen && !overlapping && !wholeLayoutBad) return;
       table.classList.add("layout-tight-right");
+      this.tableFitClasses = ["layout-tight-right"];
       window.requestAnimationFrame(() => {
         const nextMeldBox = rightMelds.getBoundingClientRect();
         const nextSeatBox = rightSeat.getBoundingClientRect();
@@ -7550,8 +7602,12 @@ class GameView {
           layoutIsBad();
         if (!stillBad) return;
         table.classList.add("layout-ultra-tight-right");
+        this.tableFitClasses = ["layout-tight-right", "layout-ultra-tight-right"];
         window.requestAnimationFrame(() => {
-          if (layoutIsBad()) table.classList.add("layout-fit-screen");
+          if (layoutIsBad()) {
+            table.classList.add("layout-fit-screen");
+            this.tableFitClasses = ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
+          }
         });
       });
     });

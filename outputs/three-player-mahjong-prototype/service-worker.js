@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260626-layout-adjust-a";
+const CACHE_NAME = "anmika-pwa-20260626-layout-jitter-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v6";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260626-layout-adjust-a",
-  "/runtime/app.js?v=20260626-layout-adjust-a",
+  "/styles.css?v=20260626-layout-jitter-a",
+  "/runtime/app.js?v=20260626-layout-jitter-a",
   "/runtime/online-debug.js?v=20260626-independent-pages-a",
-  "/runtime/pwa.js?v=20260626-safe-layout-a",
+  "/runtime/pwa.js?v=20260626-layout-jitter-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

@@ -29,12 +29,25 @@
     document.documentElement.dataset.fullscreen = fullscreenMode ? "on" : "off";
     document.body.dataset.fullscreen = fullscreenMode ? "on" : "off";
   };
-  const updateViewportSize = () => {
-    const height = window.visualViewport?.height || window.innerHeight;
-    const width = window.visualViewport?.width || window.innerWidth;
+  let stableViewport = null;
+  const updateViewportSize = ({ force = false } = {}) => {
+    let height = Math.round(window.visualViewport?.height || window.innerHeight);
+    let width = Math.round(window.visualViewport?.width || window.innerWidth);
+    const gameLandscape = isGameScreen() && isMobile() && (width > height || isLandscape());
+    if (gameLandscape && stableViewport && stableViewport.orientation === "landscape" && !force) {
+      const widthDelta = Math.abs(width - stableViewport.width);
+      const heightDelta = Math.abs(height - stableViewport.height);
+      if (widthDelta <= 2 && heightDelta <= 14) {
+        width = stableViewport.width;
+        height = stableViewport.height;
+      }
+    }
+    const next = { width, height, orientation: width >= height ? "landscape" : "portrait" };
+    const changed = !stableViewport || stableViewport.width !== next.width || stableViewport.height !== next.height || stableViewport.orientation !== next.orientation;
+    stableViewport = next;
     document.documentElement.style.setProperty("--anmika-viewport-height", `${height}px`);
     document.documentElement.style.setProperty("--anmika-viewport-width", `${width}px`);
-    window.dispatchEvent(new CustomEvent("anmika-layout-viewport-changed"));
+    if (changed || force) window.dispatchEvent(new CustomEvent("anmika-layout-viewport-changed"));
   };
 
   const registerServiceWorker = () => {

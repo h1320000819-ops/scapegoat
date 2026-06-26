@@ -205,17 +205,24 @@ const getAnmikaServerDiagnostics = () => ({
   lastGameStateSyncFailure: serverDiagnostics.lastGameStateSyncFailure,
   lastReplaySave: serverDiagnostics.lastReplaySave,
 });
-const createServerPlayerClocks = (players, initialMs = 20000) => Object.fromEntries(asArray(players).map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
+const createServerPlayerClocks = (players, initialMs = 30000) => Object.fromEntries(asArray(players).map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
+const normalizeServerInitialClockMs = (state) => {
+  state.settings ??= {};
+  const initialClockMs = Math.max(30000, Number(state.settings.initialClockMs || 30000));
+  state.settings.initialClockMs = initialClockMs;
+  return initialClockMs;
+};
 const ensureServerClocks = (state) => {
   if (!state) return {};
+  const initialClockMs = normalizeServerInitialClockMs(state);
   if (!state.playerClocks || Array.isArray(state.playerClocks)) {
     const existing = Array.isArray(state.playerClocks)
       ? Object.fromEntries(state.playerClocks.filter(Boolean).map((clock) => [clock.playerId, clock]))
       : {};
-    state.playerClocks = { ...createServerPlayerClocks(state.players, state.settings?.initialClockMs || 20000), ...existing };
+    state.playerClocks = { ...createServerPlayerClocks(state.players, initialClockMs), ...existing };
   }
   for (const player of asArray(state.players)) {
-    state.playerClocks[player.id] ??= { playerId: player.id, remainingMs: state.settings?.initialClockMs || 20000, isInByoyomi: false };
+    state.playerClocks[player.id] ??= { playerId: player.id, remainingMs: initialClockMs, isInByoyomi: false };
   }
   return state.playerClocks;
 };
@@ -237,7 +244,7 @@ const stopServerClockForPlayer = (state, playerId, { recoverAfterDiscard = false
     if (clock.isInByoyomi) clock.remainingMs = 5000;
     else {
       const roundedSeconds = Math.ceil(Number(clock.remainingMs || 0) / 1000);
-      clock.remainingMs = Math.min(20, roundedSeconds + 2) * 1000;
+      clock.remainingMs = Math.min(30, roundedSeconds + 2) * 1000;
     }
   }
   if (state.activeClockPlayerId === playerId) {
@@ -5165,7 +5172,7 @@ const startNextServerHand = (state) => {
     lastScoreResult: null,
     winAnnouncement: null,
     flowerAnnouncement: null,
-    playerClocks: createServerPlayerClocks(state.players, state.settings?.initialClockMs || 20000),
+    playerClocks: createServerPlayerClocks(state.players, state.settings?.initialClockMs || 30000),
     activeClockPlayerId: null,
     clockStartedAt: null,
     lastClockRenderTick: null,
@@ -5340,7 +5347,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     screen: "game",
     rakePool: 0,
     riichiStickCount: 0,
-    playerClocks: createServerPlayerClocks(normalizedPlayers, 20000),
+    playerClocks: createServerPlayerClocks(normalizedPlayers, 30000),
     activeClockPlayerId: null,
     clockStartedAt: null,
     resultOkPlayerIds: [],
