@@ -6737,10 +6737,58 @@ const resultMeldsInlineView = (state, winner) => {
   const melds = (winner?.melds ?? []).map((meld) => renderMeldSet(state, winner.id, meld, "result-meld-set", { noSeatRotation: true })).join("");
   return melds ? `<span class="result-hand-meld-separator"></span><span class="result-melds-inline exposed-tiles">${melds}</span>` : "";
 };
+const LAYOUT_ADJUSTMENT_ITEMS = [
+  ["discard.self", "自分の捨て牌", ".discard-bottom"],
+  ["discard.right", "右側プレイヤーの捨て牌", ".discard-right"],
+  ["discard.top", "上側プレイヤーの捨て牌", ".discard-top"],
+  ...["self", "right", "top"].flatMap((seat) =>
+    [1, 4, 7, 10, 13].map((count) => [
+      `hand.${seat}.count${count}`,
+      `${seat === "self" ? "自分" : seat === "right" ? "右側プレイヤー" : "上側プレイヤー"}の手牌：${count}枚`,
+      `.seat-${seat === "self" ? "bottom" : seat} .hand-row`,
+    ])
+  ),
+  ...["self", "right", "top"].flatMap((seat) =>
+    [1, 2, 3, 4].map((count) => [
+      `meld.${seat}.count${count}`,
+      `${seat === "self" ? "自分" : seat === "right" ? "右側プレイヤー" : "上側プレイヤー"}の副露：${count}副露`,
+      `.seat-${seat === "self" ? "bottom" : seat} .meld-area .exposed-tiles`,
+    ])
+  ),
+  ...["self", "right", "top"].flatMap((seat) =>
+    [1, 2, 3, 4].map((count) => [
+      `draw.${seat}.meld${count}`,
+      `${seat === "self" ? "自分" : seat === "right" ? "右側プレイヤー" : "上側プレイヤー"}のツモ牌：${count}副露`,
+      `.seat-${seat === "self" ? "bottom" : seat} .drawn-tile-slot`,
+    ])
+  ),
+].map(([key, label, selector]) => ({ key, label, selector }));
+const layoutSeatFromKey = (key) => key.split(".")[1] || "";
+const layoutSeatClassFromKey = (key) => {
+  const seat = layoutSeatFromKey(key);
+  return seat === "self" ? "bottom" : seat;
+};
+const layoutBucketFromCount = (count) => {
+  const numeric = Number(count || 0);
+  if (numeric <= 1) return 1;
+  if (numeric <= 4) return 4;
+  if (numeric <= 7) return 7;
+  if (numeric <= 10) return 10;
+  return 13;
+};
+const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
 class GameView {
   constructor(root, handlers) {
     this.root = root;
     this.handlers = handlers;
+    this.boundTableRelayout = () => this.stabilizeTableLayout();
+    if (typeof window !== "undefined" && !window.__anmikaSafeLayoutBound) {
+      window.__anmikaSafeLayoutBound = true;
+      window.addEventListener("resize", this.boundTableRelayout, { passive: true });
+      window.addEventListener("orientationchange", () => setTimeout(this.boundTableRelayout, 120), { passive: true });
+      window.visualViewport?.addEventListener?.("resize", this.boundTableRelayout, { passive: true });
+      window.addEventListener("anmika-layout-viewport-changed", this.boundTableRelayout, { passive: true });
+    }
     const resultOkClick = (event) => {
       event?.preventDefault?.();
       event?.stopPropagation?.();
@@ -6813,6 +6861,7 @@ class GameView {
     this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
+    this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode()));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
@@ -6820,10 +6869,598 @@ class GameView {
     window.setTimeout?.(() => this.stabilizeTableLayout(), 80);
     window.setTimeout?.(() => this.stabilizeTableLayout(), 240);
   }
+  safeAreaInsets() {
+    if (typeof window === "undefined" || typeof document === "undefined") return { top: 0, right: 0, bottom: 0, left: 0 };
+    let probe = document.getElementById("anmika-safe-area-probe");
+    if (!probe) {
+      probe = document.createElement("div");
+      probe.id = "anmika-safe-area-probe";
+      probe.style.cssText = "position:fixed;inset:0;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);";
+      document.body.append(probe);
+    }
+    const style = getComputedStyle(probe);
+    const number = (value) => Number.parseFloat(value || "0") || 0;
+    return {
+      top: number(style.paddingTop),
+      right: number(style.paddingRight),
+      bottom: number(style.paddingBottom),
+      left: number(style.paddingLeft),
+    };
+  }
+  detectLayoutProfile(safeRect, insets) {
+    const width = safeRect.width;
+    const height = safeRect.height;
+    const aspectRatio = width / Math.max(1, height);
+    const dpr = window.devicePixelRatio || 1;
+    const standaloneMode =
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator.standalone === true ||
+      document.documentElement.dataset.pwa === "standalone";
+    const profile = {
+      width,
+      height,
+      dpr,
+      aspectRatio,
+      standaloneMode,
+      safeAreaInsets: insets,
+      userAgent: navigator.userAgent || "",
+    };
+    const profiles = [
+      {
+        name: "iphoneSELandscape",
+        match: (item) => item.height <= 380 && item.dpr >= 2,
+        adjustment: { globalScale: 0.9, centerOffsetY: -2, bottomHandOffsetY: 4, rightHandOffsetX: -10, topHandOffsetY: 4, meldGapScale: 0.8 },
+      },
+      {
+        name: "smallPhoneWide",
+        match: (item) => item.height <= 390 && item.aspectRatio >= 1.9,
+        adjustment: { globalScale: 0.94, centerOffsetY: -4, bottomHandOffsetY: 6, rightHandOffsetX: -8, meldLaneOffsetX: -6, discardGapScale: 0.85 },
+      },
+      {
+        name: "standaloneNotchLandscape",
+        match: (item) => item.standaloneMode && (item.safeAreaInsets.left > 0 || item.safeAreaInsets.right > 0),
+        adjustment: { globalScale: 0.96, rightHandOffsetX: -6, topHandOffsetX: 4, meldLaneOffsetX: -4 },
+      },
+      {
+        name: "largePhoneLandscape",
+        match: (item) => item.height >= 420 && item.aspectRatio >= 1.9,
+        adjustment: { globalScale: 1, centerOffsetY: 0, discardGapScale: 1 },
+      },
+    ];
+    const matched = profiles.find((item) => item.match(profile));
+    return { ...profile, name: matched?.name || "baseLandscape", adjustment: matched?.adjustment || { globalScale: 1 } };
+  }
+  calculateBaseTableLayout(safeRect, profile, adjustmentScale = 1) {
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const apply = (value, key, fallback = 0) => value + Number(profile.adjustment?.[key] || fallback) * adjustmentScale;
+    const scale = Number(profile.adjustment?.globalScale || 1) * adjustmentScale + (1 - adjustmentScale);
+    const width = safeRect.width;
+    const height = safeRect.height;
+    const edge = clamp(Math.min(width, height) * 0.018, 4, 10);
+    let selfTileH = clamp(height * 0.128, 40, 58) * scale;
+    let selfTileW = selfTileH * 0.72;
+    const selfGap = clamp(selfTileW * 0.07, 2, 4);
+    const selfNeeded = selfTileW * 15 + selfGap * 12;
+    if (selfNeeded > width - edge * 2) {
+      selfTileW *= (width - edge * 2) / selfNeeded;
+      selfTileH = selfTileW / 0.72;
+    }
+    const otherTileH = clamp(height * 0.068, 18, 29) * scale;
+    const otherTileW = otherTileH * 0.72;
+    const discardTileW = clamp(otherTileW * 0.9, 12, 20);
+    const discardTileH = discardTileW * 1.38;
+    const discardGap = clamp(discardTileW * 0.11 * Number(profile.adjustment?.discardGapScale || 1), 1, 3);
+    const riverW = discardTileW * 8 + discardGap * 7;
+    const riverH = discardTileH * 3 + discardGap * 2;
+    const centerW = clamp(width * 0.17, 104, 132) * scale;
+    const centerH = clamp(height * 0.205, 64, 84) * scale;
+    const bottomLaneH = Math.max(selfTileH + 24, height * 0.19);
+    const topLaneH = Math.max(otherTileH + 22, height * 0.13);
+    const rightLaneW = clamp(otherTileW * 4 + edge * 3, 60, Math.min(116, width * 0.16));
+    const centerX = apply(safeRect.x + width * 0.49, "centerOffsetX");
+    const centerY = apply(safeRect.y + height * 0.43, "centerOffsetY");
+    const bottomSeat = {
+      x: apply(safeRect.x + edge, "bottomHandOffsetX"),
+      y: apply(safeRect.y + height - bottomLaneH + edge * 0.3, "bottomHandOffsetY"),
+      width: width - edge * 2,
+      height: bottomLaneH - edge,
+    };
+    const topSeat = {
+      x: apply(safeRect.x + edge, "topHandOffsetX"),
+      y: apply(safeRect.y + edge, "topHandOffsetY"),
+      width: width - rightLaneW - edge * 3,
+      height: topLaneH - edge,
+    };
+    const rightSeat = {
+      x: apply(safeRect.x + width - rightLaneW - edge, "rightHandOffsetX"),
+      y: apply(safeRect.y + topLaneH + edge, "rightHandOffsetY"),
+      width: rightLaneW,
+      height: height - topLaneH - bottomLaneH - edge * 2,
+    };
+    const centerMargin = clamp(Math.min(width, height) * 0.012, 2, 6);
+    const bottomDiscard = { x: centerX - riverW / 2, y: centerY + centerH / 2 + centerMargin, width: riverW, height: riverH };
+    const topDiscard = { x: centerX - riverW / 2, y: centerY - centerH / 2 - centerMargin - riverH, width: riverW, height: riverH };
+    const rightDiscard = {
+      x: centerX + centerW / 2 + centerMargin,
+      y: centerY - riverW / 2,
+      width: riverH,
+      height: riverW,
+    };
+    const meldGap = clamp(otherTileH * 0.15 * Number(profile.adjustment?.meldGapScale || 1), 1, 8);
+    return {
+      profile,
+      safeRect,
+      edge,
+      selfTileW,
+      selfTileH,
+      selfGap,
+      otherTileW,
+      otherTileH,
+      discardTileW,
+      discardTileH,
+      discardGap,
+      riverW,
+      riverH,
+      center: { x: centerX - centerW / 2, y: centerY - centerH / 2, width: centerW, height: centerH },
+      bottomSeat,
+      topSeat,
+      rightSeat,
+      bottomDiscard,
+      topDiscard,
+      rightDiscard,
+      rightMeldGap: meldGap,
+      rightMeldSetH: otherTileW * 3 + 2,
+      nukiW: discardTileW * 2 + 2,
+      nukiH: discardTileH * 2 + 2,
+    };
+  }
+  isRectInside(rect, bounds, pad = 0) {
+    return rect.x >= bounds.x + pad &&
+      rect.y >= bounds.y + pad &&
+      rect.x + rect.width <= bounds.x + bounds.width - pad &&
+      rect.y + rect.height <= bounds.y + bounds.height - pad;
+  }
+  rectsIntersect(a, b, pad = 0) {
+    return a.x < b.x + b.width + pad &&
+      a.x + a.width > b.x - pad &&
+      a.y < b.y + b.height + pad &&
+      a.y + a.height > b.y - pad;
+  }
+  validateCalculatedLayout(layout) {
+    const safe = layout.safeRect;
+    const rects = [
+      ["centerRect", layout.center],
+      ["handAreaBottom", layout.bottomSeat],
+      ["handAreaRight", layout.rightSeat],
+      ["handAreaTop", layout.topSeat],
+      ["discardBottom", layout.bottomDiscard],
+      ["discardRight", layout.rightDiscard],
+      ["discardTop", layout.topDiscard],
+    ];
+    const failures = rects.filter(([, rect]) => !this.isRectInside(rect, safe, 0)).map(([name]) => name);
+    const forbidden = [
+      ["centerRect", layout.center, "discardBottom", layout.bottomDiscard],
+      ["centerRect", layout.center, "discardRight", layout.rightDiscard],
+      ["centerRect", layout.center, "discardTop", layout.topDiscard],
+      ["handAreaBottom", layout.bottomSeat, "discardBottom", layout.bottomDiscard],
+      ["handAreaTop", layout.topSeat, "discardTop", layout.topDiscard],
+      ["handAreaRight", layout.rightSeat, "discardRight", layout.rightDiscard],
+    ];
+    for (const [aName, a, bName, b] of forbidden) {
+      if (this.rectsIntersect(a, b, 1)) failures.push(`${aName}/${bName}`);
+    }
+    return { ok: failures.length === 0, failures };
+  }
+  calculateSafeTableLayout() {
+    const viewport = {
+      width: window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0,
+      height: window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
+    };
+    const insets = this.safeAreaInsets();
+    const safeRect = {
+      x: insets.left,
+      y: insets.top,
+      width: Math.max(1, viewport.width - insets.left - insets.right),
+      height: Math.max(1, viewport.height - insets.top - insets.bottom),
+    };
+    const profile = this.detectLayoutProfile(safeRect, insets);
+    let fallback = null;
+    for (let scale = 1; scale >= 0.72; scale -= 0.04) {
+      const layout = this.calculateBaseTableLayout(safeRect, profile, scale);
+      fallback = layout;
+      const validation = this.validateCalculatedLayout(layout);
+      if (validation.ok) return { ...layout, validation, adjustmentScale: scale };
+    }
+    const validation = this.validateCalculatedLayout(fallback);
+    return { ...fallback, validation, adjustmentScale: 0.72 };
+  }
+  applySafeTableLayout(table, layout) {
+    const px = (value) => `${Math.round(Number(value) * 10) / 10}px`;
+    table.classList.add("auto-safe-layout");
+    table.style.setProperty("--layout-profile", `"${layout.profile.name}"`);
+    table.style.setProperty("--layout-safe-x", px(layout.safeRect.x));
+    table.style.setProperty("--layout-safe-y", px(layout.safeRect.y));
+    table.style.setProperty("--layout-safe-width", px(layout.safeRect.width));
+    table.style.setProperty("--layout-safe-height", px(layout.safeRect.height));
+    table.style.setProperty("--center-info-width", px(layout.center.width));
+    table.style.setProperty("--center-info-height", px(layout.center.height));
+    table.style.setProperty("--layout-center-x", px(layout.center.x + layout.center.width / 2));
+    table.style.setProperty("--layout-center-y", px(layout.center.y + layout.center.height / 2));
+    table.style.setProperty("--layout-bottom-seat-x", px(layout.bottomSeat.x));
+    table.style.setProperty("--layout-bottom-seat-y", px(layout.bottomSeat.y));
+    table.style.setProperty("--layout-bottom-seat-width", px(layout.bottomSeat.width));
+    table.style.setProperty("--layout-top-seat-x", px(layout.topSeat.x));
+    table.style.setProperty("--layout-top-seat-y", px(layout.topSeat.y));
+    table.style.setProperty("--layout-top-seat-width", px(layout.topSeat.width));
+    table.style.setProperty("--layout-right-seat-x", px(layout.rightSeat.x));
+    table.style.setProperty("--layout-right-seat-y", px(layout.rightSeat.y));
+    table.style.setProperty("--layout-right-seat-width", px(layout.rightSeat.width));
+    table.style.setProperty("--layout-right-seat-height", px(layout.rightSeat.height));
+    table.style.setProperty("--layout-bottom-discard-x", px(layout.bottomDiscard.x + layout.bottomDiscard.width / 2));
+    table.style.setProperty("--layout-bottom-discard-y", px(layout.bottomDiscard.y));
+    table.style.setProperty("--layout-top-discard-x", px(layout.topDiscard.x + layout.topDiscard.width / 2));
+    table.style.setProperty("--layout-top-discard-y", px(layout.topDiscard.y));
+    table.style.setProperty("--layout-right-discard-x", px(layout.rightDiscard.x));
+    table.style.setProperty("--layout-right-discard-y", px(layout.rightDiscard.y + layout.rightDiscard.height / 2));
+    table.style.setProperty("--layout-self-tile-width", px(layout.selfTileW));
+    table.style.setProperty("--layout-self-tile-height", px(layout.selfTileH));
+    table.style.setProperty("--layout-other-tile-width", px(layout.otherTileW));
+    table.style.setProperty("--layout-other-tile-height", px(layout.otherTileH));
+    table.style.setProperty("--discard-tile-width", px(layout.discardTileW));
+    table.style.setProperty("--discard-tile-height", px(layout.discardTileH));
+    table.style.setProperty("--discard-gap", px(layout.discardGap));
+    table.style.setProperty("--river-width", px(layout.riverW));
+    table.style.setProperty("--river-height", px(layout.riverH));
+    table.style.setProperty("--right-meld-gap", px(layout.rightMeldGap));
+    table.style.setProperty("--right-meld-set-height", px(layout.rightMeldSetH));
+    table.style.setProperty("--nuki-slot-width", px(layout.nukiW));
+    table.style.setProperty("--nuki-slot-height", px(layout.nukiH));
+    table.style.setProperty("--safe-layout-debug-text", `"${layout.profile.name} scale=${layout.adjustmentScale.toFixed(2)}"`);
+    table.dataset.layoutProfile = layout.profile.name;
+    table.dataset.layoutAdjustment = JSON.stringify(layout.profile.adjustment || {});
+    table.classList.toggle("layout-debug", localStorage.getItem("anmikaLayoutDebug") === "1");
+  }
+  layoutDeviceKey(layout = null) {
+    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
+    const dpr = Math.round((window.devicePixelRatio || 1) * 10) / 10;
+    const standalone =
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator.standalone === true ||
+      document.documentElement.dataset.pwa === "standalone";
+    const orientation = viewportWidth >= viewportHeight ? "landscape" : "portrait";
+    const profile = layout?.profile?.name || "auto";
+    return `${orientation}:w${viewportWidth}:h${viewportHeight}:dpr${dpr}:${standalone ? "standalone" : "browser"}:${profile}`;
+  }
+  layoutAdjustmentStorageKey(layout = null) {
+    return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
+  }
+  loadLayoutAdjustmentProfile(layout = null) {
+    const key = this.layoutAdjustmentStorageKey(layout);
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "null");
+      if (saved?.version === 1 && saved.adjustments) return saved;
+    } catch {}
+    return { version: 1, deviceKey: this.layoutDeviceKey(layout), adjustments: {} };
+  }
+  saveLayoutAdjustmentProfile(profile, layout = null) {
+    const key = this.layoutAdjustmentStorageKey(layout);
+    localStorage.setItem(key, JSON.stringify({ version: 1, deviceKey: this.layoutDeviceKey(layout), adjustments: profile.adjustments || {} }));
+  }
+  actualLayoutKeyForItem(table, item) {
+    if (item.key.startsWith("discard.")) return item.key;
+    const seatClass = layoutSeatClassFromKey(item.key);
+    const seat = table.querySelector(`.seat-${seatClass}`);
+    if (!seat) return "";
+    if (item.key.startsWith("hand.")) {
+      const handRow = seat.querySelector(".hand-row");
+      if (!handRow) return "";
+      const count = layoutBucketFromCount(Number.parseInt(getComputedStyle(handRow).getPropertyValue("--hand-count") || handRow.style?.getPropertyValue("--hand-count") || "13", 10));
+      return `hand.${layoutSeatFromKey(item.key)}.count${count}`;
+    }
+    const meldCount = Math.max(0, Math.min(4, seat.querySelectorAll(".meld-area .meld-set").length));
+    if (item.key.startsWith("meld.")) return meldCount ? `meld.${layoutSeatFromKey(item.key)}.count${meldCount}` : "";
+    if (item.key.startsWith("draw.")) return meldCount ? `draw.${layoutSeatFromKey(item.key)}.meld${meldCount}` : "";
+    return "";
+  }
+  targetElementForLayoutItem(table, item) {
+    return table.querySelector(item.selector);
+  }
+  resetUserLayoutTransforms(table) {
+    LAYOUT_ADJUSTMENT_ITEMS.forEach((item) => {
+      const element = this.targetElementForLayoutItem(table, item);
+      if (!element) return;
+      element.style.translate = "";
+      element.style.scale = "";
+      element.style.setProperty("--layout-user-gap-scale", "");
+    });
+  }
+  applyUserLayoutAdjustments(table, layout, overrideProfile = null, activeKey = "") {
+    this.resetUserLayoutTransforms(table);
+    const profile = overrideProfile || this.loadLayoutAdjustmentProfile(layout);
+    const applied = new Set();
+    for (const item of LAYOUT_ADJUSTMENT_ITEMS) {
+      const actualKey = this.actualLayoutKeyForItem(table, item);
+      if (item.key !== actualKey && item.key !== activeKey) continue;
+      const adjustment = profile.adjustments?.[item.key];
+      if (!adjustment || applied.has(item.selector)) continue;
+      const element = this.targetElementForLayoutItem(table, item);
+      if (!element) continue;
+      const offsetX = Number(adjustment.offsetX || 0);
+      const offsetY = Number(adjustment.offsetY || 0);
+      const scale = Math.max(0.5, Math.min(1.5, Number(adjustment.scale || 1)));
+      element.style.translate = `${offsetX}px ${offsetY}px`;
+      element.style.scale = String(scale);
+      element.style.setProperty("--layout-user-gap-scale", String(Math.max(0.5, Math.min(1.8, Number(adjustment.gapScale || 1)))));
+      applied.add(item.selector);
+    }
+  }
+  validateUserAdjustedLayout(table) {
+    const safeRect = {
+      left: Number.parseFloat(table.style.getPropertyValue("--layout-safe-x") || "0"),
+      top: Number.parseFloat(table.style.getPropertyValue("--layout-safe-y") || "0"),
+      width: Number.parseFloat(table.style.getPropertyValue("--layout-safe-width") || window.innerWidth || "0"),
+      height: Number.parseFloat(table.style.getPropertyValue("--layout-safe-height") || window.innerHeight || "0"),
+    };
+    safeRect.right = safeRect.left + safeRect.width;
+    safeRect.bottom = safeRect.top + safeRect.height;
+    const rectOf = (selector) => {
+      const element = table.querySelector(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      return rect;
+    };
+    const targets = [
+      ["中央表示", rectOf(".center-info")],
+      ["自分の捨て牌", rectOf(".discard-bottom")],
+      ["右側プレイヤーの捨て牌", rectOf(".discard-right")],
+      ["上側プレイヤーの捨て牌", rectOf(".discard-top")],
+      ["自分の手牌", rectOf(".seat-bottom .hand-row")],
+      ["右側プレイヤーの手牌", rectOf(".seat-right .hand-row")],
+      ["上側プレイヤーの手牌", rectOf(".seat-top .hand-row")],
+      ["自分の副露", rectOf(".seat-bottom .meld-area .exposed-tiles")],
+      ["右側プレイヤーの副露", rectOf(".seat-right .meld-area .exposed-tiles")],
+      ["上側プレイヤーの副露", rectOf(".seat-top .meld-area .exposed-tiles")],
+    ].filter(([, rect]) => rect);
+    const outside = targets
+      .filter(([, rect]) => rect.left < safeRect.left || rect.top < safeRect.top || rect.right > safeRect.right || rect.bottom > safeRect.bottom)
+      .map(([name]) => name);
+    const center = rectOf(".center-info");
+    const warnings = [];
+    const intersects = (a, b, pad = 1) => a && b && a.left < b.right + pad && a.right > b.left - pad && a.top < b.bottom + pad && a.bottom > b.top - pad;
+    for (const [name, rect] of targets) {
+      if (name !== "中央表示" && intersects(center, rect, 1)) warnings.push(`中央表示と${name}が重なっています`);
+    }
+    return { ok: outside.length === 0, outside, warnings };
+  }
+  snapPixelValue(table, snapValue) {
+    const selfTile = Number.parseFloat(getComputedStyle(table).getPropertyValue("--layout-self-tile-width") || "36") || 36;
+    if (snapValue === "tile025") return selfTile * 0.25;
+    if (snapValue === "tile05") return selfTile * 0.5;
+    if (snapValue === "tile1") return selfTile;
+    return Number(snapValue || 4) || 4;
+  }
+  openLayoutAdjustmentMode() {
+    const table = this.root.querySelector(".mahjong-table");
+    if (!table) return;
+    this.stabilizeTableLayout();
+    const layout = this.calculateSafeTableLayout();
+    const profile = typeof structuredClone === "function" ? structuredClone(this.loadLayoutAdjustmentProfile(layout)) : JSON.parse(JSON.stringify(this.loadLayoutAdjustmentProfile(layout)));
+    let selectedKey = profile.selectedKey || "discard.self";
+    let snap = localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4";
+    table.classList.add("layout-adjusting");
+    this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
+    table.querySelector(".layout-adjust-overlay")?.remove();
+    const overlay = document.createElement("section");
+    overlay.className = "layout-adjust-overlay";
+    overlay.innerHTML = `
+      <div class="layout-adjust-frame" data-layout-drag-frame><span data-layout-frame-label></span></div>
+      <aside class="layout-adjust-panel">
+        <h2>表示位置調整</h2>
+        <label>調整する項目を選択
+          <select data-layout-adjust-select>${LAYOUT_ADJUSTMENT_ITEMS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join("")}</select>
+        </label>
+        <div class="layout-adjust-current" data-layout-current></div>
+        <label>スナップ単位
+          <select data-layout-snap>
+            <option value="1">1px</option>
+            <option value="4">4px</option>
+            <option value="8">8px</option>
+            <option value="tile025">0.25牌分</option>
+            <option value="tile05">0.5牌分</option>
+            <option value="tile1">1牌分</option>
+          </select>
+        </label>
+        <div class="layout-adjust-actions">
+          <button type="button" data-layout-save>保存</button>
+          <button type="button" class="secondary" data-layout-cancel>キャンセル</button>
+          <button type="button" class="secondary" data-layout-reset-selected>選択中を初期位置に戻す</button>
+          <button type="button" class="secondary" data-layout-reset-category>このカテゴリを初期位置に戻す</button>
+          <button type="button" class="secondary" data-layout-reset-all>全て初期位置に戻す</button>
+          <button type="button" class="secondary" data-layout-check>見切れチェック</button>
+          <button type="button" class="secondary" data-layout-smaller>全体を少し小さくする</button>
+          <button type="button" class="secondary" data-layout-larger>全体を少し大きくする</button>
+        </div>
+        <p class="layout-adjust-warning" data-layout-warning></p>
+      </aside>
+    `;
+    table.append(overlay);
+    const select = overlay.querySelector("[data-layout-adjust-select]");
+    const snapSelect = overlay.querySelector("[data-layout-snap]");
+    const warning = overlay.querySelector("[data-layout-warning]");
+    const current = overlay.querySelector("[data-layout-current]");
+    const frame = overlay.querySelector("[data-layout-drag-frame]");
+    const frameLabel = overlay.querySelector("[data-layout-frame-label]");
+    select.value = selectedKey;
+    snapSelect.value = snap;
+    const currentItem = () => LAYOUT_ADJUSTMENT_ITEMS.find((item) => item.key === selectedKey) || LAYOUT_ADJUSTMENT_ITEMS[0];
+    const ensureAdjustment = () => {
+      profile.adjustments[selectedKey] ||= defaultLayoutAdjustment();
+      profile.adjustments[selectedKey].scale ||= 1;
+      profile.adjustments[selectedKey].gapScale ||= 1;
+      return profile.adjustments[selectedKey];
+    };
+    const clampAdjustmentToSafeRect = () => {
+      const item = currentItem();
+      const element = this.targetElementForLayoutItem(table, item);
+      const adjustment = ensureAdjustment();
+      if (!element) return;
+      this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
+      const rect = element.getBoundingClientRect();
+      const safe = layout.safeRect;
+      let fixX = 0;
+      let fixY = 0;
+      if (rect.left < safe.x) fixX = safe.x - rect.left;
+      if (rect.right > safe.x + safe.width) fixX = safe.x + safe.width - rect.right;
+      if (rect.top < safe.y) fixY = safe.y - rect.top;
+      if (rect.bottom > safe.y + safe.height) fixY = safe.y + safe.height - rect.bottom;
+      if (fixX || fixY) {
+        adjustment.offsetX = Math.round(Number(adjustment.offsetX || 0) + fixX);
+        adjustment.offsetY = Math.round(Number(adjustment.offsetY || 0) + fixY);
+      }
+    };
+    const updateFrame = () => {
+      const item = currentItem();
+      this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
+      const element = this.targetElementForLayoutItem(table, item);
+      const rect = element?.getBoundingClientRect?.();
+      const tableRect = table.getBoundingClientRect();
+      const adjustment = ensureAdjustment();
+      current.textContent = `${item.label}　X:${Math.round(adjustment.offsetX || 0)} Y:${Math.round(adjustment.offsetY || 0)} scale:${Number(adjustment.scale || 1).toFixed(2)}`;
+      frameLabel.textContent = item.label;
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        frame.hidden = true;
+        warning.textContent = "この状態は現在の局面には表示されていません。選択した状態が出た時に補正が適用されます。";
+        return;
+      }
+      frame.hidden = false;
+      frame.style.left = `${rect.left - tableRect.left}px`;
+      frame.style.top = `${rect.top - tableRect.top}px`;
+      frame.style.width = `${rect.width}px`;
+      frame.style.height = `${rect.height}px`;
+      const validation = this.validateUserAdjustedLayout(table);
+      warning.textContent = validation.ok
+        ? (validation.warnings[0] || "")
+        : `この配置では一部の牌が画面外に出ます: ${validation.outside.join("、")}`;
+    };
+    const moveSelected = (dx, dy) => {
+      const adjustment = ensureAdjustment();
+      const snapPx = this.snapPixelValue(table, snap);
+      adjustment.offsetX = Math.round((Number(adjustment.offsetX || 0) + dx) / snapPx) * snapPx;
+      adjustment.offsetY = Math.round((Number(adjustment.offsetY || 0) + dy) / snapPx) * snapPx;
+      clampAdjustmentToSafeRect();
+      updateFrame();
+    };
+    let dragStart = null;
+    frame.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dragStart = { x: event.clientX, y: event.clientY };
+      frame.setPointerCapture?.(event.pointerId);
+    });
+    frame.addEventListener("pointermove", (event) => {
+      if (!dragStart) return;
+      event.preventDefault();
+      const dx = event.clientX - dragStart.x;
+      const dy = event.clientY - dragStart.y;
+      if (Math.abs(dx) + Math.abs(dy) < 1) return;
+      moveSelected(dx, dy);
+      dragStart = { x: event.clientX, y: event.clientY };
+    });
+    frame.addEventListener("pointerup", () => { dragStart = null; });
+    select.addEventListener("change", () => {
+      selectedKey = select.value;
+      profile.selectedKey = selectedKey;
+      updateFrame();
+    });
+    snapSelect.addEventListener("change", () => {
+      snap = snapSelect.value;
+      localStorage.setItem("anmikaLayoutAdjustmentSnap", snap);
+    });
+    overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
+      const validation = this.validateUserAdjustedLayout(table);
+      if (!validation.ok) {
+        warning.textContent = `保存できません。画面外に出ています: ${validation.outside.join("、")}`;
+        return;
+      }
+      this.saveLayoutAdjustmentProfile(profile, layout);
+      warning.textContent = "この端末用に保存しました";
+      setTimeout(() => {
+        table.classList.remove("layout-adjusting");
+        overlay.remove();
+        this.stabilizeTableLayout();
+      }, 450);
+    });
+    overlay.querySelector("[data-layout-cancel]").addEventListener("click", () => {
+      table.classList.remove("layout-adjusting");
+      overlay.remove();
+      this.applyUserLayoutAdjustments(table, layout);
+    });
+    overlay.querySelector("[data-layout-reset-selected]").addEventListener("click", () => {
+      delete profile.adjustments[selectedKey];
+      updateFrame();
+    });
+    overlay.querySelector("[data-layout-reset-category]").addEventListener("click", () => {
+      const category = selectedKey.split(".").slice(0, 2).join(".");
+      Object.keys(profile.adjustments).forEach((key) => {
+        if (key.startsWith(category)) delete profile.adjustments[key];
+      });
+      updateFrame();
+    });
+    overlay.querySelector("[data-layout-reset-all]").addEventListener("click", () => {
+      profile.adjustments = {};
+      updateFrame();
+    });
+    overlay.querySelector("[data-layout-check]").addEventListener("click", () => {
+      const validation = this.validateUserAdjustedLayout(table);
+      warning.textContent = validation.ok
+        ? (validation.warnings.length ? validation.warnings.join(" / ") : "見切れはありません")
+        : `この配置では一部の牌が画面外に出ます: ${validation.outside.join("、")}`;
+    });
+    overlay.querySelector("[data-layout-smaller]").addEventListener("click", () => {
+      const adjustment = ensureAdjustment();
+      adjustment.scale = Math.max(0.5, Number(adjustment.scale || 1) - 0.04);
+      updateFrame();
+    });
+    overlay.querySelector("[data-layout-larger]").addEventListener("click", () => {
+      const adjustment = ensureAdjustment();
+      adjustment.scale = Math.min(1.5, Number(adjustment.scale || 1) + 0.04);
+      clampAdjustmentToSafeRect();
+      updateFrame();
+    });
+    updateFrame();
+  }
   stabilizeTableLayout() {
     if (typeof window === "undefined") return;
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
+    const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+    const isMobileLandscape = viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
+    if (isMobileLandscape) {
+      const layout = this.calculateSafeTableLayout();
+      this.applySafeTableLayout(table, layout);
+      this.applyUserLayoutAdjustments(table, layout);
+      if (!layout.validation.ok) {
+        console.warn("[Layout] fallback still has unsafe rects", {
+          profile: layout.profile.name,
+          adjustment: layout.profile.adjustment,
+          failures: layout.validation.failures,
+          safeRect: layout.safeRect,
+        });
+      } else if (localStorage.getItem("anmikaLayoutDebug") === "1") {
+        console.info("[Layout] profile", {
+          profile: layout.profile.name,
+          adjustment: layout.profile.adjustment,
+          safeRect: layout.safeRect,
+        });
+      }
+    } else {
+      table.classList.remove("auto-safe-layout");
+      delete table.dataset.layoutProfile;
+      delete table.dataset.layoutAdjustment;
+    }
     window.requestAnimationFrame(() => {
       const center = table.querySelector(".center-info");
       const rightRiver = table.querySelector(".discard-right");
@@ -7082,8 +7719,9 @@ class GameView {
     if (state.screen === "replayViewer") return this.replayViewerScreen(state);
     const title = { auth: "ログイン", clubSelect: "クラブ選択", accountSettings: "アカウント設定", onlineTodo: "未決定仕様", clubHome: "クラブ内ホーム", clubTables: "クラブ内卓一覧", createTable: "卓作成", memberManagement: "メンバー管理", clubManagement: "クラブ管理", clubPoints: "クラブポイント", rakeCheck: "レーキ確認", pointHistory: "ポイント収支", stats: "スタッツ", deleteLog: "削除ログ", home: "ホーム", tableList: "卓一覧", tableRoom: "卓詳細", replayList: "牌譜一覧", replayViewer: "牌譜再生", clubList: "クラブ一覧", clubDetail: "クラブ詳細" }[state.screen] ?? "ホーム";
     const content = this.screenContent(state);
+    const showHeader = !["auth", "clubSelect"].includes(state.screen);
     return `<section class="lobby-shell">
-      <header class="lobby-header"><h2>アンミカロケット</h2><p>${title}</p></header>
+      ${showHeader ? `<header class="lobby-header"><h2>アンミカロケット</h2><p>${title}</p></header>` : ""}
       <main class="page-content" data-page="${escapeHtml(state.screen ?? "home")}">${content}</main>
       ${state.ruleHelpOpen ? this.ruleHelpModal() : ""}
       ${state.logoutConfirmOpen ? this.logoutConfirmModal() : ""}
@@ -7162,19 +7800,18 @@ class GameView {
   }
   authScreen(_state) {
     return `<section class="lobby-panel auth-screen">
-      <h2>アンミカロケット</h2>
       <div class="auth-stack">
         <section class="auth-box">
           <h3>ログイン</h3>
-          <label>メールアドレス/ログインID<input type="text" data-login-user-id value="" /></label>
-          <label>パスワード<input type="password" data-login-password value="" /></label>
+          <label>メールアドレス/ログインID<input type="text" data-login-user-id /></label>
+          <label>パスワード<input type="password" data-login-password /></label>
           <button type="button" data-login-account>ログイン</button>
         </section>
         <section class="auth-box">
           <h3>アカウント作成</h3>
-          <label>プレイヤー名<input type="text" data-create-display-name value="" /></label>
-          <label>メールアドレス<input type="email" data-create-email value="" /></label>
-          <label>パスワード<input type="password" data-create-password value="" /></label>
+          <label>プレイヤー名<input type="text" data-create-display-name /></label>
+          <label>メールアドレス<input type="email" data-create-email /></label>
+          <label>パスワード<input type="password" data-create-password /></label>
           <button type="button" data-create-account>アカウント作成</button>
         </section>
       </div>
@@ -7689,6 +8326,7 @@ class GameView {
     return `<aside class="settings-panel">
       <h2>設定</h2>
       ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
+      <button type="button" class="secondary" data-layout-adjust-open>表示位置調整</button>
       <button type="button" class="secondary" data-page-reload>画面更新</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;

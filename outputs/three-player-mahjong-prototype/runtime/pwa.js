@@ -34,6 +34,7 @@
     const width = window.visualViewport?.width || window.innerWidth;
     document.documentElement.style.setProperty("--anmika-viewport-height", `${height}px`);
     document.documentElement.style.setProperty("--anmika-viewport-width", `${width}px`);
+    window.dispatchEvent(new CustomEvent("anmika-layout-viewport-changed"));
   };
 
   const registerServiceWorker = () => {

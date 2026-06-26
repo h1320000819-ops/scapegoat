@@ -54,6 +54,7 @@
       body[data-screen="auth"] .screen-auth,
       body[data-screen="clubs"] .screen-clubs,
       body[data-screen="club-home"] .screen-club-home,
+      body[data-screen="settings"] #settingsPagePanel.open,
       body:not([data-screen="auth"]) .signed-in-only,
       body[data-role="admin"] .admin-only,
       body[data-role="member"] .member-blocked { display: block !important; }
@@ -291,7 +292,7 @@
       }
       .point-reserve strong { font-size: 22px; }
       .online-player-row.current { outline: 2px solid var(--accent); }
-      #tableCreatePanel.open, #settingsPagePanel.open, #onlineGamePanel.open { display: block !important; }
+      #tableCreatePanel.open, #onlineGamePanel.open { display: block !important; }
       #tableRoomPanel { display: none !important; }
       #tableCreatePanel.open { max-height: none; overflow: visible; background: rgba(10, 36, 30, 0.94); }
       pre {
@@ -345,47 +346,58 @@
       <div id="errorBox" class="error-box"></div>
 
       <section class="screen screen-auth">
-        <h2>ログイン / アカウント作成</h2>
-        <p class="muted">ログインはメールアドレスまたはログインIDとパスワードで行えます。アカウント作成時はメールアドレスを入力してください。</p>
-        <div class="row">
-          <label>プレイヤー名 <input id="displayName" autocomplete="name" value="Player" /></label>
-          <label>メールアドレス / ログインID <input id="email" type="text" autocomplete="username" placeholder="必須" required /></label>
-          <label>パスワード <input id="password" type="password" autocomplete="current-password" /></label>
-        </div>
-        <div class="row">
-          <button id="signUpButton">アカウント作成</button>
-          <button id="signInButton">ログイン</button>
-          <button id="debugSignInButton" class="secondary" type="button">デバッグログイン</button>
+        <div class="auth-page-stack">
+          <section class="card">
+            <h2>ログイン</h2>
+            <label>メールアドレス/ログインID
+              <input id="loginEmail" type="text" autocomplete="username" />
+            </label>
+            <label>パスワード
+              <input id="loginPassword" type="password" autocomplete="current-password" />
+            </label>
+            <button id="signInButton">ログイン</button>
+          </section>
+          <section class="card">
+            <h2>アカウント作成</h2>
+            <label>プレイヤー名
+              <input id="displayName" autocomplete="name" />
+            </label>
+            <label>メールアドレス
+              <input id="email" type="email" autocomplete="email" />
+            </label>
+            <label>パスワード
+              <input id="password" type="password" autocomplete="new-password" />
+            </label>
+            <button id="signUpButton">アカウント作成</button>
+          </section>
         </div>
         <p id="authNotice" class="auth-notice"></p>
-        <p class="muted">デバッグログインは仮アカウントを自動作成してログインします。本番前に削除する機能です。</p>
       </section>
 
       <section class="screen screen-clubs">
         <h2>クラブ選択</h2>
+        <h2>加入済みクラブ</h2>
+        <div id="clubCards" class="card-grid"></div>
+        <h2>クラブ検索</h2>
+        <div class="row">
+          <label>クラブID <input id="clubId" placeholder="C-XXXXXX" autocomplete="off" /></label>
+          <button id="searchClubButton" class="secondary">検索</button>
+          <button id="requestJoinButton">加入申請</button>
+        </div>
+        <div id="clubSearchResult" class="link-panel muted"></div>
         <div class="row">
           <label>クラブ名 <input id="clubName" value="アンミカクラブ" /></label>
           <button id="createClubButton">クラブ作成</button>
           <button id="loadClubsButton" class="secondary">更新</button>
         </div>
-        <div class="row">
-          <label>クラブID <input id="clubId" placeholder="C-XXXXXX" /></label>
-          <button id="searchClubButton" class="secondary">検索</button>
-          <button id="requestJoinButton">加入申請</button>
-        </div>
-        <div id="clubSearchResult" class="link-panel muted">クラブIDで検索してください。</div>
-        <h3>加入済みクラブ</h3>
-        <div id="clubCards" class="card-grid"></div>
       </section>
 
       <section class="screen screen-club-home">
         <div class="club-main-header">
           <div>
             <h2 id="clubHomeTitle">ロビー</h2>
-            <p class="muted">卓作成と卓一覧をここで操作します。</p>
           </div>
           <div class="club-header-actions">
-            <button id="backToClubsButton" type="button" class="secondary">クラブ選択へ戻る</button>
             <button id="settingsGearButton" class="gear-button" type="button" aria-label="settings"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15Z"></path></svg></button>
           </div>
         </div>
@@ -394,7 +406,6 @@
           <button id="showCreateTableButton">卓作成</button>
           <button id="loadTablesButton" class="secondary">更新</button>
         </div>
-        <p class="member-blocked muted">卓作成はクラブ管理者のみ可能です。</p>
 
         <section id="tableCreatePanel" class="modal-panel">
           <h3>卓作成</h3>
@@ -508,7 +519,7 @@
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
     <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
-    <script src="../runtime/online-debug.js?v=20260624-reseat-reset-a"></script>
+    <script src="../runtime/online-debug.js?v=20260626-independent-pages-a"></script>
   </body>
 </html>
 

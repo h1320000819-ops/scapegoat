@@ -81,6 +81,7 @@
     tablePostRefreshInFlight: false,
     authNotice: "",
     authNoticeType: "info",
+    previousScreenBeforeSettings: "",
   };
 
   const $ = (id) => {
@@ -1514,8 +1515,8 @@
     await signInWithEmail();
   };
   const signInWithEmail = async () => {
-    const loginInput = has("email") ? normalizeLoginInput($("email").value) : "";
-    const password = $("password").value;
+    const loginInput = has("loginEmail") ? normalizeLoginInput($("loginEmail").value) : has("email") ? normalizeLoginInput($("email").value) : "";
+    const password = has("loginPassword") ? $("loginPassword").value : $("password").value;
     if (!loginInput) throw new Error("メールアドレスまたはログインIDを入力してください。");
     if (!password) throw new Error(JA_MESSAGES.passwordRequired);
     const email = await resolveLoginEmail(loginInput);
@@ -1537,6 +1538,7 @@
     const authUser = session.user || await request("/auth/v1/user");
     const profile = await ensureProfileForAuthUser(authUser, has("displayName") ? $("displayName").value.trim() : "");
     saveSession(session, profile);
+    if (has("loginPassword")) $("loginPassword").value = "";
     setAuthNotice("", "info");
     log("ログインしました", state.user);
     await loadClubs();
@@ -4745,10 +4747,20 @@
   const showSettingsPage = async (page) => {
     if (has("settingsDrawer")) $("settingsDrawer").classList.remove("open");
     if (!has("settingsPagePanel")) return;
+    const currentScreen = document.body.dataset.screen || "";
+    if (currentScreen !== "settings") {
+      state.previousScreenBeforeSettings = currentScreen && currentScreen !== "auth" ? currentScreen : "clubs";
+    }
+    ["tableCreatePanel", "tableRoomPanel", "onlineGamePanel", "clubPointPanel"].forEach((id) => {
+      if (has(id)) $(id).classList.remove("open");
+    });
+    state.onlineGameOpened = false;
+    document.body.dataset.screen = "settings";
     const panel = $("settingsPagePanel");
     const title = $("settingsPageTitle");
     const body = $("settingsPageBody");
     panel.classList.add("open");
+    window.scrollTo({ left: 0, top: 0, behavior: "auto" });
     if (page === "account") {
       title.textContent = "アカウント設定";
       const userIcon = state.user?.iconUrl || "";
@@ -4905,6 +4917,16 @@
   };
   const goBack = async () => {
     clearError();
+    if (document.body.dataset.screen === "settings") {
+      if (has("settingsPagePanel")) $("settingsPagePanel").classList.remove("open");
+      if (has("settingsPageBody")) $("settingsPageBody").innerHTML = "";
+      const nextScreen = state.previousScreenBeforeSettings || (selectedClubId() ? "club-home" : "clubs");
+      document.body.dataset.screen = nextScreen === "settings" || nextScreen === "auth" ? "clubs" : nextScreen;
+      state.previousScreenBeforeSettings = "";
+      render();
+      window.scrollTo({ left: 0, top: 0, behavior: "auto" });
+      return;
+    }
     if (closeOpenPanels()) {
       render();
       return;

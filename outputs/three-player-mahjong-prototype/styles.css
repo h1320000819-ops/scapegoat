@@ -25,6 +25,141 @@ body {
   font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
 }
 
+.mahjong-table.layout-adjusting .player-seat,
+.mahjong-table.layout-adjusting .discard-area,
+.mahjong-table.layout-adjusting .center-info,
+.mahjong-table.layout-adjusting .bottom-actions,
+.mahjong-table.layout-adjusting .settings-panel {
+  pointer-events: none !important;
+}
+
+.layout-adjust-overlay {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 12000;
+}
+
+.layout-adjust-frame {
+  background: rgba(255, 209, 92, 0.12);
+  border: 2px solid rgba(255, 209, 92, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.08);
+  cursor: grab;
+  min-height: 18px;
+  min-width: 18px;
+  pointer-events: auto;
+  position: absolute;
+  touch-action: none;
+  z-index: 12002;
+}
+
+.layout-adjust-frame:active {
+  cursor: grabbing;
+}
+
+.layout-adjust-frame span {
+  background: rgba(8, 21, 28, 0.94);
+  border: 1px solid rgba(255, 209, 92, 0.8);
+  border-radius: 999px;
+  color: #fff8d8;
+  font-size: 11px;
+  font-weight: 900;
+  left: 0;
+  line-height: 1;
+  padding: 4px 7px;
+  position: absolute;
+  top: -24px;
+  white-space: nowrap;
+}
+
+.layout-adjust-panel {
+  background: rgba(8, 21, 28, 0.96);
+  border: 1px solid rgba(255, 209, 92, 0.72);
+  border-radius: 10px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.42);
+  color: #f7fff9;
+  display: grid;
+  gap: 8px;
+  left: max(8px, env(safe-area-inset-left));
+  max-height: calc(var(--anmika-viewport-height, 100dvh) - 18px);
+  overflow: auto;
+  padding: 10px;
+  pointer-events: auto;
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  width: min(330px, 45vw);
+  z-index: 12003;
+}
+
+.layout-adjust-panel h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.layout-adjust-panel label {
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.layout-adjust-panel select {
+  background: #f8fffb;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 7px;
+  color: #10241e;
+  font: inherit;
+  min-height: 32px;
+  padding: 5px 7px;
+}
+
+.layout-adjust-current {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #fff8d8;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 8px;
+}
+
+.layout-adjust-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.layout-adjust-actions button {
+  border-radius: 7px;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 5px 8px;
+}
+
+.layout-adjust-warning {
+  color: #ffd77a;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
+  min-height: 1.35em;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .layout-adjust-panel {
+    font-size: 11px;
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - 10px);
+    padding: 7px;
+    width: min(300px, 48vw);
+  }
+
+  .layout-adjust-actions button {
+    font-size: 11px;
+    min-height: 28px;
+    padding: 4px 7px;
+  }
+}
+
 html[data-game-screen="on"],
 html[data-game-screen="on"] body,
 body[data-game-screen="on"] {
@@ -4829,5 +4964,331 @@ button:hover {
   body[data-pwa="standalone"] .mahjong-table.layout-fit-screen .seat-right .hand-row > .meld-area .exposed-tiles,
   html[data-pwa="standalone"] .mahjong-table.layout-fit-screen .seat-right .hand-row > .meld-area .exposed-tiles {
     gap: 1px !important;
+  }
+}
+
+/* JS-driven safeRect layout for mobile landscape / PWA play. */
+@media (orientation: landscape) {
+  .mahjong-table.auto-safe-layout {
+    --self-tile-width: var(--layout-self-tile-width);
+    --self-tile-gap: clamp(1px, calc(var(--layout-self-tile-width) * 0.06), 4px);
+    --self-tile-step: calc(var(--self-tile-width) + var(--self-tile-gap));
+    --self-hand-slot-width: calc((var(--layout-self-tile-width) * 13) + (var(--self-tile-gap) * 12));
+    --draw-slot-width: calc(var(--layout-self-tile-width) * 2);
+    --draw-tile-gap: var(--layout-self-tile-width);
+    --other-hand-slot-width: calc((var(--layout-other-tile-height) * 13) + 12px);
+    --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
+    height: var(--anmika-viewport-height, 100dvh) !important;
+    max-height: var(--anmika-viewport-height, 100dvh) !important;
+    overflow: hidden !important;
+    width: var(--anmika-viewport-width, 100vw) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .center-info {
+    left: var(--layout-center-x) !important;
+    max-height: var(--center-info-height) !important;
+    min-height: var(--center-info-height) !important;
+    top: var(--layout-center-y) !important;
+    transform: translate(-50%, -50%) !important;
+    width: var(--center-info-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-bottom {
+    bottom: auto !important;
+    left: var(--layout-bottom-seat-x) !important;
+    max-width: none !important;
+    right: auto !important;
+    top: var(--layout-bottom-seat-y) !important;
+    transform: none !important;
+    width: var(--layout-bottom-seat-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-top {
+    bottom: auto !important;
+    left: var(--layout-top-seat-x) !important;
+    max-width: none !important;
+    right: auto !important;
+    top: var(--layout-top-seat-y) !important;
+    transform: none !important;
+    width: var(--layout-top-seat-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right {
+    bottom: auto !important;
+    height: var(--layout-right-seat-height) !important;
+    left: var(--layout-right-seat-x) !important;
+    max-height: var(--layout-right-seat-height) !important;
+    min-height: 0 !important;
+    right: auto !important;
+    top: var(--layout-right-seat-y) !important;
+    transform: none !important;
+    width: var(--layout-right-seat-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .discard-bottom {
+    left: var(--layout-bottom-discard-x) !important;
+    top: var(--layout-bottom-discard-y) !important;
+    transform: translateX(-50%) rotate(0deg) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .discard-top {
+    left: var(--layout-top-discard-x) !important;
+    top: var(--layout-top-discard-y) !important;
+    transform: translateX(-50%) rotate(180deg) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .discard-right {
+    left: var(--layout-right-discard-x) !important;
+    right: auto !important;
+    top: var(--layout-right-discard-y) !important;
+    transform: translateY(-50%) rotate(-90deg) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-bottom .tile,
+  .mahjong-table.auto-safe-layout .seat-bottom .tile-button,
+  .mahjong-table.auto-safe-layout .seat-bottom .tile-image,
+  .mahjong-table.auto-safe-layout .seat-bottom .tile-fallback,
+  .mahjong-table.auto-safe-layout .seat-bottom .exposed-row .tile,
+  .mahjong-table.auto-safe-layout .seat-bottom .exposed-row .tile-image,
+  .mahjong-table.auto-safe-layout .seat-bottom .exposed-row .tile-fallback {
+    height: var(--layout-self-tile-height) !important;
+    min-width: var(--layout-self-tile-width) !important;
+    width: var(--layout-self-tile-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-top .tile,
+  .mahjong-table.auto-safe-layout .seat-top .tile-button,
+  .mahjong-table.auto-safe-layout .seat-top .tile-image,
+  .mahjong-table.auto-safe-layout .seat-top .tile-fallback,
+  .mahjong-table.auto-safe-layout .seat-right .tile,
+  .mahjong-table.auto-safe-layout .seat-right .tile-button,
+  .mahjong-table.auto-safe-layout .seat-right .tile-image,
+  .mahjong-table.auto-safe-layout .seat-right .tile-fallback {
+    height: var(--layout-other-tile-height) !important;
+    min-width: var(--layout-other-tile-width) !important;
+    width: var(--layout-other-tile-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .discard .tile,
+  .mahjong-table.auto-safe-layout .mini-dora .tile,
+  .mahjong-table.auto-safe-layout .discard .tile-image,
+  .mahjong-table.auto-safe-layout .mini-dora .tile-image,
+  .mahjong-table.auto-safe-layout .discard .tile-fallback,
+  .mahjong-table.auto-safe-layout .mini-dora .tile-fallback {
+    height: var(--discard-tile-height) !important;
+    min-width: var(--discard-tile-width) !important;
+    width: var(--discard-tile-width) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-bottom .hand-row {
+    grid-template-columns: var(--self-hand-slot-width) var(--draw-slot-width) minmax(0, 1fr) var(--nuki-slot-width) !important;
+    min-height: calc(var(--layout-self-tile-height) + 6px) !important;
+    width: 100% !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-top .hand-row {
+    grid-template-columns: var(--nuki-slot-width) minmax(0, 1fr) var(--draw-slot-width) var(--other-hand-slot-width) !important;
+    min-height: calc(var(--layout-other-tile-height) + 6px) !important;
+    transform: none !important;
+    width: 100% !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right .hand-row {
+    --draw-slot-width: calc(var(--layout-other-tile-height) * 2);
+    --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
+    grid-template-rows:
+      minmax(0, var(--nuki-slot-height))
+      minmax(0, 1fr)
+      minmax(0, var(--draw-slot-width))
+      minmax(0, calc(var(--layout-other-tile-height) * 4 + 6px)) !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    width: 100% !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-bottom .hand-row > .drawn-tile-slot {
+    transform: translateX(var(--layout-self-tile-width)) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-top .hand-row > .drawn-tile-slot {
+    margin-right: var(--layout-other-tile-height) !important;
+    transform: none !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right .hand-row > .drawn-tile-slot {
+    margin-bottom: var(--layout-other-tile-height) !important;
+    transform: none !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .exposed-tiles {
+    gap: var(--right-meld-gap) !important;
+    max-height: 100% !important;
+    overflow: hidden !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .meld-set {
+    flex: 0 0 var(--right-meld-set-height) !important;
+    min-height: var(--right-meld-set-height) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-mini-name {
+    font-size: clamp(12px, calc(var(--layout-other-tile-height) * 0.8), 20px) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-bottom .seat-mini-name {
+    font-size: clamp(14px, calc(var(--layout-self-tile-height) * 0.34), 24px) !important;
+  }
+
+  .mahjong-table.auto-safe-layout.layout-debug::before {
+    border: 2px solid rgba(102, 255, 178, 0.9) !important;
+    color: #041a10;
+    content: var(--safe-layout-debug-text);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+    padding: 2px 4px;
+  }
+
+  .mahjong-table.auto-safe-layout.layout-debug .center-info,
+  .mahjong-table.auto-safe-layout.layout-debug .player-seat,
+  .mahjong-table.auto-safe-layout.layout-debug .discard-area {
+    outline: 1px solid rgba(255, 255, 255, 0.45);
+    outline-offset: 1px;
+  }
+}
+
+.mahjong-table.layout-adjusting .player-seat,
+.mahjong-table.layout-adjusting .discard-area,
+.mahjong-table.layout-adjusting .center-info,
+.mahjong-table.layout-adjusting .bottom-actions,
+.mahjong-table.layout-adjusting .settings-panel {
+  pointer-events: none !important;
+}
+
+.layout-adjust-overlay {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 12000;
+}
+
+.layout-adjust-frame {
+  background: rgba(255, 209, 92, 0.12);
+  border: 2px solid rgba(255, 209, 92, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.08);
+  cursor: grab;
+  min-height: 18px;
+  min-width: 18px;
+  pointer-events: auto;
+  position: absolute;
+  touch-action: none;
+  z-index: 12002;
+}
+
+.layout-adjust-frame:active {
+  cursor: grabbing;
+}
+
+.layout-adjust-frame span {
+  background: rgba(8, 21, 28, 0.94);
+  border: 1px solid rgba(255, 209, 92, 0.8);
+  border-radius: 999px;
+  color: #fff8d8;
+  font-size: 11px;
+  font-weight: 900;
+  left: 0;
+  line-height: 1;
+  padding: 4px 7px;
+  position: absolute;
+  top: -24px;
+  white-space: nowrap;
+}
+
+.layout-adjust-panel {
+  background: rgba(8, 21, 28, 0.96);
+  border: 1px solid rgba(255, 209, 92, 0.72);
+  border-radius: 10px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.42);
+  color: #f7fff9;
+  display: grid;
+  gap: 8px;
+  left: max(8px, env(safe-area-inset-left));
+  max-height: calc(var(--anmika-viewport-height, 100dvh) - 18px);
+  overflow: auto;
+  padding: 10px;
+  pointer-events: auto;
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  width: min(330px, 45vw);
+  z-index: 12003;
+}
+
+.layout-adjust-panel h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.layout-adjust-panel label {
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 4px;
+}
+
+.layout-adjust-panel select {
+  background: #f8fffb;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 7px;
+  color: #10241e;
+  font: inherit;
+  min-height: 32px;
+  padding: 5px 7px;
+}
+
+.layout-adjust-current {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #fff8d8;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 8px;
+}
+
+.layout-adjust-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.layout-adjust-actions button {
+  border-radius: 7px;
+  font-size: 12px;
+  min-height: 32px;
+  padding: 5px 8px;
+}
+
+.layout-adjust-warning {
+  color: #ffd77a;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
+  min-height: 1.35em;
+}
+
+@media (max-width: 920px) and (orientation: landscape) {
+  .layout-adjust-panel {
+    font-size: 11px;
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - 10px);
+    padding: 7px;
+    width: min(300px, 48vw);
+  }
+
+  .layout-adjust-actions button {
+    font-size: 11px;
+    min-height: 28px;
+    padding: 4px 7px;
   }
 }
