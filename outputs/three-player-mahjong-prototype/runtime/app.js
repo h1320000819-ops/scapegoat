@@ -6836,6 +6836,8 @@ class GameView {
       globalThis.document.body.dataset.gameScreen = state.screen === "game" ? "on" : "off";
     }
     if (state.screen !== "game") {
+      this.layoutAdjustmentSession = null;
+      document.querySelector(".layout-adjust-overlay")?.remove();
       this.root.innerHTML = this.appShell(state);
       this.bindAppControls();
       return;
@@ -7274,13 +7276,17 @@ class GameView {
     if (!this.layoutAdjustmentSession) return;
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
+    if (document.querySelector(".layout-adjust-overlay")) {
+      this.layoutAdjustmentSession.refresh?.();
+      return;
+    }
     this.openLayoutAdjustmentMode({ restore: true });
   }
   openLayoutAdjustmentMode(options = {}) {
-    const table = this.root.querySelector(".mahjong-table");
+    let table = this.root.querySelector(".mahjong-table");
     if (!table) return;
     this.stabilizeTableLayout();
-    const layout = this.calculateSafeTableLayout();
+    let layout = this.calculateSafeTableLayout();
     const cloneProfile = (value) => (typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value)));
     const session = options.restore && this.layoutAdjustmentSession
       ? this.layoutAdjustmentSession
@@ -7293,9 +7299,20 @@ class GameView {
     const profile = session.profile;
     let selectedKey = session.selectedKey || profile.selectedKey || "discard.self";
     let snap = session.snap || localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4";
+    const refreshLiveTable = () => {
+      const liveTable = this.root.querySelector(".mahjong-table");
+      if (!liveTable) return null;
+      table = liveTable;
+      layout = this.calculateSafeTableLayout();
+      table.classList.add("layout-adjusting");
+      this.applySafeTableLayout(table, layout);
+      this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
+      return table;
+    };
+    refreshLiveTable();
     table.classList.add("layout-adjusting");
     this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
-    table.querySelector(".layout-adjust-overlay")?.remove();
+    document.querySelector(".layout-adjust-overlay")?.remove();
     const overlay = document.createElement("section");
     overlay.className = "layout-adjust-overlay";
     overlay.innerHTML = `
@@ -7329,7 +7346,7 @@ class GameView {
         <p class="layout-adjust-warning" data-layout-warning></p>
       </aside>
     `;
-    table.append(overlay);
+    document.body.append(overlay);
     const select = overlay.querySelector("[data-layout-adjust-select]");
     const snapSelect = overlay.querySelector("[data-layout-snap]");
     const warning = overlay.querySelector("[data-layout-warning]");
@@ -7346,6 +7363,7 @@ class GameView {
       return profile.adjustments[selectedKey];
     };
     const clampAdjustmentToSafeRect = () => {
+      if (!refreshLiveTable()) return;
       const item = currentItem();
       const element = this.targetElementForLayoutItem(table, item);
       const adjustment = ensureAdjustment();
@@ -7365,11 +7383,11 @@ class GameView {
       }
     };
     const updateFrame = () => {
+      if (!refreshLiveTable()) return;
       const item = currentItem();
       this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
       const element = this.targetElementForLayoutItem(table, item);
       const rect = element?.getBoundingClientRect?.();
-      const tableRect = table.getBoundingClientRect();
       const adjustment = ensureAdjustment();
       current.textContent = `${item.label}　X:${Math.round(adjustment.offsetX || 0)} Y:${Math.round(adjustment.offsetY || 0)} scale:${Number(adjustment.scale || 1).toFixed(2)}`;
       frameLabel.textContent = item.label;
@@ -7379,8 +7397,8 @@ class GameView {
         return;
       }
       frame.hidden = false;
-      frame.style.left = `${rect.left - tableRect.left}px`;
-      frame.style.top = `${rect.top - tableRect.top}px`;
+      frame.style.left = `${rect.left}px`;
+      frame.style.top = `${rect.top}px`;
       frame.style.width = `${rect.width}px`;
       frame.style.height = `${rect.height}px`;
       const validation = this.validateUserAdjustedLayout(table);
@@ -7388,7 +7406,9 @@ class GameView {
         ? (validation.warnings[0] || "")
         : `この配置では一部の牌が画面外に出ます: ${validation.outside.join("、")}`;
     };
+    session.refresh = updateFrame;
     const moveSelected = (dx, dy) => {
+      if (!refreshLiveTable()) return;
       const adjustment = ensureAdjustment();
       const snapPx = this.snapPixelValue(table, snap);
       adjustment.offsetX = Math.round((Number(adjustment.offsetX || 0) + dx) / snapPx) * snapPx;
@@ -7425,6 +7445,7 @@ class GameView {
       localStorage.setItem("anmikaLayoutAdjustmentSnap", snap);
     });
     overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
+      if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
       if (!validation.ok) {
         warning.textContent = `保存できません。画面外に出ています: ${validation.outside.join("、")}`;
@@ -7434,16 +7455,17 @@ class GameView {
       warning.textContent = "この端末用に保存しました";
       setTimeout(() => {
         this.layoutAdjustmentSession = null;
-        table.classList.remove("layout-adjusting");
+        this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
         overlay.remove();
         this.stabilizeTableLayout();
       }, 450);
     });
     overlay.querySelector("[data-layout-cancel]").addEventListener("click", () => {
       this.layoutAdjustmentSession = null;
-      table.classList.remove("layout-adjusting");
+      this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
       overlay.remove();
-      this.applyUserLayoutAdjustments(table, layout);
+      const liveTable = this.root.querySelector(".mahjong-table");
+      if (liveTable) this.applyUserLayoutAdjustments(liveTable, this.calculateSafeTableLayout());
     });
     overlay.querySelector("[data-layout-reset-selected]").addEventListener("click", () => {
       delete profile.adjustments[selectedKey];
@@ -7461,6 +7483,7 @@ class GameView {
       updateFrame();
     });
     overlay.querySelector("[data-layout-check]").addEventListener("click", () => {
+      if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
       warning.textContent = validation.ok
         ? (validation.warnings.length ? validation.warnings.join(" / ") : "見切れはありません")
