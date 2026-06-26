@@ -40,6 +40,35 @@ body {
   z-index: 12000;
 }
 
+.layout-adjust-hit-layer {
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 12001;
+}
+
+.layout-adjust-hit {
+  appearance: none;
+  background: rgba(255, 209, 92, 0.02);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: grab;
+  margin: 0;
+  padding: 0;
+  pointer-events: auto;
+  position: fixed;
+  touch-action: none;
+}
+
+.layout-adjust-hit:hover {
+  background: rgba(255, 209, 92, 0.1);
+  border-color: rgba(255, 209, 92, 0.45);
+}
+
+.layout-adjust-hit:active {
+  cursor: grabbing;
+}
+
 .layout-adjust-frame {
   background: rgba(255, 209, 92, 0.12);
   border: 2px solid rgba(255, 209, 92, 0.95);
@@ -4671,6 +4700,19 @@ button:hover {
   font-size: 15px !important;
 }
 
+@media (min-width: 921px), (orientation: portrait) {
+  .mahjong-table.layout-tight-right,
+  .mahjong-table.layout-ultra-tight-right,
+  .mahjong-table.layout-fit-screen {
+    --safe-center-y: calc(50% + var(--center-y-offset));
+    --safe-right-lane-width: clamp(120px, 15vw, 190px);
+    --safe-other-tile-width: clamp(22px, 2.2vw, 34px);
+    --safe-right-meld-gap: clamp(8px, 1.8dvh, 18px);
+    --safe-river-side-gap: clamp(8px, 1.2vw, 18px);
+    --right-river-left-pull: 0px;
+  }
+}
+
 @media (max-width: 920px) and (orientation: landscape) {
   .mahjong-table.layout-tight-right {
     --safe-right-lane-width: clamp(68px, 12dvw, 96px);
@@ -5171,6 +5213,35 @@ button:hover {
   pointer-events: none;
   position: fixed;
   z-index: 12000;
+}
+
+.layout-adjust-hit-layer {
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 12001;
+}
+
+.layout-adjust-hit {
+  appearance: none;
+  background: rgba(255, 209, 92, 0.02);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: grab;
+  margin: 0;
+  padding: 0;
+  pointer-events: auto;
+  position: fixed;
+  touch-action: none;
+}
+
+.layout-adjust-hit:hover {
+  background: rgba(255, 209, 92, 0.1);
+  border-color: rgba(255, 209, 92, 0.45);
+}
+
+.layout-adjust-hit:active {
+  cursor: grabbing;
 }
 
 .layout-adjust-frame {

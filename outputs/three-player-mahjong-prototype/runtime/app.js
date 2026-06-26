@@ -7316,6 +7316,7 @@ class GameView {
     const overlay = document.createElement("section");
     overlay.className = "layout-adjust-overlay";
     overlay.innerHTML = `
+      <div class="layout-adjust-hit-layer" data-layout-hit-layer></div>
       <div class="layout-adjust-frame" data-layout-drag-frame><span data-layout-frame-label></span></div>
       <aside class="layout-adjust-panel">
         <h2>表示位置調整</h2>
@@ -7353,6 +7354,7 @@ class GameView {
     const current = overlay.querySelector("[data-layout-current]");
     const frame = overlay.querySelector("[data-layout-drag-frame]");
     const frameLabel = overlay.querySelector("[data-layout-frame-label]");
+    const hitLayer = overlay.querySelector("[data-layout-hit-layer]");
     select.value = selectedKey;
     snapSelect.value = snap;
     const currentItem = () => LAYOUT_ADJUSTMENT_ITEMS.find((item) => item.key === selectedKey) || LAYOUT_ADJUSTMENT_ITEMS[0];
@@ -7391,6 +7393,26 @@ class GameView {
       const adjustment = ensureAdjustment();
       current.textContent = `${item.label}　X:${Math.round(adjustment.offsetX || 0)} Y:${Math.round(adjustment.offsetY || 0)} scale:${Number(adjustment.scale || 1).toFixed(2)}`;
       frameLabel.textContent = item.label;
+      hitLayer.replaceChildren();
+      const seenHitSelectors = new Set();
+      for (const candidate of LAYOUT_ADJUSTMENT_ITEMS) {
+        const actualKey = this.actualLayoutKeyForItem(table, candidate);
+        if (candidate.key !== actualKey && candidate.key !== selectedKey) continue;
+        const target = this.targetElementForLayoutItem(table, candidate);
+        const hitRect = target?.getBoundingClientRect?.();
+        if (!hitRect || hitRect.width <= 0 || hitRect.height <= 0 || seenHitSelectors.has(candidate.selector)) continue;
+        seenHitSelectors.add(candidate.selector);
+        const hit = document.createElement("button");
+        hit.type = "button";
+        hit.className = "layout-adjust-hit";
+        hit.dataset.layoutHitKey = candidate.key;
+        hit.title = candidate.label;
+        hit.style.left = `${hitRect.left}px`;
+        hit.style.top = `${hitRect.top}px`;
+        hit.style.width = `${hitRect.width}px`;
+        hit.style.height = `${hitRect.height}px`;
+        hitLayer.append(hit);
+      }
       if (!rect || rect.width <= 0 || rect.height <= 0) {
         frame.hidden = true;
         warning.textContent = "この状態は現在の局面には表示されていません。選択した状態が出た時に補正が適用されます。";
@@ -7407,6 +7429,13 @@ class GameView {
         : `この配置では一部の牌が画面外に出ます: ${validation.outside.join("、")}`;
     };
     session.refresh = updateFrame;
+    const selectLayoutKey = (key) => {
+      if (!LAYOUT_ADJUSTMENT_ITEMS.some((item) => item.key === key)) return;
+      selectedKey = key;
+      session.selectedKey = selectedKey;
+      profile.selectedKey = selectedKey;
+      select.value = selectedKey;
+    };
     const moveSelected = (dx, dy) => {
       if (!refreshLiveTable()) return;
       const adjustment = ensureAdjustment();
@@ -7417,26 +7446,36 @@ class GameView {
       updateFrame();
     };
     let dragStart = null;
-    frame.addEventListener("pointerdown", (event) => {
+    const beginDrag = (event, key = "") => {
       event.preventDefault();
       event.stopPropagation();
+      if (key) selectLayoutKey(key);
       dragStart = { x: event.clientX, y: event.clientY };
-      frame.setPointerCapture?.(event.pointerId);
+      overlay.setPointerCapture?.(event.pointerId);
+      updateFrame();
+    };
+    frame.addEventListener("pointerdown", (event) => {
+      beginDrag(event);
     });
-    frame.addEventListener("pointermove", (event) => {
+    hitLayer.addEventListener("pointerdown", (event) => {
+      const key = event.target?.closest?.("[data-layout-hit-key]")?.dataset?.layoutHitKey || "";
+      if (!key) return;
+      beginDrag(event, key);
+    });
+    overlay.addEventListener("pointermove", (event) => {
       if (!dragStart) return;
       event.preventDefault();
+      event.stopPropagation();
       const dx = event.clientX - dragStart.x;
       const dy = event.clientY - dragStart.y;
       if (Math.abs(dx) + Math.abs(dy) < 1) return;
       moveSelected(dx, dy);
       dragStart = { x: event.clientX, y: event.clientY };
     });
-    frame.addEventListener("pointerup", () => { dragStart = null; });
+    overlay.addEventListener("pointerup", () => { dragStart = null; });
+    overlay.addEventListener("pointercancel", () => { dragStart = null; });
     select.addEventListener("change", () => {
-      selectedKey = select.value;
-      session.selectedKey = selectedKey;
-      profile.selectedKey = selectedKey;
+      selectLayoutKey(select.value);
       updateFrame();
     });
     snapSelect.addEventListener("change", () => {
@@ -7535,6 +7574,7 @@ class GameView {
       this.tableFitClasses = [];
       delete table.dataset.layoutProfile;
       delete table.dataset.layoutAdjustment;
+      return;
     }
     window.requestAnimationFrame(() => {
       const center = table.querySelector(".center-info");
