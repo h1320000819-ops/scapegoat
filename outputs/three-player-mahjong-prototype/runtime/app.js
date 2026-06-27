@@ -4367,6 +4367,29 @@ class GameController {
       const key = onlineSoundEventKey(event);
       return key && !previousEventKeys.has(key);
     }) : [];
+    const fallbackRemoteDiscardEvent = (() => {
+      if (!isFreshActionState) return null;
+      const previousPlayers = new Map((this.state.players ?? []).map((player) => [player.id, player]));
+      for (const player of next.players ?? []) {
+        if (!player?.id || player.id === currentUserId) continue;
+        const previousDiscardCount = previousPlayers.get(player.id)?.discardedTiles?.length ?? 0;
+        const nextDiscards = player.discardedTiles ?? [];
+        if (nextDiscards.length <= previousDiscardCount) continue;
+        const lastDiscard = nextDiscards.at(-1);
+        const tile = lastDiscard?.tile || lastDiscard || null;
+        return {
+          type: "discard",
+          playerId: player.id,
+          tile,
+          tileId: tile?.id || lastDiscard?.tileId || "",
+          selectedTileId: lastDiscard?.selectedTileId || tile?.id || "",
+          discardType: lastDiscard?.discardType || "",
+          isRiichiDiscard: Boolean(lastDiscard?.isRiichiDiscard),
+          turnIndex: lastDiscard?.turnIndex ?? next.turnIndex ?? "",
+        };
+      }
+      return null;
+    })();
     const primarySoundEvent = [...newEvents].reverse().find((event) => ["riichi", "fever_riichi", "pon", "kan", "ron", "tsumo", "win"].includes(event?.type))
       || [...newEvents].reverse().find((event) => event?.type === "discard");
     if (primarySoundEvent?.type === "riichi" || primarySoundEvent?.type === "fever_riichi") {
@@ -4391,8 +4414,11 @@ class GameController {
       }
     } else if (primarySoundEvent?.type === "pon" || primarySoundEvent?.type === "kan") {
       this.showActionAnnouncement(primarySoundEvent, { targetState: next, durationMs: primarySoundEvent.type === "kan" ? 1600 : 1200 });
-    } else if (primarySoundEvent?.type === "discard" && meta.publishedBy !== currentUserId) {
-      playGameSound("discard", { key: `online:${onlineSoundEventKey(primarySoundEvent)}` });
+    } else {
+      const discardSoundEvent = primarySoundEvent?.type === "discard" ? primarySoundEvent : fallbackRemoteDiscardEvent;
+      if (discardSoundEvent && (discardSoundEvent.playerId || meta.publishedBy) !== currentUserId && !discardSoundEvent.isRiichiDiscard) {
+        playGameSound("discard", { key: `online:${onlineSoundEventKey(discardSoundEvent) || `${discardSoundEvent.playerId}:${incomingVersion}`}` });
+      }
     }
     const announcementKind = next.phase === "showingWinAnnouncement"
       ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
@@ -6776,7 +6802,7 @@ const resultMeldsInlineView = (state, winner) => {
 };
 const LAYOUT_ADJUSTMENT_ITEMS = [
   ["center.info", "卓の中央表示", ".center-info"],
-  ["icon.self", "自分のアイコン", ".hand-player-icon, .layout-only-bottom-icon"],
+  ["icon.self", "自分のアイコン", ".layout-only-bottom-icon"],
   ["icon.right", "右側プレイヤーのアイコン", ".seat-right .seat-player-icon"],
   ["icon.top", "上側プレイヤーのアイコン", ".seat-top .seat-player-icon"],
   ["name.self", "自分の名前", ".seat-bottom .seat-mini-name"],
@@ -8696,7 +8722,7 @@ class GameView {
       ${state.isReplayView ? "" : this.reloadButton(state)}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
-      ${state.isReplayView ? this.layoutOnlyBottomIcon(viewer) : ""}
+      ${this.layoutOnlyBottomIcon(viewer, { visible: !state.isReplayView })}
       ${state.isReplayView ? this.layoutOnlyAssistControls(viewer) : ""}
       ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
@@ -8836,8 +8862,8 @@ class GameView {
       : "avatar-human";
     return `<span class="seat-player-icon player-avatar ${avatarClass}" aria-hidden="true">${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" draggable="false" />` : initial}</span>`;
   }
-  layoutOnlyBottomIcon(player) {
-    return `<span class="hand-player-icon layout-adjust-only layout-only-bottom-icon" aria-hidden="true">${this.playerIconClean(player)}</span>`;
+  layoutOnlyBottomIcon(player, { visible = false } = {}) {
+    return `<span class="hand-player-icon ${visible ? "" : "layout-adjust-only"} layout-only-bottom-icon" aria-hidden="true">${this.playerIconClean(player)}</span>`;
   }
   playerSeatClean(player, seat, current, dealer) {
     if (!player) return "";
@@ -8853,7 +8879,7 @@ class GameView {
     const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
       ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}" data-clock-player-id="${escapeHtml(player.id)}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
-    const handIcon = seat === "bottom" && !this.currentStateForClock?.isReplayView ? `<span class="hand-player-icon">${this.playerIconClean(player)}</span>` : "";
+    const handIcon = "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";
     const hasMelds = (player.melds ?? []).length > 0;
     const handCount = Math.max(0, Math.min(13, handTiles.length));

@@ -718,6 +718,12 @@ button:hover {
   width: 38px;
 }
 
+.mahjong-table > .hand-player-icon.layout-only-bottom-icon {
+  left: max(12px, env(safe-area-inset-left));
+  position: fixed;
+  top: calc(50% + var(--center-y-offset) + 18px);
+}
+
 .table-reload-button {
   background: rgba(3, 9, 16, 0.82);
   border: 1px solid rgba(191, 239, 255, 0.52);
