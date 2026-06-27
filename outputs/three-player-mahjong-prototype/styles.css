@@ -4878,7 +4878,9 @@ button:hover {
   }
 
   .mahjong-table.layout-fit-screen .seat-player-icon {
-    display: none;
+    display: inline-flex;
+    height: 20px;
+    width: 20px;
   }
 
   .mahjong-table.layout-fit-screen .seat-mini-name,

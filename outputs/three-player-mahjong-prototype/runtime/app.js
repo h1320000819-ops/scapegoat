@@ -7890,6 +7890,14 @@ class GameView {
       const layout = this.calculateSafeTableLayout();
       this.applySafeTableLayout(table, layout);
       this.applyUserLayoutAdjustments(table, layout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+      window.requestAnimationFrame(() => {
+        if (!this.shouldUseSafeTableLayout() || !this.root.contains(table)) return;
+        this.applyMobileTableFitClasses(table);
+        const nextLayout = this.calculateSafeTableLayout();
+        this.applySafeTableLayout(table, nextLayout);
+        this.applyUserLayoutAdjustments(table, nextLayout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+        this.layoutAdjustmentSession?.refresh?.();
+      });
       if (!layout.validation.ok) {
         console.warn("[Layout] fallback still has unsafe rects", {
           profile: layout.profile.name,
