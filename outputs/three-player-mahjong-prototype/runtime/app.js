@@ -2385,6 +2385,12 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
   if (gameState.phase === "waitingForRiichiDiscard" && tileId && !(Array.isArray(player.riichiDiscardTileIds) ? player.riichiDiscardTileIds : []).includes(tileId)) {
     return fail("この牌ではリーチ後テンパイになりません");
   }
+  if (tileId && player.temporaryForbiddenDiscardKind) {
+    const selectedTile = player.drawnTile?.id === tileId ? player.drawnTile : (player.hand ?? []).find((tile) => tile.id === tileId);
+    if (selectedTile && tileKindKey(selectedTile) === player.temporaryForbiddenDiscardKind) {
+      return fail("ポンした直後は同じ牌を切れません");
+    }
+  }
   if (player.isRiichi && tileId && player.drawnTile?.id !== tileId && gameState.phase !== "waitingForRiichiDiscard") {
     return fail("リーチ後はツモ切りのみです");
   }
@@ -2527,7 +2533,7 @@ const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   };
 };
 
-const createPlayer = (id, name, type = "human", score = 0) => ({ id, name, type, score, hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0, assistSettings: { autoWin: false, noCall: false } });
+const createPlayer = (id, name, type = "human", score = 0) => ({ id, name, type, score, hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings: { autoWin: false, noCall: false } });
 const getCurrentPlayer = (state) => state.players[state.currentPlayerIndex];
 const replayPlayerIdentityFromLog = (log, playerId) => {
   if (!playerId) return {};
@@ -4887,6 +4893,7 @@ class GameController {
     }
     player.discardedTiles ??= [];
     player.discardedTiles.push({ tile, discardType: drawn ? "tsumogiri" : "tedashi", isRiichiDiscard, turnIndex: this.state.turnIndex ?? 0, optimistic: true });
+    player.temporaryForbiddenDiscardKind = "";
     this.state.pendingAction = null;
     this.state.optimisticDiscardRequestId = requestId;
     this.state.discardDebugMessage = "打牌送信中...";
@@ -5373,7 +5380,7 @@ class GameController {
     const startingScore = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
     for (const player of this.state.players) {
       const assistSettings = { autoWin: Boolean(player.assistSettings?.autoWin), noCall: false };
-      Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0, assistSettings });
+      Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings });
     }
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
@@ -5882,6 +5889,7 @@ class GameController {
       player.hand = player.hand.filter((t) => t.id !== tileId);
       if (player.drawnTile) { player.hand.push(player.drawnTile); player.drawnTile = null; player.hand = sortHandTiles(player.hand); }
     }
+    player.temporaryForbiddenDiscardKind = "";
     const discardType = drawn ? "tsumogiri" : "tedashi";
     player.discardedTiles.push({ tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex });
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
@@ -6161,6 +6169,7 @@ class GameController {
     if (consumed.length !== 2) return;
     this.removeCalledTileFromDiscard(action.fromPlayerId, action.sourceTile.id);
     player.melds.push({ type: "pon", tiles: [...consumed, action.sourceTile], calledTile: action.sourceTile, fromPlayerId: action.fromPlayerId });
+    player.temporaryForbiddenDiscardKind = tileKindKey(action.sourceTile);
     const ponEvent = { type: "pon", playerId: player.id, fromPlayerId: action.fromPlayerId, tile: action.sourceTile, consumedTiles: consumed, turnIndex: this.state.turnIndex };
     appendHandLogEvent(this.state.handLog, ponEvent);
     this.showActionAnnouncement(ponEvent, { targetState: this.state, durationMs: 1200 });
@@ -7301,6 +7310,14 @@ class GameView {
     const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
     return viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
   }
+  mobileTableFitClasses() {
+    return ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
+  }
+  applyMobileTableFitClasses(table) {
+    const fitClasses = this.mobileTableFitClasses();
+    table.classList.add(...fitClasses);
+    this.tableFitClasses = fitClasses;
+  }
   legacyLayoutAdjustmentStorageKey(layout = null) {
     return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
   }
@@ -7540,6 +7557,7 @@ class GameView {
       layout = this.calculateSafeTableLayout();
       table.classList.add("layout-adjusting");
       if (this.shouldUseSafeTableLayout()) {
+        this.applyMobileTableFitClasses(table);
         this.applySafeTableLayout(table, layout);
       } else {
         table.classList.remove("auto-safe-layout");
@@ -7865,10 +7883,10 @@ class GameView {
     if (typeof window === "undefined") return;
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
-    const fitClasses = ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
+    const fitClasses = this.mobileTableFitClasses();
     const isMobileLandscape = this.shouldUseSafeTableLayout();
     if (isMobileLandscape) {
-      table.classList.add(...(this.tableFitClasses || []));
+      this.applyMobileTableFitClasses(table);
       const layout = this.calculateSafeTableLayout();
       this.applySafeTableLayout(table, layout);
       this.applyUserLayoutAdjustments(table, layout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
@@ -7969,32 +7987,8 @@ class GameView {
       const overlapping = intersects(meldBox, centerBox, 6) || intersects(meldBox, riverBox, 6) || intersects(seatBox, riverBox, 2);
       const wholeLayoutBad = layoutIsBad();
       if (!offscreen && !overlapping && !wholeLayoutBad) return;
-      table.classList.add("layout-tight-right");
-      this.tableFitClasses = ["layout-tight-right"];
-      window.requestAnimationFrame(() => {
-        const nextMeldBox = rightMelds.getBoundingClientRect();
-        const nextSeatBox = rightSeat.getBoundingClientRect();
-        const nextCenterBox = center.getBoundingClientRect();
-        const nextRiverBox = rightRiver.getBoundingClientRect();
-        const stillBad =
-          nextMeldBox.right > viewportWidth - 2 ||
-          nextMeldBox.left < 2 ||
-          nextMeldBox.top < 2 ||
-          nextMeldBox.bottom > viewportHeight - 2 ||
-          intersects(nextMeldBox, nextCenterBox, 4) ||
-          intersects(nextMeldBox, nextRiverBox, 4) ||
-          intersects(nextSeatBox, nextRiverBox, 2) ||
-          layoutIsBad();
-        if (!stillBad) return;
-        table.classList.add("layout-ultra-tight-right");
-        this.tableFitClasses = ["layout-tight-right", "layout-ultra-tight-right"];
-        window.requestAnimationFrame(() => {
-          if (layoutIsBad()) {
-            table.classList.add("layout-fit-screen");
-            this.tableFitClasses = ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
-          }
-        });
-      });
+      this.applyMobileTableFitClasses(table);
+      this.applyUserLayoutAdjustments(table, this.calculateSafeTableLayout(), this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
     });
   }
   bindAppControls() {
@@ -8723,6 +8717,7 @@ class GameView {
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
       ${this.layoutOnlyBottomIcon(viewer, { visible: !state.isReplayView })}
+      ${!state.isReplayView && viewer?.type !== "cpu" ? this.assistControls(viewer) : ""}
       ${state.isReplayView ? this.layoutOnlyAssistControls(viewer) : ""}
       ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
@@ -8894,7 +8889,6 @@ class GameView {
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-identity">${seat === "bottom" ? "" : this.playerIconClean(player)}<div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div></div>
       <div class="hand-zone">${handIcon}${clockBadge}<div class="hand-row ${seat === "bottom" ? "human-hand" : "cpu-hand"} ${hasMelds ? "has-melds" : ""} hand-count-${handCountBucket}" style="--hand-count:${handCount};">${layoutParts.join("")}</div></div>
-      ${player.type !== "cpu" && seat === "bottom" && !this.currentStateForClock?.isReplayView ? this.assistControls(player) : ""}
     </section>`;
   }
   assistControls(player) {

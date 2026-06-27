@@ -4145,6 +4145,7 @@ const applyServerPonRevealEffect = (state) => {
   player.melds ??= [];
   const meld = { type: "pon", tiles, calledTile, fromPlayerId };
   player.melds.push(meld);
+  player.temporaryForbiddenDiscardKind = tileKindKey(sourceTile);
   player.drawnTile = null;
   player.hand = sortHandTiles(player.hand);
   state.currentPlayerIndex = ensureArray(state.players).findIndex((p) => p.id === player.id);
@@ -4244,6 +4245,9 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   const drawn = player.drawnTile?.id === tileId ? player.drawnTile : null;
   const tile = drawn || removeTileById(player.hand, tileId);
   if (!tile) throw new Error("指定された牌を持っていません");
+  if (player.temporaryForbiddenDiscardKind && tileKindKey(tile) === player.temporaryForbiddenDiscardKind) {
+    throw new Error("ポンした直後は同じ牌を切れません");
+  }
   if (drawn) player.drawnTile = null;
   else if (player.drawnTile) {
     player.hand ??= [];
@@ -4256,6 +4260,7 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   state.clockStartedAt = null;
   player.discardedTiles ??= [];
   player.discardedTiles.push({ tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
+  player.temporaryForbiddenDiscardKind = "";
   appendHandEvent(state, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
   if (player.isRiichi && player.ippatsu && !isRiichiDiscard) {
     player.ippatsu = false;
@@ -5202,6 +5207,7 @@ const startNextServerHand = (state) => {
       riichiStickPaid: false,
       feverRiichiActive: false,
       feverWinCount: 0,
+      temporaryForbiddenDiscardKind: "",
       assistSettings,
     });
   }
@@ -5272,6 +5278,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     riichiStickPaid: false,
     feverRiichiActive: false,
     feverWinCount: 0,
+    temporaryForbiddenDiscardKind: "",
     assistSettings: { autoWin: false, noCall: false },
   }));
   while (normalizedPlayers.length < 3) {
@@ -5296,6 +5303,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       riichiStickPaid: false,
       feverRiichiActive: false,
       feverWinCount: 0,
+      temporaryForbiddenDiscardKind: "",
       assistSettings: { autoWin: false, noCall: false },
     });
   }
