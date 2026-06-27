@@ -7524,8 +7524,6 @@ class GameView {
       return table;
     };
     refreshLiveTable();
-    table.classList.add("layout-adjusting");
-    this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
     document.querySelector(".layout-adjust-overlay")?.remove();
     const overlay = document.createElement("section");
     overlay.className = "layout-adjust-overlay";
@@ -7868,6 +7866,7 @@ class GameView {
       this.tableFitClasses = [];
       delete table.dataset.layoutProfile;
       delete table.dataset.layoutAdjustment;
+      this.applyUserLayoutAdjustments(table, this.calculateSafeTableLayout(), this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
       return;
     }
     window.requestAnimationFrame(() => {
