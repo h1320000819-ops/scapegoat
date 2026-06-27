@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260628-mobile-layout-align-a";
+const CACHE_NAME = "anmika-pwa-20260628-default-overwrites-local-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v7";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260628-mobile-layout-align-a",
-  "/runtime/app.js?v=20260628-mobile-layout-align-a",
-  "/runtime/online-debug.js?v=20260628-mobile-layout-align-a",
-  "/runtime/pwa.js?v=20260628-mobile-layout-align-a",
+  "/styles.css?v=20260628-default-overwrites-local-a",
+  "/runtime/app.js?v=20260628-default-overwrites-local-a",
+  "/runtime/online-debug.js?v=20260628-default-overwrites-local-a",
+  "/runtime/pwa.js?v=20260628-default-overwrites-local-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

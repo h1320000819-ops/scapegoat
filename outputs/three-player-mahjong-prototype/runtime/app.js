@@ -7381,6 +7381,7 @@ class GameView {
     const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
     if (!normalized) return false;
     localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
+    this.overwriteLocalLayoutAdjustmentWithDefaultProfile(normalized, layout, family);
     return true;
   }
   async fetchRemoteDefaultLayoutAdjustmentProfile(layout = null, family = null) {
@@ -7511,6 +7512,23 @@ class GameView {
       updatedAt: Date.now(),
     }));
   }
+  overwriteLocalLayoutAdjustmentWithDefaultProfile(profile, layout = null, family = null) {
+    if (this.sharedLayoutDeviceKey({ family }) !== this.sharedLayoutDeviceKey()) return false;
+    const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
+    if (!normalized) return false;
+    localStorage.setItem(this.layoutAdjustmentStorageKey(layout), JSON.stringify({
+      version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+      scope: "all-tables",
+      rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      deviceKey: this.sharedLayoutDeviceKey(),
+      selectedKey: normalized.selectedKey || "",
+      adjustments: normalized.adjustments || {},
+      updatedAt: Date.now(),
+      overwrittenByDefault: true,
+      defaultUpdatedAt: normalized.updatedAt || Date.now(),
+    }));
+    return true;
+  }
   saveDefaultLayoutAdjustmentProfile(profile, layout = null, family = null) {
     const normalized = {
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
@@ -7523,6 +7541,7 @@ class GameView {
       updatedAt: Date.now(),
     };
     localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
+    this.overwriteLocalLayoutAdjustmentWithDefaultProfile(normalized, layout, family);
     return this.saveRemoteDefaultLayoutAdjustmentProfile(normalized, layout, family)
       .catch((error) => {
         console.warn("[LayoutDefault] remote save failed", error);
