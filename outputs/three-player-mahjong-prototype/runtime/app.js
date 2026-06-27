@@ -6779,16 +6779,19 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
   ["icon.self", "自分のアイコン", ".hand-player-icon, .layout-only-bottom-icon"],
   ["icon.right", "右側プレイヤーのアイコン", ".seat-right .seat-player-icon"],
   ["icon.top", "上側プレイヤーのアイコン", ".seat-top .seat-player-icon"],
-  ["discard.self", "自分の捨て牌", ".discard-bottom"],
-  ["discard.right", "右側プレイヤーの捨て牌", ".discard-right"],
-  ["discard.top", "上側プレイヤーの捨て牌", ".discard-top"],
+  ["name.self", "自分の名前", ".seat-bottom .seat-mini-name"],
+  ["name.right", "右側プレイヤーの名前", ".seat-right .seat-mini-name"],
+  ["name.top", "上側プレイヤーの名前", ".seat-top .seat-mini-name"],
+  ["discard.self", "自分の捨て牌", ".discard-bottom .discard-grid"],
+  ["discard.right", "右側プレイヤーの捨て牌", ".discard-right .discard-grid"],
+  ["discard.top", "上側プレイヤーの捨て牌", ".discard-top .discard-grid"],
   ["assist.controls", "自動和了・鳴きなし", ".assist-controls"],
   ["control.reload", "画面再読み込み", ".table-reload-button"],
   ...["self", "right", "top"].flatMap((seat) =>
     [1, 4, 7, 10, 13].map((count) => [
       `hand.${seat}.count${count}`,
       `${seat === "self" ? "自分" : seat === "right" ? "右側プレイヤー" : "上側プレイヤー"}の手牌：${count}枚`,
-      `.seat-${seat === "self" ? "bottom" : seat} .hand-row`,
+      `.seat-${seat === "self" ? "bottom" : seat} .hand-region-slot`,
     ])
   ),
   ...["self", "right", "top"].flatMap((seat) =>
@@ -7253,11 +7256,15 @@ class GameView {
     const profile = layout?.profile?.name || "auto";
     return `${orientation}:w${viewportWidth}:h${viewportHeight}:dpr${dpr}:${standalone ? "standalone" : "browser"}:${profile}`;
   }
-  sharedLayoutDeviceKey() {
+  layoutDeviceFamily() {
+    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    return viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches ? "mobile" : "desktop";
+  }
+  sharedLayoutDeviceKey(options = {}) {
     const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
     const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
     const orientation = viewportWidth >= viewportHeight ? "landscape" : "portrait";
-    const family = viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches ? "mobile" : "desktop";
+    const family = options.family === "desktop" || options.family === "mobile" ? options.family : this.layoutDeviceFamily();
     return `${family}:${orientation}`;
   }
   legacyLayoutAdjustmentStorageKey(layout = null) {
@@ -7266,8 +7273,8 @@ class GameView {
   layoutAdjustmentStorageKey(layout = null) {
     return `${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
   }
-  defaultLayoutAdjustmentStorageKey(layout = null) {
-    return `${DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
+  defaultLayoutAdjustmentStorageKey(layout = null, family = null) {
+    return `${DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey({ family })}`;
   }
   loadLegacyLayoutAdjustmentProfile(layout = null) {
     const readSaved = (key) => {
@@ -7319,13 +7326,13 @@ class GameView {
     if (legacy) return normalizeProfile({ ...legacy, version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), migratedFrom: legacy.deviceKey || "" });
     return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
   }
-  loadDefaultLayoutAdjustmentProfile(layout = null) {
-    const key = this.defaultLayoutAdjustmentStorageKey(layout);
+  loadDefaultLayoutAdjustmentProfile(layout = null, family = null) {
+    const key = this.defaultLayoutAdjustmentStorageKey(layout, family);
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
       if (saved?.version >= 1 && saved.adjustments) return saved;
     } catch {}
-    return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, scope: "default-all-accounts", deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
+    return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, scope: "default-all-accounts", deviceKey: this.sharedLayoutDeviceKey({ family }), deviceFamily: family || this.layoutDeviceFamily(), adjustments: {} };
   }
   saveLayoutAdjustmentProfile(profile, layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
@@ -7339,13 +7346,14 @@ class GameView {
       updatedAt: Date.now(),
     }));
   }
-  saveDefaultLayoutAdjustmentProfile(profile, layout = null) {
-    const key = this.defaultLayoutAdjustmentStorageKey(layout);
+  saveDefaultLayoutAdjustmentProfile(profile, layout = null, family = null) {
+    const key = this.defaultLayoutAdjustmentStorageKey(layout, family);
     localStorage.setItem(key, JSON.stringify({
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
       scope: "default-all-accounts",
       rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
-      deviceKey: this.sharedLayoutDeviceKey(),
+      deviceKey: this.sharedLayoutDeviceKey({ family }),
+      deviceFamily: family || this.layoutDeviceFamily(),
       selectedKey: profile.selectedKey || "",
       adjustments: profile.adjustments || {},
       updatedAt: Date.now(),
@@ -7354,6 +7362,7 @@ class GameView {
   actualLayoutKeyForItem(table, item) {
     if (item.key.startsWith("center.")) return item.key;
     if (item.key.startsWith("icon.")) return item.key;
+    if (item.key.startsWith("name.")) return item.key;
     if (item.key.startsWith("discard.")) return item.key;
     if (item.key.startsWith("assist.")) return item.key;
     if (item.key.startsWith("control.")) return item.key;
@@ -7421,12 +7430,15 @@ class GameView {
     };
     const targets = [
       ["中央表示", rectOf(".center-info")],
-      ["自分の捨て牌", rectOf(".discard-bottom")],
-      ["右側プレイヤーの捨て牌", rectOf(".discard-right")],
-      ["上側プレイヤーの捨て牌", rectOf(".discard-top")],
-      ["自分の手牌", rectOf(".seat-bottom .hand-row")],
-      ["右側プレイヤーの手牌", rectOf(".seat-right .hand-row")],
-      ["上側プレイヤーの手牌", rectOf(".seat-top .hand-row")],
+      ["自分の捨て牌", rectOf(".discard-bottom .discard-grid")],
+      ["右側プレイヤーの捨て牌", rectOf(".discard-right .discard-grid")],
+      ["上側プレイヤーの捨て牌", rectOf(".discard-top .discard-grid")],
+      ["自分の名前", rectOf(".seat-bottom .seat-mini-name")],
+      ["右側プレイヤーの名前", rectOf(".seat-right .seat-mini-name")],
+      ["上側プレイヤーの名前", rectOf(".seat-top .seat-mini-name")],
+      ["自分の手牌", rectOf(".seat-bottom .hand-region-slot")],
+      ["右側プレイヤーの手牌", rectOf(".seat-right .hand-region-slot")],
+      ["上側プレイヤーの手牌", rectOf(".seat-top .hand-region-slot")],
       ["自分の副露", rectOf(".seat-bottom .meld-area .exposed-tiles")],
       ["右側プレイヤーの副露", rectOf(".seat-right .meld-area .exposed-tiles")],
       ["上側プレイヤーの副露", rectOf(".seat-top .meld-area .exposed-tiles")],
@@ -7466,7 +7478,10 @@ class GameView {
     let layout = this.calculateSafeTableLayout();
     const cloneProfile = (value) => (typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value)));
     const useDefaultProfile = Boolean(options.defaultProfile || (options.restore && this.layoutAdjustmentSession?.scope === "default"));
-    const baseProfile = useDefaultProfile ? this.loadDefaultLayoutAdjustmentProfile(layout) : this.loadLayoutAdjustmentProfile(layout);
+    const defaultFamily = useDefaultProfile
+      ? (options.defaultFamily || this.layoutAdjustmentSession?.defaultFamily || this.layoutDeviceFamily())
+      : "";
+    const baseProfile = useDefaultProfile ? this.loadDefaultLayoutAdjustmentProfile(layout, defaultFamily) : this.loadLayoutAdjustmentProfile(layout);
     const session = options.restore && this.layoutAdjustmentSession
       ? this.layoutAdjustmentSession
       : {
@@ -7474,9 +7489,10 @@ class GameView {
           selectedKey: baseProfile.selectedKey || "discard.self",
           snap: localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4",
           scope: useDefaultProfile ? "default" : "personal",
+          defaultFamily,
         };
     this.layoutAdjustmentSession = session;
-    const profile = session.profile;
+    let profile = session.profile;
     let selectedKey = session.selectedKey || profile.selectedKey || "discard.self";
     let snap = session.snap || localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4";
     const refreshLiveTable = () => {
@@ -7500,10 +7516,22 @@ class GameView {
       <div class="layout-adjust-frame" data-layout-drag-frame><span data-layout-frame-label></span></div>
       <aside class="layout-adjust-panel">
         <h2 data-layout-panel-drag-handle>${session.scope === "default" ? "デフォルト描画設定" : "表示位置調整"}</h2>
+        ${session.scope === "default" ? `
+        <label>デフォルトの対象
+          <select data-layout-default-family>
+            <option value="desktop">PC用</option>
+            <option value="mobile">スマホ用</option>
+          </select>
+        </label>
+        ` : ""}
         <label>調整する項目を選択
           <select data-layout-adjust-select>${LAYOUT_ADJUSTMENT_ITEMS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join("")}</select>
         </label>
         <div class="layout-adjust-current" data-layout-current></div>
+        <label>サイズ
+          <input type="range" min="50" max="150" step="1" value="100" data-layout-scale />
+          <span data-layout-scale-value>100%</span>
+        </label>
         <label>スナップ単位
           <select data-layout-snap>
             <option value="1">1px</option>
@@ -7529,6 +7557,9 @@ class GameView {
     `;
     document.body.append(overlay);
     const select = overlay.querySelector("[data-layout-adjust-select]");
+    const defaultFamilySelect = overlay.querySelector("[data-layout-default-family]");
+    const scaleInput = overlay.querySelector("[data-layout-scale]");
+    const scaleValue = overlay.querySelector("[data-layout-scale-value]");
     const snapSelect = overlay.querySelector("[data-layout-snap]");
     const warning = overlay.querySelector("[data-layout-warning]");
     const current = overlay.querySelector("[data-layout-current]");
@@ -7537,6 +7568,7 @@ class GameView {
     const hitLayer = overlay.querySelector("[data-layout-hit-layer]");
     const panel = overlay.querySelector(".layout-adjust-panel");
     const panelHandle = overlay.querySelector("[data-layout-panel-drag-handle]");
+    if (defaultFamilySelect) defaultFamilySelect.value = session.defaultFamily || this.layoutDeviceFamily();
     select.value = selectedKey;
     snapSelect.value = snap;
     const panelPositionKey = "anmikaLayoutAdjustmentPanelPosition";
@@ -7595,6 +7627,9 @@ class GameView {
       const rect = element?.getBoundingClientRect?.();
       const adjustment = ensureAdjustment();
       current.textContent = `${item.label}　X:${Math.round(adjustment.offsetX || 0)} Y:${Math.round(adjustment.offsetY || 0)} scale:${Number(adjustment.scale || 1).toFixed(2)}`;
+      const scalePercent = Math.round((Number(adjustment.scale || 1) || 1) * 100);
+      if (scaleInput && document.activeElement !== scaleInput) scaleInput.value = String(scalePercent);
+      if (scaleValue) scaleValue.textContent = `${scalePercent}%`;
       frameLabel.textContent = item.label;
       hitLayer.replaceChildren();
       const seenHitSelectors = new Set();
@@ -7705,18 +7740,35 @@ class GameView {
       selectLayoutKey(select.value);
       updateFrame();
     });
+    defaultFamilySelect?.addEventListener("change", () => {
+      session.defaultFamily = defaultFamilySelect.value === "mobile" ? "mobile" : "desktop";
+      const nextProfile = cloneProfile(this.loadDefaultLayoutAdjustmentProfile(layout, session.defaultFamily));
+      profile = nextProfile;
+      session.profile = nextProfile;
+      selectedKey = nextProfile.selectedKey || selectedKey || "discard.self";
+      session.selectedKey = selectedKey;
+      select.value = selectedKey;
+      updateFrame();
+    });
     snapSelect.addEventListener("change", () => {
       snap = snapSelect.value;
       session.snap = snap;
       localStorage.setItem("anmikaLayoutAdjustmentSnap", snap);
     });
+    scaleInput?.addEventListener("input", () => {
+      const adjustment = ensureAdjustment();
+      adjustment.scale = Math.max(0.5, Math.min(1.5, Number(scaleInput.value || 100) / 100));
+      if (scaleValue) scaleValue.textContent = `${Math.round(adjustment.scale * 100)}%`;
+      updateFrame();
+    });
     overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
       if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
-      if (session.scope === "default") this.saveDefaultLayoutAdjustmentProfile(profile, layout);
+      if (session.scope === "default") this.saveDefaultLayoutAdjustmentProfile(profile, layout, session.defaultFamily || this.layoutDeviceFamily());
       else this.saveLayoutAdjustmentProfile(profile, layout);
+      const defaultTargetLabel = (session.defaultFamily || this.layoutDeviceFamily()) === "mobile" ? "スマホ用" : "PC用";
       warning.textContent = validation.ok
-        ? (session.scope === "default" ? "全アカウント共通のデフォルトとして保存しました" : "この端末用に保存しました")
+        ? (session.scope === "default" ? `全アカウント共通の${defaultTargetLabel}デフォルトとして保存しました` : "この端末用に保存しました")
         : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
       setTimeout(() => {
         this.layoutAdjustmentSession = null;
@@ -7824,18 +7876,21 @@ class GameView {
       };
       const visibleRects = () => [
         rectOf(".center-info"),
-        rectOf(".seat-bottom .hand-row"),
+        rectOf(".seat-bottom .seat-mini-name"),
+        rectOf(".seat-bottom .hand-region-slot"),
         rectOf(".seat-bottom .meld-area .exposed-tiles"),
         rectOf(".seat-bottom .nuki-dora-area .exposed-tiles"),
-        rectOf(".discard-bottom"),
-        rectOf(".seat-right .hand-row"),
+        rectOf(".discard-bottom .discard-grid"),
+        rectOf(".seat-right .seat-mini-name"),
+        rectOf(".seat-right .hand-region-slot"),
         rectOf(".seat-right .meld-area .exposed-tiles"),
         rectOf(".seat-right .nuki-dora-area .exposed-tiles"),
-        rectOf(".discard-right"),
-        rectOf(".seat-top .hand-row"),
+        rectOf(".discard-right .discard-grid"),
+        rectOf(".seat-top .seat-mini-name"),
+        rectOf(".seat-top .hand-region-slot"),
         rectOf(".seat-top .meld-area .exposed-tiles"),
         rectOf(".seat-top .nuki-dora-area .exposed-tiles"),
-        rectOf(".discard-top"),
+        rectOf(".discard-top .discard-grid"),
       ].filter(Boolean);
       const isOffscreen = (rect, pad = 2) =>
         rect.left < pad ||

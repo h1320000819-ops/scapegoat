@@ -149,6 +149,18 @@ body {
   padding: 5px 7px;
 }
 
+.layout-adjust-panel input[type="range"] {
+  accent-color: #ffd15c;
+  width: 100%;
+}
+
+.layout-adjust-panel [data-layout-scale-value] {
+  color: #fff8d8;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+}
+
 .layout-adjust-current {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 7px;
@@ -5383,6 +5395,18 @@ button:hover {
   font: inherit;
   min-height: 32px;
   padding: 5px 7px;
+}
+
+.layout-adjust-panel input[type="range"] {
+  accent-color: #ffd15c;
+  width: 100%;
+}
+
+.layout-adjust-panel [data-layout-scale-value] {
+  color: #fff8d8;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
 }
 
 .layout-adjust-current {
