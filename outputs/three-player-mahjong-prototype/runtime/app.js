@@ -6785,6 +6785,9 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
   ["discard.self", "自分の捨て牌", ".discard-bottom .discard-grid"],
   ["discard.right", "右側プレイヤーの捨て牌", ".discard-right .discard-grid"],
   ["discard.top", "上側プレイヤーの捨て牌", ".discard-top .discard-grid"],
+  ["flower.self", "自分の華牌", ".seat-bottom .nuki-dora-area"],
+  ["flower.right", "右側プレイヤーの華牌", ".seat-right .nuki-dora-area"],
+  ["flower.top", "上側プレイヤーの華牌", ".seat-top .nuki-dora-area"],
   ["assist.controls", "自動和了・鳴きなし", ".assist-controls"],
   ["control.reload", "画面再読み込み", ".table-reload-button"],
   ...["self", "right", "top"].flatMap((seat) =>
@@ -6802,7 +6805,7 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
     ])
   ),
   ...["self", "right", "top"].flatMap((seat) =>
-    [1, 2, 3, 4].map((count) => [
+    [0, 1, 2, 3, 4].map((count) => [
       `draw.${seat}.meld${count}`,
       `${seat === "self" ? "自分" : seat === "right" ? "右側プレイヤー" : "上側プレイヤー"}のツモ牌：${count}副露`,
       `.seat-${seat === "self" ? "bottom" : seat} .drawn-tile-slot`,
@@ -7267,6 +7270,11 @@ class GameView {
     const family = options.family === "desktop" || options.family === "mobile" ? options.family : this.layoutDeviceFamily();
     return `${family}:${orientation}`;
   }
+  shouldUseSafeTableLayout() {
+    const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+    return viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
+  }
   legacyLayoutAdjustmentStorageKey(layout = null) {
     return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
   }
@@ -7364,6 +7372,7 @@ class GameView {
     if (item.key.startsWith("icon.")) return item.key;
     if (item.key.startsWith("name.")) return item.key;
     if (item.key.startsWith("discard.")) return item.key;
+    if (item.key.startsWith("flower.")) return item.key;
     if (item.key.startsWith("assist.")) return item.key;
     if (item.key.startsWith("control.")) return item.key;
     const seatClass = layoutSeatClassFromKey(item.key);
@@ -7377,7 +7386,7 @@ class GameView {
     }
     const meldCount = Math.max(0, Math.min(4, seat.querySelectorAll(".meld-area .meld-set").length));
     if (item.key.startsWith("meld.")) return meldCount ? `meld.${layoutSeatFromKey(item.key)}.count${meldCount}` : "";
-    if (item.key.startsWith("draw.")) return meldCount ? `draw.${layoutSeatFromKey(item.key)}.meld${meldCount}` : "";
+    if (item.key.startsWith("draw.")) return `draw.${layoutSeatFromKey(item.key)}.meld${meldCount}`;
     return "";
   }
   targetElementForLayoutItem(table, item) {
@@ -7439,6 +7448,9 @@ class GameView {
       ["自分の手牌", rectOf(".seat-bottom .hand-region-slot")],
       ["右側プレイヤーの手牌", rectOf(".seat-right .hand-region-slot")],
       ["上側プレイヤーの手牌", rectOf(".seat-top .hand-region-slot")],
+      ["自分の華牌", rectOf(".seat-bottom .nuki-dora-area")],
+      ["右側プレイヤーの華牌", rectOf(".seat-right .nuki-dora-area")],
+      ["上側プレイヤーの華牌", rectOf(".seat-top .nuki-dora-area")],
       ["自分の副露", rectOf(".seat-bottom .meld-area .exposed-tiles")],
       ["右側プレイヤーの副露", rectOf(".seat-right .meld-area .exposed-tiles")],
       ["上側プレイヤーの副露", rectOf(".seat-top .meld-area .exposed-tiles")],
@@ -7501,7 +7513,13 @@ class GameView {
       table = liveTable;
       layout = this.calculateSafeTableLayout();
       table.classList.add("layout-adjusting");
-      this.applySafeTableLayout(table, layout);
+      if (this.shouldUseSafeTableLayout()) {
+        this.applySafeTableLayout(table, layout);
+      } else {
+        table.classList.remove("auto-safe-layout");
+        delete table.dataset.layoutProfile;
+        delete table.dataset.layoutAdjustment;
+      }
       this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
       return table;
     };
@@ -7824,9 +7842,7 @@ class GameView {
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
     const fitClasses = ["layout-tight-right", "layout-ultra-tight-right", "layout-fit-screen"];
-    const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
-    const isMobileLandscape = viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
+    const isMobileLandscape = this.shouldUseSafeTableLayout();
     if (isMobileLandscape) {
       table.classList.add(...(this.tableFitClasses || []));
       const layout = this.calculateSafeTableLayout();
@@ -7879,17 +7895,17 @@ class GameView {
         rectOf(".seat-bottom .seat-mini-name"),
         rectOf(".seat-bottom .hand-region-slot"),
         rectOf(".seat-bottom .meld-area .exposed-tiles"),
-        rectOf(".seat-bottom .nuki-dora-area .exposed-tiles"),
+        rectOf(".seat-bottom .nuki-dora-area"),
         rectOf(".discard-bottom .discard-grid"),
         rectOf(".seat-right .seat-mini-name"),
         rectOf(".seat-right .hand-region-slot"),
         rectOf(".seat-right .meld-area .exposed-tiles"),
-        rectOf(".seat-right .nuki-dora-area .exposed-tiles"),
+        rectOf(".seat-right .nuki-dora-area"),
         rectOf(".discard-right .discard-grid"),
         rectOf(".seat-top .seat-mini-name"),
         rectOf(".seat-top .hand-region-slot"),
         rectOf(".seat-top .meld-area .exposed-tiles"),
-        rectOf(".seat-top .nuki-dora-area .exposed-tiles"),
+        rectOf(".seat-top .nuki-dora-area"),
         rectOf(".discard-top .discard-grid"),
       ].filter(Boolean);
       const isOffscreen = (rect, pad = 2) =>
