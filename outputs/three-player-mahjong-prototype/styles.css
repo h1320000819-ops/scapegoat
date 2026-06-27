@@ -78,7 +78,7 @@ body {
   min-height: 18px;
   min-width: 18px;
   pointer-events: auto;
-  position: absolute;
+  position: fixed;
   touch-action: none;
   z-index: 12002;
 }
@@ -5334,7 +5334,7 @@ button:hover {
   min-height: 18px;
   min-width: 18px;
   pointer-events: auto;
-  position: absolute;
+  position: fixed;
   touch-action: none;
   z-index: 12002;
 }

@@ -7324,6 +7324,25 @@ class GameView {
     table.classList.add(...fitClasses);
     this.tableFitClasses = fitClasses;
   }
+  applyTableLayoutForCurrentViewport(table, profile = null, activeKey = "") {
+    const fitClasses = this.mobileTableFitClasses();
+    const isMobileLandscape = this.shouldUseSafeTableLayout();
+    if (isMobileLandscape) {
+      this.applyMobileTableFitClasses(table);
+      const layout = this.calculateSafeTableLayout();
+      this.applySafeTableLayout(table, layout);
+      this.applyUserLayoutAdjustments(table, layout, profile, activeKey);
+      return { layout, isMobileLandscape };
+    }
+    table.classList.remove("auto-safe-layout");
+    table.classList.remove(...fitClasses);
+    this.tableFitClasses = [];
+    delete table.dataset.layoutProfile;
+    delete table.dataset.layoutAdjustment;
+    const layout = this.calculateSafeTableLayout();
+    this.applyUserLayoutAdjustments(table, layout, profile, activeKey);
+    return { layout, isMobileLandscape };
+  }
   legacyLayoutAdjustmentStorageKey(layout = null) {
     return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
   }
@@ -7655,17 +7674,8 @@ class GameView {
       if (!liveTable) return null;
       table = liveTable;
       table.classList.add("layout-adjusting");
-      if (this.shouldUseSafeTableLayout()) {
-        this.applyMobileTableFitClasses(table);
-        layout = this.calculateSafeTableLayout();
-        this.applySafeTableLayout(table, layout);
-      } else {
-        layout = this.calculateSafeTableLayout();
-        table.classList.remove("auto-safe-layout");
-        delete table.dataset.layoutProfile;
-        delete table.dataset.layoutAdjustment;
-      }
-      this.applyUserLayoutAdjustments(table, layout, profile, selectedKey);
+      const applied = this.applyTableLayoutForCurrentViewport(table, profile, selectedKey);
+      layout = applied.layout;
       return table;
     };
     refreshLiveTable();
@@ -8021,19 +8031,12 @@ class GameView {
     if (typeof window === "undefined") return;
     const table = this.root.querySelector(".mahjong-table");
     if (!table) return;
-    const fitClasses = this.mobileTableFitClasses();
     const isMobileLandscape = this.shouldUseSafeTableLayout();
     if (isMobileLandscape) {
-      this.applyMobileTableFitClasses(table);
-      const layout = this.calculateSafeTableLayout();
-      this.applySafeTableLayout(table, layout);
-      this.applyUserLayoutAdjustments(table, layout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+      const { layout } = this.applyTableLayoutForCurrentViewport(table, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
       window.requestAnimationFrame(() => {
         if (!this.shouldUseSafeTableLayout() || !this.root.contains(table)) return;
-        this.applyMobileTableFitClasses(table);
-        const nextLayout = this.calculateSafeTableLayout();
-        this.applySafeTableLayout(table, nextLayout);
-        this.applyUserLayoutAdjustments(table, nextLayout, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+        this.applyTableLayoutForCurrentViewport(table, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
         this.layoutAdjustmentSession?.refresh?.();
       });
       if (!layout.validation.ok) {
@@ -8051,12 +8054,7 @@ class GameView {
         });
       }
     } else {
-      table.classList.remove("auto-safe-layout");
-      table.classList.remove(...fitClasses);
-      this.tableFitClasses = [];
-      delete table.dataset.layoutProfile;
-      delete table.dataset.layoutAdjustment;
-      this.applyUserLayoutAdjustments(table, this.calculateSafeTableLayout(), this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+      this.applyTableLayoutForCurrentViewport(table, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
       return;
     }
     window.requestAnimationFrame(() => {
@@ -8133,8 +8131,8 @@ class GameView {
       const overlapping = intersects(meldBox, centerBox, 6) || intersects(meldBox, riverBox, 6) || intersects(seatBox, riverBox, 2);
       const wholeLayoutBad = layoutIsBad();
       if (!offscreen && !overlapping && !wholeLayoutBad) return;
-      this.applyMobileTableFitClasses(table);
-      this.applyUserLayoutAdjustments(table, this.calculateSafeTableLayout(), this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+      this.applyTableLayoutForCurrentViewport(table, this.layoutAdjustmentSession?.profile || null, this.layoutAdjustmentSession?.selectedKey || "");
+      this.layoutAdjustmentSession?.refresh?.();
     });
   }
   bindAppControls() {
