@@ -6863,6 +6863,8 @@ const layoutBucketFromCount = (count) => {
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION = 2;
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:sharedTable";
 const DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:defaultTable";
+const DEFAULT_TABLE_LAYOUT_REMOTE_PREFIX = "layout-default";
+const DEFAULT_TABLE_LAYOUT_REMOTE_TABLE = "app_settings";
 const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
 const isPrivilegedLayoutUser = (user) => Boolean(
   user?.id === SUPER_CLUB_CREATOR_USER_ID ||
@@ -6882,6 +6884,8 @@ class GameView {
     this.tableRelayoutFrame = null;
     this.lastRelayoutViewport = null;
     this.currentRenderedState = null;
+    this.remoteDefaultLayoutSyncedKeys = new Set();
+    this.remoteDefaultLayoutInFlight = new Set();
     this.suppressSettingsOutsideClickUntil = 0;
     this.boundSettingsOutsidePointer = (event) => {
       if (event.type === "click" && Date.now() < this.suppressSettingsOutsideClickUntil) {
@@ -6914,6 +6918,7 @@ class GameView {
     };
     globalThis.__anmikaResultOkClick = resultOkClick;
     if (typeof window !== "undefined") window.__anmikaResultOkClick = resultOkClick;
+    window.setTimeout?.(() => this.syncRemoteDefaultLayoutAdjustmentProfiles(), 0);
   }
   bindStaticControls(start, draw) {
     start?.addEventListener("click", this.handlers.onStart);
@@ -6942,6 +6947,7 @@ class GameView {
   render(state) {
     this.currentRenderedState = state;
     const isTableScreen = state.screen === "game" || state.screen === "replayViewer";
+    if (isTableScreen) this.syncRemoteDefaultLayoutAdjustmentProfiles();
     if (globalThis.document) {
       globalThis.document.title = state.screen === "replayViewer" ? "牌譜" : "アンミカロケット";
       globalThis.document.documentElement.dataset.gameScreen = isTableScreen ? "on" : "off";
@@ -7327,6 +7333,95 @@ class GameView {
   defaultLayoutAdjustmentStorageKey(layout = null, family = null) {
     return `${DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey({ family })}`;
   }
+  defaultLayoutRemoteKey(layout = null, family = null) {
+    return `${DEFAULT_TABLE_LAYOUT_REMOTE_PREFIX}:${this.sharedLayoutDeviceKey({ family })}`;
+  }
+  supabaseLayoutConfig() {
+    const sync = loadOnlineSync();
+    const publicConfig = globalThis.ANMIKA_SUPABASE_CONFIG || {};
+    const supabaseUrl = (sync?.supabaseUrl || publicConfig.url || "").replace(/\/$/, "");
+    const anonKey = sync?.anonKey || publicConfig.anonKey || "";
+    const accessToken = sync?.accessToken || localStorage.getItem("anmikaAccessToken") || "";
+    return { supabaseUrl, anonKey, accessToken };
+  }
+  normalizeRemoteDefaultLayoutProfile(profile, layout = null, family = null) {
+    if (!profile?.adjustments || typeof profile.adjustments !== "object") return null;
+    return {
+      version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+      scope: "default-all-accounts",
+      rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      deviceKey: this.sharedLayoutDeviceKey({ family }),
+      deviceFamily: family || this.layoutDeviceFamily(),
+      selectedKey: profile.selectedKey || "",
+      adjustments: profile.adjustments || {},
+      updatedAt: Number(profile.updatedAt || Date.now()),
+      remote: true,
+    };
+  }
+  writeDefaultLayoutAdjustmentProfileToLocal(profile, layout = null, family = null) {
+    const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
+    if (!normalized) return false;
+    localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
+    return true;
+  }
+  async fetchRemoteDefaultLayoutAdjustmentProfile(layout = null, family = null) {
+    const { supabaseUrl, anonKey, accessToken } = this.supabaseLayoutConfig();
+    if (!supabaseUrl || !anonKey) return null;
+    const key = this.defaultLayoutRemoteKey(layout, family);
+    const url = `${supabaseUrl}/rest/v1/${DEFAULT_TABLE_LAYOUT_REMOTE_TABLE}?key=eq.${encodeURIComponent(key)}&select=value&limit=1`;
+    const headers = {
+      apikey: String(anonKey),
+      Authorization: `Bearer ${accessToken && isLikelyJwtToken(accessToken) ? accessToken : anonKey}`,
+      "Content-Type": "application/json",
+    };
+    const response = await fetch(url, { headers, cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return null;
+    const rows = await response.json().catch(() => []);
+    return this.normalizeRemoteDefaultLayoutProfile(rows?.[0]?.value, layout, family);
+  }
+  async saveRemoteDefaultLayoutAdjustmentProfile(profile, layout = null, family = null) {
+    const user = this.currentRenderedState?.currentUser || authRepository.getCurrentUser?.();
+    if (!isPrivilegedLayoutUser(user)) return false;
+    const { supabaseUrl, anonKey, accessToken } = this.supabaseLayoutConfig();
+    if (!supabaseUrl || !anonKey || !accessToken || !isLikelyJwtToken(accessToken)) return false;
+    const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
+    if (!normalized) return false;
+    const response = await fetch(`${supabaseUrl}/rest/v1/${DEFAULT_TABLE_LAYOUT_REMOTE_TABLE}?on_conflict=key`, {
+      method: "POST",
+      headers: {
+        ...buildSupabaseAuthHeaders({ anonKey, accessToken, json: true }),
+        Prefer: "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify({
+        key: this.defaultLayoutRemoteKey(layout, family),
+        value: normalized,
+        updated_by: isUuidString(user?.id) ? user.id : null,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => null);
+    if (!response?.ok) return false;
+    this.remoteDefaultLayoutSyncedKeys.add(this.defaultLayoutRemoteKey(layout, family));
+    return true;
+  }
+  syncRemoteDefaultLayoutAdjustmentProfiles() {
+    if (typeof window === "undefined") return;
+    const families = ["desktop", "mobile"];
+    families.forEach((family) => {
+      const key = this.defaultLayoutRemoteKey(null, family);
+      if (this.remoteDefaultLayoutSyncedKeys.has(key) || this.remoteDefaultLayoutInFlight.has(key)) return;
+      this.remoteDefaultLayoutInFlight.add(key);
+      this.fetchRemoteDefaultLayoutAdjustmentProfile(null, family)
+        .then((profile) => {
+          if (!profile) return;
+          this.writeDefaultLayoutAdjustmentProfileToLocal(profile, null, family);
+          this.scheduleTableRelayout({ force: true });
+        })
+        .finally(() => {
+          this.remoteDefaultLayoutInFlight.delete(key);
+          this.remoteDefaultLayoutSyncedKeys.add(key);
+        });
+    });
+  }
   loadLegacyLayoutAdjustmentProfile(layout = null) {
     const readSaved = (key) => {
       try {
@@ -7398,8 +7493,7 @@ class GameView {
     }));
   }
   saveDefaultLayoutAdjustmentProfile(profile, layout = null, family = null) {
-    const key = this.defaultLayoutAdjustmentStorageKey(layout, family);
-    localStorage.setItem(key, JSON.stringify({
+    const normalized = {
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
       scope: "default-all-accounts",
       rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
@@ -7408,7 +7502,13 @@ class GameView {
       selectedKey: profile.selectedKey || "",
       adjustments: profile.adjustments || {},
       updatedAt: Date.now(),
-    }));
+    };
+    localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
+    return this.saveRemoteDefaultLayoutAdjustmentProfile(normalized, layout, family)
+      .catch((error) => {
+        console.warn("[LayoutDefault] remote save failed", error);
+        return false;
+      });
   }
   actualLayoutKeyForItem(table, item) {
     if (item.key.startsWith("center.")) return item.key;
@@ -7847,14 +7947,18 @@ class GameView {
       if (scaleValue) scaleValue.textContent = `${Math.round(adjustment.scale * 100)}%`;
       updateFrame();
     });
-    overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
+    overlay.querySelector("[data-layout-save]").addEventListener("click", async () => {
       if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
-      if (session.scope === "default") this.saveDefaultLayoutAdjustmentProfile(profile, layout, session.defaultFamily || this.layoutDeviceFamily());
-      else this.saveLayoutAdjustmentProfile(profile, layout);
+      const sharedSaved = session.scope === "default"
+        ? await this.saveDefaultLayoutAdjustmentProfile(profile, layout, session.defaultFamily || this.layoutDeviceFamily())
+        : false;
+      if (session.scope !== "default") this.saveLayoutAdjustmentProfile(profile, layout);
       const defaultTargetLabel = (session.defaultFamily || this.layoutDeviceFamily()) === "mobile" ? "スマホ用" : "PC用";
       warning.textContent = validation.ok
-        ? (session.scope === "default" ? `全アカウント共通の${defaultTargetLabel}デフォルトとして保存しました` : "この端末用に保存しました")
+        ? (session.scope === "default"
+          ? (sharedSaved ? `全アカウント共通の${defaultTargetLabel}デフォルトとして保存しました` : `${defaultTargetLabel}デフォルトをこの端末に保存しました。共有保存は未完了です`)
+          : "この端末用に保存しました")
         : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
       setTimeout(() => {
         this.layoutAdjustmentSession = null;
