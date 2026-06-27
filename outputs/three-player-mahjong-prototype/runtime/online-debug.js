@@ -226,6 +226,9 @@
     loginId: profile.login_id || profile.user_id,
     displayName: profile.display_name || "Player",
     iconUrl: profile.icon_url || "",
+    email: profile.email || profile.auth_email || "",
+    isSuperCreator: profile.user_id === SUPER_CLUB_CREATOR_USER_ID || String(profile.email || profile.auth_email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL,
+    is_super_creator: profile.user_id === SUPER_CLUB_CREATOR_USER_ID || String(profile.email || profile.auth_email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL,
   });
   const uniqueMembershipRows = (rows) => {
     const byClub = new Map();

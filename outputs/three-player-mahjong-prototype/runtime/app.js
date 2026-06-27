@@ -86,6 +86,8 @@ const UI_ASSETS = {
 };
 const CURRENT_USER_ID = "p1";
 const DEBUG_AUTH_ENABLED = true;
+const SUPER_CLUB_CREATOR_USER_ID = "3cda7884-9464-4b26-b7a2-bd79cc5ab65f";
+const SUPER_CLUB_CREATOR_EMAIL = "h1320000819@gamil.com";
 const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
   rocket19Enabled: true,
   baibaEnabled: true,
@@ -2013,6 +2015,29 @@ const soundTypeForEvent = (event) => {
   if (event.type === "win") return event.winType === "tsumo" ? (soundTypeForPochiTsumo(event.scoreResult) || "tsumo") : event.winType === "ron" ? "ron" : "";
   if (event.type === "riichi" || event.type === "fever_riichi") return event.feverRiichiActive || event.type === "fever_riichi" ? "feverRiichi" : "riichi";
   return "";
+};
+const onlineSoundEventKey = (event) => {
+  if (!event?.type) return "";
+  const tileId = event.tile?.id || event.selectedTileId || event.tileId || event.tiles?.map?.((tile) => tile?.id).filter(Boolean).join(",") || "";
+  return `${event.type}:${event.playerId || event.winnerId || event.actorPlayerId || ""}:${event.turnIndex ?? ""}:${event.kanType || ""}:${event.winType || ""}:${tileId}`;
+};
+const isOnlineStateReplayReason = (reason = "") => {
+  const text = String(reason || "");
+  return !text ||
+    text === "state" ||
+    text === "emit" ||
+    text.includes("join") ||
+    text.includes("rejoin") ||
+    text.includes("connect") ||
+    text.includes("resync") ||
+    text.includes("sync") ||
+    text.includes("startup") ||
+    text.includes("watchdog") ||
+    text.includes("recover") ||
+    text.includes("initial") ||
+    text.includes("needInitialState") ||
+    text.includes("requestState") ||
+    text.includes("clockExpired");
 };
 const replayAnnouncementForEvent = (event) => {
   if (!event?.type) return null;
@@ -4293,7 +4318,7 @@ class GameController {
     if (this.state.optimisticDiscardRequestId) {
       const meta = next.onlineMeta || {};
       const incomingVersion = Number(next.version || 0);
-      const currentVersion = Number(sync?.version || this.state.version || 0);
+      const currentVersion = Number(this.state.version || 0);
       const isOwnDiscardAck = ["discard", "riichi"].includes(meta.reason) &&
         meta.publishedBy === currentUserId &&
         incomingVersion > currentVersion;
@@ -4332,51 +4357,56 @@ class GameController {
         turnIndex: next.turnIndex,
       })
       : "";
-    for (const nextPlayer of next.players ?? []) {
-      const previousPlayer = this.state.players?.find?.((player) => player.id === nextPlayer.id);
-      const previousDiscards = previousPlayer?.discardedTiles ?? [];
-      const nextDiscards = nextPlayer.discardedTiles ?? [];
-      if (nextDiscards.length > previousDiscards.length) {
-        for (let index = previousDiscards.length; index < nextDiscards.length; index++) {
-          const discard = nextDiscards[index];
-          playGameSound("discard", { key: `discard:${nextPlayer.id}:${index}:${discard?.turnIndex ?? ""}:${discard?.tile?.id || ""}` });
-        }
-      }
-    }
-    const latestEvent = next.handLog?.events?.at?.(-1);
-    if (latestEvent?.type === "riichi") {
-      const announcementKey = `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}`;
+    const meta = next.onlineMeta || {};
+    const currentVersion = Number(this.state.version || 0);
+    const incomingVersion = Number(next.version || 0);
+    const isFreshActionState = incomingVersion > currentVersion && !isOnlineStateReplayReason(meta.reason);
+    const previousEventKeys = new Set((this.state.handLog?.events ?? []).map(onlineSoundEventKey).filter(Boolean));
+    const nextEvents = next.handLog?.events ?? [];
+    const newEvents = isFreshActionState ? nextEvents.filter((event) => {
+      const key = onlineSoundEventKey(event);
+      return key && !previousEventKeys.has(key);
+    }) : [];
+    const primarySoundEvent = [...newEvents].reverse().find((event) => ["riichi", "fever_riichi", "pon", "kan", "ron", "tsumo", "win"].includes(event?.type))
+      || [...newEvents].reverse().find((event) => event?.type === "discard");
+    if (primarySoundEvent?.type === "riichi" || primarySoundEvent?.type === "fever_riichi") {
+      const isFever = primarySoundEvent.feverRiichiActive || primarySoundEvent.type === "fever_riichi";
+      const announcementKey = onlineSoundEventKey(primarySoundEvent);
       if (announcementKey !== this.lastDisplayedAnnouncementKey) {
         this.lastDisplayedAnnouncementKey = announcementKey;
         next.serverAnnouncement = {
-          text: latestEvent.feverRiichiActive ? "🔥フィーバーリーチ🔥" : "リーチ",
-          kind: latestEvent.feverRiichiActive ? "fever-riichi" : "riichi",
-          playerId: latestEvent.playerId || "",
+          text: isFever ? "🔥フィーバーリーチ🔥" : "リーチ",
+          kind: isFever ? "fever-riichi" : "riichi",
+          playerId: primarySoundEvent.playerId || "",
         };
-        playGameSound(latestEvent.feverRiichiActive ? "feverRiichi" : "riichi", { key: `riichi:${latestEvent.playerId}:${latestEvent.turnIndex}:${latestEvent.feverRiichiActive ? "fever" : "normal"}` });
+        playGameSound(isFever ? "feverRiichi" : "riichi", { key: `online:${announcementKey}` });
         if (this.announcementClearTimer) clearTimeout(this.announcementClearTimer);
+        const clearKind = next.serverAnnouncement.kind;
         this.announcementClearTimer = setTimeout(() => {
-          if (this.state.serverAnnouncement?.kind === next.serverAnnouncement.kind) {
+          if (this.state.serverAnnouncement?.kind === clearKind) {
             this.state.serverAnnouncement = null;
             this.emit();
           }
-        }, latestEvent.feverRiichiActive ? 2400 : 1500);
+        }, isFever ? 2400 : 1500);
       }
+    } else if (primarySoundEvent?.type === "pon" || primarySoundEvent?.type === "kan") {
+      this.showActionAnnouncement(primarySoundEvent, { targetState: next, durationMs: primarySoundEvent.type === "kan" ? 1600 : 1200 });
+    } else if (primarySoundEvent?.type === "discard" && meta.publishedBy !== currentUserId) {
+      playGameSound("discard", { key: `online:${onlineSoundEventKey(primarySoundEvent)}` });
     }
     const announcementKind = next.phase === "showingWinAnnouncement"
       ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
       : "";
     const winSoundType = soundTypeForWinAnnouncementKind(announcementKind);
-    if (winSoundType) {
+    if (winSoundType && isFreshActionState) {
       if (!this.playResultSoundOnce(next, "announcement")) {
         playGameSound(winSoundType, {
           key: `win:${next.handLog?.result?.resultId || next.turnIndex || ""}:${announcementKind}`,
         });
       }
     }
-    this.showLatestCallAnnouncement(next.handLog?.events?.slice?.(-8) ?? [], { targetState: next });
     if (next.handLog?.result && next.phase !== "showingWinAnnouncement" && nextResultKey && nextResultKey !== this.lastDisplayedResultKey) {
-      this.playResultSoundOnce(next, "snapshot");
+      if (isFreshActionState) this.playResultSoundOnce(next, "snapshot");
       this.lastDisplayedResultKey = nextResultKey;
       next.resultCountdownStartedAt = Number(next.resultCountdownStartedAt || 0) || Date.now();
       next.resultCountdownResultId = getCurrentResultId(next);
@@ -5784,7 +5814,7 @@ class GameController {
       const requestId = `discard-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const uiBefore = performance.now?.() ?? Date.now();
       console.log("[DiscardClick] optimistic update");
-      playGameSound("discard", { key: `click-discard:${requestId}` });
+      if (onlineActionType === "discard") playGameSound("discard", { key: `click-discard:${requestId}` });
       this.applyOptimisticDiscard(tileId, requestId, { isRiichiDiscard: isRiichiDiscardPhase });
       console.log("[DiscardPerf] クリック → UI反映", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
       console.log("[DiscardAction] sent", { onlineActionType, tileId, requestId, version: loadOnlineSync()?.version });
@@ -5831,7 +5861,7 @@ class GameController {
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
-    playGameSound("discard", { key: `local-discard:${player.id}:${this.state.turnIndex}:${tileId}` });
+    if (!isRiichiDiscardPhase) playGameSound("discard", { key: `local-discard:${player.id}:${this.state.turnIndex}:${tileId}` });
     if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
       player.ippatsu = false;
       player.ippatsuOwnDrawStarted = false;
@@ -6745,6 +6775,10 @@ const resultMeldsInlineView = (state, winner) => {
   return melds ? `<span class="result-hand-meld-separator"></span><span class="result-melds-inline exposed-tiles">${melds}</span>` : "";
 };
 const LAYOUT_ADJUSTMENT_ITEMS = [
+  ["center.info", "卓の中央表示", ".center-info"],
+  ["icon.self", "自分のアイコン", ".hand-player-icon, .layout-only-bottom-icon"],
+  ["icon.right", "右側プレイヤーのアイコン", ".seat-right .seat-player-icon"],
+  ["icon.top", "上側プレイヤーのアイコン", ".seat-top .seat-player-icon"],
   ["discard.self", "自分の捨て牌", ".discard-bottom"],
   ["discard.right", "右側プレイヤーの捨て牌", ".discard-right"],
   ["discard.top", "上側プレイヤーの捨て牌", ".discard-top"],
@@ -6787,7 +6821,16 @@ const layoutBucketFromCount = (count) => {
 };
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION = 2;
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:sharedTable";
+const DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:defaultTable";
 const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
+const isPrivilegedLayoutUser = (user) => Boolean(
+  user?.id === SUPER_CLUB_CREATOR_USER_ID ||
+  String(user?.email || user?.authEmail || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL ||
+  user?.isSuperCreator ||
+  user?.is_super_creator ||
+  user?.isSuperClubCreator ||
+  user?.role === "super"
+);
 class GameView {
   constructor(root, handlers) {
     this.root = root;
@@ -6857,16 +6900,24 @@ class GameView {
   }
   render(state) {
     this.currentRenderedState = state;
+    const isTableScreen = state.screen === "game" || state.screen === "replayViewer";
     if (globalThis.document) {
       globalThis.document.title = state.screen === "replayViewer" ? "牌譜" : "アンミカロケット";
-      globalThis.document.documentElement.dataset.gameScreen = state.screen === "game" ? "on" : "off";
-      globalThis.document.body.dataset.gameScreen = state.screen === "game" ? "on" : "off";
+      globalThis.document.documentElement.dataset.gameScreen = isTableScreen ? "on" : "off";
+      globalThis.document.body.dataset.gameScreen = isTableScreen ? "on" : "off";
     }
     if (state.screen !== "game") {
-      this.layoutAdjustmentSession = null;
-      document.querySelector(".layout-adjust-overlay")?.remove();
+      if (!isTableScreen) {
+        this.layoutAdjustmentSession = null;
+        document.querySelector(".layout-adjust-overlay")?.remove();
+      }
       this.root.innerHTML = this.appShell(state);
       this.bindAppControls();
+      if (state.screen === "replayViewer") {
+        this.scheduleTableRelayout({ force: true });
+        this.restoreLayoutAdjustmentMode();
+        window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
+      }
       return;
     }
     globalThis.dispatchEvent?.(new CustomEvent("anmika-game-screen-active"));
@@ -6917,7 +6968,7 @@ class GameView {
     this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
-    this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode()));
+    this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode({ defaultProfile: b.dataset.layoutAdjustScope === "default" })));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
@@ -7215,6 +7266,9 @@ class GameView {
   layoutAdjustmentStorageKey(layout = null) {
     return `${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
   }
+  defaultLayoutAdjustmentStorageKey(layout = null) {
+    return `${DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
+  }
   loadLegacyLayoutAdjustmentProfile(layout = null) {
     const readSaved = (key) => {
       try {
@@ -7253,9 +7307,25 @@ class GameView {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
       if (saved?.version >= 1 && saved.adjustments) return normalizeProfile(saved);
     } catch {}
+    const defaultProfile = this.loadDefaultLayoutAdjustmentProfile(layout);
+    if (defaultProfile?.adjustments && Object.keys(defaultProfile.adjustments).length) {
+      return normalizeProfile({
+        ...defaultProfile,
+        inheritedDefault: true,
+        deviceKey: this.sharedLayoutDeviceKey(),
+      });
+    }
     const legacy = this.loadLegacyLayoutAdjustmentProfile(layout);
     if (legacy) return normalizeProfile({ ...legacy, version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), migratedFrom: legacy.deviceKey || "" });
     return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
+  }
+  loadDefaultLayoutAdjustmentProfile(layout = null) {
+    const key = this.defaultLayoutAdjustmentStorageKey(layout);
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || "null");
+      if (saved?.version >= 1 && saved.adjustments) return saved;
+    } catch {}
+    return { version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION, scope: "default-all-accounts", deviceKey: this.sharedLayoutDeviceKey(), adjustments: {} };
   }
   saveLayoutAdjustmentProfile(profile, layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
@@ -7269,7 +7339,21 @@ class GameView {
       updatedAt: Date.now(),
     }));
   }
+  saveDefaultLayoutAdjustmentProfile(profile, layout = null) {
+    const key = this.defaultLayoutAdjustmentStorageKey(layout);
+    localStorage.setItem(key, JSON.stringify({
+      version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+      scope: "default-all-accounts",
+      rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      deviceKey: this.sharedLayoutDeviceKey(),
+      selectedKey: profile.selectedKey || "",
+      adjustments: profile.adjustments || {},
+      updatedAt: Date.now(),
+    }));
+  }
   actualLayoutKeyForItem(table, item) {
+    if (item.key.startsWith("center.")) return item.key;
+    if (item.key.startsWith("icon.")) return item.key;
     if (item.key.startsWith("discard.")) return item.key;
     if (item.key.startsWith("assist.")) return item.key;
     if (item.key.startsWith("control.")) return item.key;
@@ -7381,12 +7465,15 @@ class GameView {
     this.stabilizeTableLayout();
     let layout = this.calculateSafeTableLayout();
     const cloneProfile = (value) => (typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value)));
+    const useDefaultProfile = Boolean(options.defaultProfile || (options.restore && this.layoutAdjustmentSession?.scope === "default"));
+    const baseProfile = useDefaultProfile ? this.loadDefaultLayoutAdjustmentProfile(layout) : this.loadLayoutAdjustmentProfile(layout);
     const session = options.restore && this.layoutAdjustmentSession
       ? this.layoutAdjustmentSession
       : {
-          profile: cloneProfile(this.loadLayoutAdjustmentProfile(layout)),
-          selectedKey: this.loadLayoutAdjustmentProfile(layout).selectedKey || "discard.self",
+          profile: cloneProfile(baseProfile),
+          selectedKey: baseProfile.selectedKey || "discard.self",
           snap: localStorage.getItem("anmikaLayoutAdjustmentSnap") || "4",
+          scope: useDefaultProfile ? "default" : "personal",
         };
     this.layoutAdjustmentSession = session;
     const profile = session.profile;
@@ -7412,7 +7499,7 @@ class GameView {
       <div class="layout-adjust-hit-layer" data-layout-hit-layer></div>
       <div class="layout-adjust-frame" data-layout-drag-frame><span data-layout-frame-label></span></div>
       <aside class="layout-adjust-panel">
-        <h2 data-layout-panel-drag-handle>表示位置調整</h2>
+        <h2 data-layout-panel-drag-handle>${session.scope === "default" ? "デフォルト描画設定" : "表示位置調整"}</h2>
         <label>調整する項目を選択
           <select data-layout-adjust-select>${LAYOUT_ADJUSTMENT_ITEMS.map((item) => `<option value="${item.key}">${escapeHtml(item.label)}</option>`).join("")}</select>
         </label>
@@ -7626,9 +7713,10 @@ class GameView {
     overlay.querySelector("[data-layout-save]").addEventListener("click", () => {
       if (!refreshLiveTable()) return;
       const validation = this.validateUserAdjustedLayout(table);
-      this.saveLayoutAdjustmentProfile(profile, layout);
+      if (session.scope === "default") this.saveDefaultLayoutAdjustmentProfile(profile, layout);
+      else this.saveLayoutAdjustmentProfile(profile, layout);
       warning.textContent = validation.ok
-        ? "この端末用に保存しました"
+        ? (session.scope === "default" ? "全アカウント共通のデフォルトとして保存しました" : "この端末用に保存しました")
         : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
       setTimeout(() => {
         this.layoutAdjustmentSession = null;
@@ -7843,6 +7931,7 @@ class GameView {
     this.root.querySelectorAll("[data-copy-club-id]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyText(b.dataset.copyClubId, "クラブIDをコピーしました")));
     this.root.querySelectorAll("[data-copy-table-url]").forEach((b) => b.addEventListener("click", () => this.handlers.onCopyTableUrl(b.dataset.copyTableUrl)));
     this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
+    this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode({ defaultProfile: b.dataset.layoutAdjustScope === "default" })));
     this.root.querySelectorAll("[data-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onOpenLogoutConfirm()));
     this.root.querySelectorAll("[data-confirm-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onConfirmLogout()));
     this.root.querySelectorAll("[data-cancel-logout]").forEach((b) => b.addEventListener("click", () => this.handlers.onCancelLogout()));
@@ -8433,6 +8522,7 @@ class GameView {
       uraDoraIndicators: snapshot.uraDoraIndicators ?? [],
       kanCount: snapshot.kanCount ?? 0,
       rakePool: snapshot.rakePool ?? 0,
+      currentUser: state.currentUser,
     };
     const replayViewerId = getValidReplayViewerId(snapshot, state.replayViewerId, replay);
     const viewerOptions = (replay.summary?.players ?? displayState.players.map((player) => ({ playerId: player.id, name: player.name }))).map((player) => `<option value="${player.playerId}" ${replayViewerId === player.playerId ? "selected" : ""}>${player.name}</option>`).join("");
@@ -8451,6 +8541,7 @@ class GameView {
     const visibleReplayPosition = getReplayVisiblePosition(replay, index);
     const isReplayFirstStep = visibleReplayPosition.position <= 0;
     const isReplayLastStep = visibleReplayPosition.position >= Math.max(0, visibleReplayPosition.visible.length - 1);
+    const canEditDefaultLayout = isPrivilegedLayoutUser(state.currentUser || authRepository.getCurrentUser());
     return `<section class="replay-screen" data-replay-screen>
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
@@ -8461,6 +8552,8 @@ class GameView {
         ${handSelect}
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
+        <button type="button" class="secondary" data-layout-adjust-open>表示位置調整</button>
+        ${canEditDefaultLayout ? `<button type="button" class="secondary" data-layout-adjust-open data-layout-adjust-scope="default">デフォルト描画設定</button>` : ""}
         <button type="button" data-copy-replay-url="${replay.summary?.replayId ?? replay.replayId}">牌譜URLコピー</button>
       </div>
     </section>`;
@@ -8533,6 +8626,8 @@ class GameView {
       ${state.isReplayView ? "" : this.reloadButton(state)}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
+      ${state.isReplayView ? this.layoutOnlyBottomIcon(viewer) : ""}
+      ${state.isReplayView ? this.layoutOnlyAssistControls(viewer) : ""}
       ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
       ${state.phase === "showingWinAnnouncement" ? this.winAnnouncement(state) : ""}
@@ -8671,6 +8766,9 @@ class GameView {
       : "avatar-human";
     return `<span class="seat-player-icon player-avatar ${avatarClass}" aria-hidden="true">${iconUrl ? `<img src="${escapeHtml(iconUrl)}" alt="" draggable="false" />` : initial}</span>`;
   }
+  layoutOnlyBottomIcon(player) {
+    return `<span class="hand-player-icon layout-adjust-only layout-only-bottom-icon" aria-hidden="true">${this.playerIconClean(player)}</span>`;
+  }
   playerSeatClean(player, seat, current, dealer) {
     if (!player) return "";
     const seatView = player.player ? player : null;
@@ -8711,6 +8809,14 @@ class GameView {
       <div class="assist-seat-status"><span>${escapeHtml(roleLabel)}</span><strong>${formatPointDisplay(player.score)}点</strong></div>
       <label class="assist-auto-win-control"><input type="checkbox" data-player-id="${player.id}" data-assist-auto-win ${autoWinChecked ? "checked" : ""} ${player.isRiichi ? "disabled" : ""} /> 自動和了</label>
       <label class="assist-no-call-control"><input type="checkbox" data-player-id="${player.id}" data-assist-no-call ${assist.noCall ? "checked" : ""} /> 鳴きなし</label>
+    </div>`;
+  }
+  layoutOnlyAssistControls(player) {
+    const roleLabel = getSeatRoleLabel(this.currentStateForClock, player?.id).replace(/家$/, "") || "";
+    return `<div class="assist-controls layout-adjust-only" aria-hidden="true">
+      <div class="assist-seat-status"><span>${escapeHtml(roleLabel)}</span><strong>${formatPointDisplay(player?.score ?? 0)}点</strong></div>
+      <label class="assist-auto-win-control"><input type="checkbox" disabled /> 自動和了</label>
+      <label class="assist-no-call-control"><input type="checkbox" disabled /> 鳴きなし</label>
     </div>`;
   }
   discardAreaClean(player, seat) {

@@ -1899,6 +1899,24 @@ button:hover {
   flex: 0 0 auto;
 }
 
+.assist-controls.layout-adjust-only {
+  display: none;
+  pointer-events: none;
+}
+
+.hand-player-icon.layout-adjust-only {
+  display: none;
+  pointer-events: none;
+}
+
+.mahjong-table.layout-adjusting .assist-controls.layout-adjust-only {
+  display: grid;
+}
+
+.mahjong-table.layout-adjusting .hand-player-icon.layout-adjust-only {
+  display: inline-flex;
+}
+
 .seat-top .exposed-row {
   align-items: flex-start;
   flex-direction: column;

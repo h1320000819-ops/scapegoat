@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260627-rake-min-half-b";
+const CACHE_NAME = "anmika-pwa-20260628-sound-action-once-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v7";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260627-rake-min-half-b",
-  "/runtime/app.js?v=20260627-rake-min-half-b",
-  "/runtime/online-debug.js?v=20260627-rake-min-half-b",
-  "/runtime/pwa.js?v=20260627-rake-min-half-b",
+  "/styles.css?v=20260628-sound-action-once-a",
+  "/runtime/app.js?v=20260628-sound-action-once-a",
+  "/runtime/online-debug.js?v=20260628-sound-action-once-a",
+  "/runtime/pwa.js?v=20260628-sound-action-once-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
