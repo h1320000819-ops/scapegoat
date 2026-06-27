@@ -7554,12 +7554,13 @@ class GameView {
       const liveTable = this.root.querySelector(".mahjong-table");
       if (!liveTable) return null;
       table = liveTable;
-      layout = this.calculateSafeTableLayout();
       table.classList.add("layout-adjusting");
       if (this.shouldUseSafeTableLayout()) {
         this.applyMobileTableFitClasses(table);
+        layout = this.calculateSafeTableLayout();
         this.applySafeTableLayout(table, layout);
       } else {
+        layout = this.calculateSafeTableLayout();
         table.classList.remove("auto-safe-layout");
         delete table.dataset.layoutProfile;
         delete table.dataset.layoutAdjustment;
@@ -7743,6 +7744,30 @@ class GameView {
       clampAdjustmentToSafeRect();
       updateFrame();
     };
+    const screenDeltaToElementDelta = (dx, dy) => {
+      const element = this.targetElementForLayoutItem(table, currentItem());
+      if (!element) return { dx, dy };
+      let angle = 0;
+      let node = element;
+      while (node && node instanceof Element) {
+        const transform = getComputedStyle(node).transform;
+        if (transform && transform !== "none") {
+          try {
+            const matrix = new DOMMatrixReadOnly(transform);
+            angle += Math.atan2(matrix.b, matrix.a);
+          } catch {}
+        }
+        if (node === table) break;
+        node = node.parentElement;
+      }
+      if (!angle) return { dx, dy };
+      const cos = Math.cos(-angle);
+      const sin = Math.sin(-angle);
+      return {
+        dx: dx * cos - dy * sin,
+        dy: dx * sin + dy * cos,
+      };
+    };
     let dragStart = null;
     let panelDragStart = null;
     const beginDrag = (event, key = "") => {
@@ -7784,7 +7809,8 @@ class GameView {
       const dx = event.clientX - dragStart.x;
       const dy = event.clientY - dragStart.y;
       if (Math.abs(dx) + Math.abs(dy) < 1) return;
-      moveSelected(dx, dy);
+      const movement = screenDeltaToElementDelta(dx, dy);
+      moveSelected(movement.dx, movement.dy);
       dragStart = { x: event.clientX, y: event.clientY };
     });
     const endOverlayDrag = () => {
@@ -7878,6 +7904,14 @@ class GameView {
       updateFrame();
     });
     updateFrame();
+    if (this.shouldUseSafeTableLayout()) {
+      window.requestAnimationFrame(() => {
+        if (document.body.contains(overlay)) updateFrame();
+      });
+      window.setTimeout?.(() => {
+        if (document.body.contains(overlay)) updateFrame();
+      }, 140);
+    }
   }
   stabilizeTableLayout() {
     if (typeof window === "undefined") return;
