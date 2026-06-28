@@ -844,11 +844,8 @@ button:hover {
   transform-origin: center;
 }
 
-.replay-reveal-top .hand-row > .tile,
-.replay-reveal-top .hand-row > .tile-button,
-.replay-reveal-top .drawn-tile > .tile,
-.replay-reveal-top .drawn-tile > .tile-button {
-  transform: rotate(180deg);
+.replay-reveal-top .hand-row {
+  transform: translateY(-18px) rotate(180deg);
   transform-origin: center;
 }
 
@@ -1439,6 +1436,23 @@ button:hover {
   margin: 22px 0 14px;
 }
 
+.settings-sound-volume {
+  display: grid;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.settings-sound-volume span {
+  color: #fff4bf;
+  font-weight: 950;
+}
+
+.settings-sound-volume input[type="range"] {
+  accent-color: #ffd15c;
+  width: 100%;
+}
+
 .settings-logout-row {
   display: flex;
   justify-content: flex-start;
@@ -1705,6 +1719,12 @@ button:hover {
   position: absolute;
   transform: translateX(-50%);
   z-index: 30;
+}
+
+@media (min-width: 921px) {
+  .replay-toolbar-bottom {
+    bottom: 132px;
+  }
 }
 
 @media (max-width: 920px) and (orientation: landscape) {
@@ -4292,6 +4312,14 @@ button:hover {
 
 .seat-top .hand-row > .meld-area {
   justify-content: flex-start;
+}
+
+.seat-top .hand-row > .meld-area .oldest-meld {
+  order: -10;
+}
+
+.seat-top .hand-row > .meld-area .newest-meld {
+  order: 10;
 }
 
 .seat-top .hand-row.has-melds > .drawn-tile-slot {

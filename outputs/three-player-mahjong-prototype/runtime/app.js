@@ -1856,6 +1856,10 @@ const countIndicatorDora = (indicators, tiles) => {
   const doraTypes = indicators.map(getDoraTileTypeFromIndicator);
   return tiles.reduce((count, tile) => count + doraTypes.filter((type) => type === tileKindKey(tile)).length, 0);
 };
+const COUNTED_YAKUMAN_BONUS_POINTS = 20;
+const REAL_YAKUMAN_BONUS_POINTS = 40;
+const isRealYakumanYaku = (yaku) => Boolean(yaku?.isYakuman && !yaku?.isCountedYakuman);
+const hasRealYakumanYaku = (yakuList = []) => yakuList.some(isRealYakumanYaku);
 const getBaseScoreFromHan = (han, isDealer) => {
   const child = {
     1: { basePoints: 1, limitType: "通常" },
@@ -1948,6 +1952,20 @@ const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/s
 const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", baiba: "baiba.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
 const gameSoundPools = new Map();
+const GAME_SOUND_VOLUME_STORAGE_KEY = "anmikaGameSoundVolume";
+const DEFAULT_GAME_SOUND_VOLUME = 0.35;
+const gameSoundVolume = () => {
+  const value = Number(localStorage.getItem(GAME_SOUND_VOLUME_STORAGE_KEY) ?? DEFAULT_GAME_SOUND_VOLUME);
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : DEFAULT_GAME_SOUND_VOLUME));
+};
+const setGameSoundVolume = (value) => {
+  const next = Math.max(0, Math.min(1, Number(value) || 0));
+  localStorage.setItem(GAME_SOUND_VOLUME_STORAGE_KEY, String(next));
+  for (const audio of [...gameSoundCache.values(), ...[...gameSoundPools.values()].flat()]) {
+    audio.volume = next;
+  }
+  return next;
+};
 const soundFileNamesForType = (type) => {
   const files = GAME_SOUND_FILES[type];
   return Array.isArray(files) ? files : files ? [files] : [];
@@ -1973,8 +1991,8 @@ const getGameSoundAudio = (type) => {
   if (!fileName || typeof Audio === "undefined") return null;
   if (!gameSoundCache.has(type)) {
     const audio = new Audio(soundAssetPath(fileName));
-    audio.preload = "auto";
-    audio.volume = 0.92;
+    audio.preload = "metadata";
+    audio.volume = gameSoundVolume();
     gameSoundCache.set(type, audio);
   }
   return gameSoundCache.get(type);
@@ -1984,13 +2002,12 @@ const getGameSoundPool = (type) => {
   if (!gameSoundPools.has(type)) {
     const fileName = selectSupportedSoundFile(type);
     if (!fileName) return [];
-    const poolSize = type === "discard" ? 10 : 5;
+    const poolSize = type === "discard" ? 4 : 2;
     const pool = Array.from({ length: poolSize }, () => {
       const audio = new Audio(soundAssetPath(fileName));
-      audio.preload = "auto";
-      audio.volume = 0.92;
+      audio.preload = "metadata";
+      audio.volume = gameSoundVolume();
       audio.__anmikaStartedAt = 0;
-      audio.load?.();
       return audio;
     });
     gameSoundPools.set(type, pool);
@@ -2071,14 +2088,16 @@ const announcementClassForKind = (kind) => (
 );
 const playAudioFile = (fileName, volume = 0.92) => {
   const audio = new Audio(soundAssetPath(fileName));
-  audio.preload = "auto";
-  audio.volume = volume;
+  audio.preload = "metadata";
+  audio.volume = Math.min(gameSoundVolume(), volume);
   audio.currentTime = 0;
   return audio.play();
 };
 const playGameSound = (type, { key = "" } = {}) => {
   const fileNames = soundFileNamesForType(type);
   if (!fileNames.length || typeof Audio === "undefined") return;
+  const volume = gameSoundVolume();
+  if (volume <= 0) return;
   const nowMs = Date.now();
   const cacheKey = key || `${type}:${nowMs}`;
   globalThis.__anmikaSoundHistory ??= {};
@@ -2089,7 +2108,7 @@ const playGameSound = (type, { key = "" } = {}) => {
   globalThis.__anmikaSoundHistory[cacheKey] = nowMs;
   try {
     const audio = getPlayableGameSoundAudio(type) || new Audio(soundAssetPath(selectSupportedSoundFile(type) || fileNames[0]));
-    audio.volume = 0.92;
+    audio.volume = volume;
     audio.currentTime = 0;
     audio.play()?.catch?.(() => {
       const fallback = fileNames.find((fileName) => fileName !== selectSupportedSoundFile(type));
@@ -2100,26 +2119,6 @@ const playGameSound = (type, { key = "" } = {}) => {
 const unlockGameSounds = () => {
   if (globalThis.__anmikaGameSoundsUnlocked || typeof Audio === "undefined") return;
   globalThis.__anmikaGameSoundsUnlocked = true;
-  Object.keys(GAME_SOUND_FILES).forEach((type) => {
-    getGameSoundPool(type).forEach((audio) => {
-      try {
-        const originalVolume = audio.volume;
-        audio.muted = true;
-        audio.volume = 0;
-        audio.currentTime = 0;
-        const promise = audio.play?.();
-        promise?.then?.(() => {
-          audio.pause?.();
-          audio.currentTime = 0;
-          audio.muted = false;
-          audio.volume = originalVolume || 0.92;
-        })?.catch?.(() => {
-          audio.muted = false;
-          audio.volume = originalVolume || 0.92;
-        });
-      } catch {}
-    });
-  });
 };
 if (typeof document !== "undefined") {
   ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
@@ -3104,19 +3103,19 @@ class RuleEngine {
     }
     return evaluateWinExplicit(state, player, tile);
   }
-  calculateScore(state, _winner, input) {
+  calculateScore(state, winner, input) {
     const normalDora = input.doraCount ?? countIndicatorDora(state.doraIndicators, input.winningTiles);
     const colored = input.winningTiles.filter((tile) => ["red", "blue", "gold", "turquoise"].includes(tile.color)).length;
     const bonusSourceTiles = [...input.winningTiles, ...(input.nukiDoraTiles ?? [])];
     const blueTileCount = bonusSourceTiles.filter((tile) => tile.color === "blue" && !tile.isPochi).length;
     const goldTileCount = bonusSourceTiles.filter((tile) => tile.color === "gold").length;
     const nuki = input.nukiDoraCount ?? 0;
-    const uraDora = input.uraDoraCount ?? 0;
-    const hasRealYakuman = input.yaku.some((yaku) => yaku.isYakuman && !yaku.isCountedYakuman);
+    const uraDora = input.uraDoraCount ?? ((input.isRiichi || winner?.isRiichi) ? countIndicatorDora(state.uraDoraIndicators ?? [], input.winningTiles) : 0);
+    const hasRealYakuman = hasRealYakumanYaku(input.yaku);
     const yakuHan = hasRealYakuman ? 14 : input.yaku.reduce((sum, yaku) => sum + yaku.han, 0);
     const doraHan = hasRealYakuman ? 0 : normalDora + colored + nuki + uraDora;
     const totalHan = hasRealYakuman ? 14 : yakuHan + doraHan;
-    const isAllRedScoreView = isTsumoLossless3maState(state) || Object.prototype.hasOwnProperty.call(score.bonuses ?? {}, "chipPending") || Boolean(score.tsumoPayments);
+    const isAllRedScoreView = isTsumoLossless3maState(state);
     if (isAllRedScoreView) {
       const isDealer = input.winnerId === input.dealerPlayerId;
       const honba = Number(state.round?.honba ?? state.honba ?? 0);
@@ -3179,9 +3178,9 @@ class RuleEngine {
       };
     }
     const { basePoints, limitType } = getBaseScoreFromHan(totalHan, input.winnerId === input.dealerPlayerId);
-    const countedYakumanBonus = totalHan >= 14 && !hasRealYakuman ? 20 : 0;
-    const realYakumanBonus = hasRealYakuman ? 40 : 0;
-    const uraDoraBonus = (input.uraDoraCount ?? 0) * 5;
+    const countedYakumanBonus = totalHan >= 14 && !hasRealYakuman ? COUNTED_YAKUMAN_BONUS_POINTS : 0;
+    const realYakumanBonus = hasRealYakuman ? REAL_YAKUMAN_BONUS_POINTS : 0;
+    const uraDoraBonus = uraDora * 5;
     const honbaBonus = Number(input.honba ?? state.round?.honba ?? state.honba ?? 0) * 5;
     const ippatsuBonus = input.isIppatsu ? 5 : 0;
     const baibaMultiplier = input.baibaMultiplier ?? getVisibleBaibaMultiplierDetails(state, { pochiColor: input.pochiColor || null }).multiplier;
@@ -3200,9 +3199,9 @@ class RuleEngine {
     const visibleDora = normalDora + colored + nuki;
     const doraDetails = [
       visibleDora > 0 ? { name: "ドラ", han: visibleDora } : null,
-      (input.uraDoraCount ?? 0) > 0 ? { name: "裏ドラ", han: input.uraDoraCount ?? 0 } : null,
+      uraDora > 0 ? { name: "裏ドラ", han: uraDora } : null,
     ].filter(Boolean);
-    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType: hasRealYakuman ? "本役満" : limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: input.uraDoraCount ?? 0 }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
+    return { yakuHan, doraHan, totalHan, han: totalHan, basePoints, bonusPoints, beforeBaibaPoints, totalPoints, finalPoints: totalPoints, limitType: hasRealYakuman ? "本役満" : limitType, isDealer: input.winnerId === input.dealerPlayerId, isTsumo: input.winType === "tsumo", paymentPerPlayer: input.winType === "tsumo" ? totalPoints : undefined, winnerGain: payments[input.winnerId], payments, selectedWait: input.selectedWait ?? input.winningTiles.at(-1), pochiActivated: false, pointMultiplier: 1, baibaMultiplier, yaku: input.yaku, yakuList: input.yaku, doraDetails, dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora }, bonuses: { goldTile: goldTileCount * 5, blueTile: blueTileBonus, rocket: 0, baiba: totalPoints - beforeBaibaPoints, uraDora: uraDoraBonus, honba: honbaBonus, ippatsu: ippatsuBonus, countedYakuman: countedYakumanBonus, realYakuman: realYakumanBonus } };
   }
 }
 
@@ -3758,7 +3757,7 @@ class GameController {
       return;
     }
     if (this.state.pendingAction) {
-      this.skipPendingAction();
+      this.resolvePendingActionTimeout();
       return;
     }
     const tile = player.drawnTile ?? player.hand.at(-1);
@@ -4422,7 +4421,7 @@ class GameController {
       this.showActionAnnouncement(primarySoundEvent, { targetState: next, durationMs: primarySoundEvent.type === "kan" ? 1600 : 1200 });
     } else {
       const discardSoundEvent = primarySoundEvent?.type === "discard" ? primarySoundEvent : fallbackRemoteDiscardEvent;
-      if (discardSoundEvent && (discardSoundEvent.playerId || meta.publishedBy) !== currentUserId && !discardSoundEvent.isRiichiDiscard) {
+      if (discardSoundEvent && !discardSoundEvent.isRiichiDiscard) {
         playGameSound("discard", { key: `online:${onlineSoundEventKey(discardSoundEvent) || `${discardSoundEvent.playerId}:${incomingVersion}`}` });
       }
     }
@@ -5847,7 +5846,6 @@ class GameController {
       const requestId = `discard-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const uiBefore = performance.now?.() ?? Date.now();
       console.log("[DiscardClick] optimistic update");
-      if (onlineActionType === "discard") playGameSound("discard", { key: `click-discard:${requestId}` });
       this.applyOptimisticDiscard(tileId, requestId, { isRiichiDiscard: isRiichiDiscardPhase });
       console.log("[DiscardPerf] クリック → UI反映", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
       console.log("[DiscardAction] sent", { onlineActionType, tileId, requestId, version: loadOnlineSync()?.version });
@@ -5997,6 +5995,19 @@ class GameController {
       this.waitForHumanDiscard(action.playerId);
     }
     this.emit();
+  }
+  resolvePendingActionTimeout() {
+    const pending = this.state.pendingAction;
+    if (!pending) return;
+    const options = getActionOptions(pending);
+    const timeoutTsumo = !isSocketAuthoritativeGame() && !isTsumoLossless3maState(this.state)
+      ? options.find((option) => option.type === "tsumo" && option.options?.forceChoice)
+      : null;
+    if (timeoutTsumo) {
+      this.confirmPendingActionFromOption(timeoutTsumo);
+      return;
+    }
+    this.skipPendingAction();
   }
   finishHand(input) {
     const winner = this.getPlayer(input.winnerId ?? getCurrentPlayer(this.state).id);
@@ -6259,17 +6270,24 @@ class GameController {
       return;
     }
     const options = [];
+    const riichiAnkanGroup = player.isRiichi && canDeclareKanNow(this.state)
+      ? findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])])
+      : null;
+    const shouldOfferWhitePochiTsumoChoice = !isTsumoLossless3maState(this.state) &&
+      player.isRiichi &&
+      isWhitePochiTile(player.drawnTile) &&
+      Boolean(riichiAnkanGroup?.[0]) &&
+      sameTileKind(player.drawnTile, riichiAnkanGroup[0]);
     if (player.drawnTile) {
       if (isWhitePochiTile(player.drawnTile) && player.isRiichi && resolvePochiWin(this.state, player, player.drawnTile, this.ruleEngine)) {
-        options.push({ type: "tsumo", playerId, sourceTile: player.drawnTile, options: { pochi: true } });
+        options.push({ type: "tsumo", playerId, sourceTile: player.drawnTile, options: { pochi: true, forceChoice: shouldOfferWhitePochiTsumoChoice } });
       } else {
         const tsumo = this.ruleEngine.canWin(this.state, player, player.drawnTile);
-        if (tsumo.canWin) options.push({ type: "tsumo", playerId, sourceTile: player.drawnTile, options: { yaku: tsumo.yaku } });
+        if (tsumo.canWin) options.push({ type: "tsumo", playerId, sourceTile: player.drawnTile, options: { yaku: tsumo.yaku, forceChoice: shouldOfferWhitePochiTsumoChoice } });
       }
     }
     if (player.isRiichi && canDeclareKanNow(this.state)) {
-      const four = findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]);
-      if (four) options.push({ type: "kan", playerId, options: { kanType: "ankan" } });
+      if (riichiAnkanGroup) options.push({ type: "kan", playerId, options: { kanType: "ankan" } });
     }
     if (!player.isRiichi && canDeclareKanNow(this.state)) {
       const four = findFourOfAKind([...player.hand, ...(player.drawnTile ? [player.drawnTile] : [])]);
@@ -6380,7 +6398,7 @@ class GameController {
     const player = this.getPlayer(playerId);
     const filteredOptions = filterActionOptionsByAssistSettings(options, player);
     const winOption = filteredOptions.find((option) => option.type === "ron" || option.type === "tsumo");
-    if ((player.isRiichi || player.assistSettings?.autoWin) && winOption) {
+    if ((player.isRiichi || player.assistSettings?.autoWin) && winOption && !winOption.options?.forceChoice) {
       this.confirmPendingActionFromOption(winOption);
       return true;
     }
@@ -7017,6 +7035,10 @@ class GameView {
     this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
     this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode({ defaultProfile: b.dataset.layoutAdjustScope === "default" })));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
+    this.root.querySelectorAll("[data-sound-volume]").forEach((input) => input.addEventListener("input", () => {
+      const volume = setGameSoundVolume(Number(input.value || 0) / 100);
+      this.root.querySelectorAll("[data-sound-volume-value]").forEach((item) => { item.textContent = `${Math.round(volume * 100)}%`; });
+    }));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
     this.scheduleTableRelayout({ force: true });
@@ -8846,7 +8868,7 @@ class GameView {
     if (state.isReplayRevealHands) {
       for (const [seatName, seatView] of Object.entries(viewState.seats ?? {})) {
         seatView.handTiles = (seatView.handTiles ?? []).map((item) => ({ ...item, faceDown: false }));
-        if (seatName === "right" || seatName === "top") seatView.handTiles.reverse();
+        if (seatName === "right") seatView.handTiles.reverse();
         if (seatView.drawnTile) seatView.drawnTile = { ...seatView.drawnTile, faceDown: false };
         seatView.isViewer = true;
         seatView.isReplayRevealHands = true;
@@ -8936,6 +8958,7 @@ class GameView {
     return `<aside class="settings-panel">
       <h2>設定</h2>
       ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
+      <label class="settings-sound-volume">音量 <span data-sound-volume-value>${Math.round(gameSoundVolume() * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(gameSoundVolume() * 100)}" data-sound-volume /></label>
       <button type="button" class="secondary" data-layout-adjust-open>表示位置調整</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
@@ -9048,6 +9071,8 @@ class GameView {
     const nukiRegion = this.nukiAreaClean(player, true);
     const layoutParts = seat === "bottom"
       ? [handRegion, drawnRegion, meldRegion, nukiRegion]
+      : seat === "top" && seatView?.isReplayRevealHands
+        ? [handRegion, drawnRegion, meldRegion, nukiRegion]
       : [nukiRegion, meldRegion, drawnRegion, handRegion];
     return `<section class="player-seat seat-${seat} ${active ? "active" : ""} ${isDealer ? "dealer" : ""} ${isDisconnected ? "disconnected" : ""} ${revealClass}">
       <div class="seat-identity">${seat === "bottom" ? "" : this.playerIconClean(player)}<div class="seat-mini-name">${escapeHtml(player.name)}${isDisconnected ? `<span class="disconnect-badge">回線落ち</span>` : ""}${player.isRiichi ? `<span class="riichi-badge ${player.feverRiichiActive ? "fever" : ""}">${player.feverRiichiActive ? "フィーバーリーチ" : "リーチ"}</span>` : ""}</div></div>

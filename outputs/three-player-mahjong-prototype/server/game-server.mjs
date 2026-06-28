@@ -687,11 +687,52 @@ const clearEndedRoomSeatForUser = (room, userId) => {
     room.players.delete(userId);
     changed = true;
   }
+  if (asArray(room.state.players).some((player) => player?.id === userId)) {
+    room.state.players = asArray(room.state.players).filter((player) => player?.id !== userId);
+    room.state.currentPlayerIndex = Math.max(0, Math.min(Number(room.state.currentPlayerIndex || 0), room.state.players.length - 1));
+    if (room.state.playerClocks && typeof room.state.playerClocks === "object") delete room.state.playerClocks[userId];
+    changed = true;
+  }
   if (changed) {
     room.state.lastHandLeaveSyncedBy ??= [];
     room.state.lastHandLeaveSyncedBy = [...new Set([...asArray(room.state.lastHandLeaveSyncedBy), userId])];
+    appendHandEvent(room.state, { type: "forcedLeaveAfterDisconnect", playerId: userId, turnIndex: room.state.turnIndex ?? 0 });
   }
   return changed;
+};
+const hasEnoughPlayersForNextServerHand = (state) => {
+  const playerCount = asArray(state?.players).filter((player) => player?.id).length;
+  const seatCount = normalizeServerSeats(state?.seats).filter((seat) => seat.playerId || seat.playerType === "cpu").length;
+  return playerCount >= 3 && seatCount >= 3;
+};
+const stopServerGameForMissingPlayers = (state, reason = "playerLeftAfterDisconnect") => {
+  state.pendingAction = null;
+  state.phase = "gameEnded";
+  state.isWaitingForHumanAction = false;
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.finalResult ??= {
+    createdAt: now(),
+    reason,
+    finalScores: Object.fromEntries(asArray(state.players).map((player) => [player.id, Number(player.score || 0)])),
+    settlement: null,
+  };
+  state.handLog ??= { handId: `socket-${state.activeTableId || state.tableId || "table"}-${Date.now()}`, events: [] };
+  state.handLog.result ??= { type: "gameEnded", reason };
+  state.handLog.result.finalResult ??= state.finalResult;
+  appendHandEvent(state, { type: "gameEnded", reason, turnIndex: state.turnIndex ?? 0 });
+  return state;
+};
+const syncInterruptedRoomStatusToDb = async (room) => {
+  if (!room?.state || room.state.phase !== "gameEnded") return false;
+  if (room.state.finalResult?.reason !== "playerLeftAfterDisconnect") return false;
+  if (!hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
+  await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: { status: "waiting" },
+  }).catch((error) => console.warn("[Reconnect] failed to mark interrupted table waiting", { tableId: room.tableId, error: error?.message || String(error) }));
+  return true;
 };
 const waitingDisplayName = (row) =>
   row?.users?.display_name || row?.users?.login_id || row?.display_name || `Player ${String(row?.user_id || "").slice(0, 8)}`;
@@ -783,6 +824,7 @@ const startNextTsumoLosslessHanchanIfReady = async (room) => {
     new Promise((resolve) => setTimeout(() => resolve([]), 1200)),
   ]).catch((error) => console.warn("[PointLimit] bounded next-hanchan check failed", { tableId: room.tableId, gameId: room.gameId, error: error?.message || String(error) }));
   await syncDeclaredLastHandLeaves(room);
+  await syncDisconnectedLastHandLeaves(room);
   await fillRoomSeatsFromWaitingList(room);
   const players = nextHanchanPlayersFromSeats(room.state);
   if (players.length < 3) {
@@ -863,7 +905,10 @@ const syncDeclaredLastHandLeaves = async (room) => {
   return changed;
 };
 const syncDisconnectedLastHandLeaves = async (room) => {
-  if (!room?.state || room.state.phase !== "gameEnded") return false;
+  if (!room?.state) return false;
+  const canLeaveNow = room.state.phase === "gameEnded" ||
+    Boolean(room.state.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(room.state.phase));
+  if (!canLeaveNow) return false;
   if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
     room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
   }
@@ -874,7 +919,7 @@ const syncDisconnectedLastHandLeaves = async (room) => {
     room.disconnectedLeaveSyncedUserIds.add(userId);
     changed = clearEndedRoomSeatForUser(room, userId) || changed;
     await syncSeatLeaveToDb(room.tableId, userId)
-      .then((updated) => console.warn("[Reconnect] disconnected player left after game end", { tableId: room.tableId, userId, dbUpdated: updated }))
+      .then((updated) => console.warn("[Reconnect] disconnected player left after ended hand", { tableId: room.tableId, userId, dbUpdated: updated }))
       .catch((error) => console.error("[Reconnect] failed to leave disconnected player", { tableId: room.tableId, userId, error: error?.message || String(error) }));
   }
   room.updatedAt = now();
@@ -2930,6 +2975,12 @@ const findServerAnkanCandidate = (player, { allowRiichi = false } = {}) => {
   }
   return null;
 };
+const canChooseWhitePochiTsumoOrAnkan = (state, player, kanTile) =>
+  !isTsumoLossless3maState(state) &&
+  Boolean(player?.isRiichi) &&
+  isServerWhitePochiTile(player?.drawnTile) &&
+  Boolean(kanTile) &&
+  sameTileKind(player.drawnTile, kanTile);
 const findServerKakanCandidate = (player) => {
   for (const meld of ensureArray(player?.melds)) {
     if (meld?.type !== "pon" || !meld?.tiles?.[0]) continue;
@@ -3279,6 +3330,10 @@ const isServerFuritenForWaits = (player, waits) => {
   const waitKeys = new Set(ensureArray(waits).map(tileKindKey));
   return ensureArray(player?.discardedTiles).some((discard) => waitKeys.has(tileKindKey(discard?.tile || discard)));
 };
+const COUNTED_YAKUMAN_BONUS_POINTS = 20;
+const REAL_YAKUMAN_BONUS_POINTS = 40;
+const isServerRealYakumanYaku = (yaku) => Boolean(yaku?.isYakuman && !yaku?.isCountedYakuman);
+const hasServerRealYakumanYaku = (yakuList = []) => ensureArray(yakuList).some(isServerRealYakumanYaku);
 const getServerBaseScoreFromHan = (han, isDealer) => {
   const h = Math.max(1, Number(han || 1));
   if (isDealer) {
@@ -3468,10 +3523,10 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
   const winningTiles = [...ensureArray(player.hand), ...(tile ? [tile] : []), ...ensureArray(player.melds).flatMap((meld) => ensureArray(meld.tiles))].filter((item) => !isFlowerTile(item));
   const bonusSourceTiles = [...winningTiles, ...ensureArray(player.nukiDoraTiles)];
   const hasYakuman = ensureArray(yaku).some((item) => item.isYakuman);
-  const hasRealYakuman = ensureArray(yaku).some((item) => item.isYakuman && !item.isCountedYakuman);
+  const hasRealYakuman = hasServerRealYakumanYaku(yaku);
   const yakuHan = hasYakuman ? 14 : ensureArray(yaku).reduce((sum, item) => sum + Number(item.han || 0), 0);
   const normalDora = hasYakuman ? 0 : countServerIndicatorDora(state.doraIndicators, winningTiles);
-  const uraDora = hasYakuman || !player.isRiichi ? 0 : countServerIndicatorDora(state.uraDoraIndicators, winningTiles);
+  const uraDora = !player.isRiichi ? 0 : countServerIndicatorDora(state.uraDoraIndicators, winningTiles);
   const colored = hasYakuman ? 0 : winningTiles.filter((tileItem) => ["red", "blue", "gold", "turquoise"].includes(tileItem.color)).length;
   const nuki = hasYakuman ? 0 : ensureArray(player.nukiDoraTiles).length;
   const doraHan = normalDora + colored + nuki + uraDora;
@@ -3545,8 +3600,8 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
   const uraDoraBonus = uraDora * 5;
   const honbaBonus = Number(state.round?.honba ?? state.honba ?? 0) * 5;
   const ippatsuBonus = ensureArray(yaku).some((item) => item.name === "一発") ? 5 : 0;
-  const countedYakumanBonus = !hasYakuman && totalHan >= 14 ? 20 : 0;
-  const realYakumanBonus = hasYakuman ? 40 : 0;
+  const countedYakumanBonus = !hasRealYakuman && totalHan >= 14 ? COUNTED_YAKUMAN_BONUS_POINTS : 0;
+  const realYakumanBonus = hasRealYakuman ? REAL_YAKUMAN_BONUS_POINTS : 0;
   const bonusPoints = blueTileBonus + goldTileBonus + uraDoraBonus + honbaBonus + ippatsuBonus + countedYakumanBonus + realYakumanBonus;
   const baibaDetails = getServerBaibaMultiplierDetails(state, {
     includeUra: player.isRiichi,
@@ -3802,9 +3857,11 @@ const queueServerSelfDrawOptions = (state, player) => {
   if (feverPlayer && feverPlayer.id !== player.id) return beginServerRiichiAutoDiscard(state, player);
   const options = [];
   const canKanNow = canServerDeclareKanNow(state);
+  const riichiAnkanTile = player.isRiichi && canKanNow ? findServerAnkanCandidate(player, { allowRiichi: true }) : null;
+  const shouldOfferWhitePochiTsumoChoice = canChooseWhitePochiTsumoOrAnkan(state, player, riichiAnkanTile);
   if (canServerTsumo(state, player)) {
     const option = { type: "tsumo", playerId: player.id, sourceTile: player.drawnTile || null, tile: player.drawnTile || null };
-    if (player.isRiichi || player.assistSettings?.autoWin) {
+    if ((player.isRiichi || player.assistSettings?.autoWin) && !shouldOfferWhitePochiTsumoChoice) {
       applyServerAction(state, { playerId: player.id, actionType: "tsumo", payload: { action: option, sourceTile: player.drawnTile || null } });
       return true;
     }
@@ -3817,8 +3874,7 @@ const queueServerSelfDrawOptions = (state, player) => {
     if (kakan) options.push({ type: "kan", playerId: player.id, sourceTile: kakan.tile, tile: kakan.tile, options: { kanType: "kakan", meldTile: kakan.meld?.tiles?.[0] } });
   }
   if (player.isRiichi && canKanNow) {
-    const kanTile = findServerAnkanCandidate(player, { allowRiichi: true });
-    if (kanTile) options.push({ type: "kan", playerId: player.id, sourceTile: kanTile, tile: kanTile, options: { kanType: "ankan" } });
+    if (riichiAnkanTile) options.push({ type: "kan", playerId: player.id, sourceTile: riichiAnkanTile, tile: riichiAnkanTile, options: { kanType: "ankan" } });
   }
   const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
   if (riichiDiscardTileIds.length > 0) {
@@ -4417,6 +4473,7 @@ const applyServerAction = (state, event) => {
     const allOk = requiredOkPlayerIds.length === 0 || requiredOkPlayerIds.every((id) => state.resultOkPlayerIds.includes(id));
     if (!allOk) return state;
     if (continueAfterServerFeverWin(state)) return state;
+    if (!hasEnoughPlayersForNextServerHand(state)) return stopServerGameForMissingPlayers(state);
     if (isTsumoLossless3maState(state)) {
       const result = state.handLog?.result;
       if (shouldEndTsumoLosslessHanchanAfterResult(state, result)) {
@@ -4874,6 +4931,19 @@ const applyServerClockTimeout = (state) => {
     return true;
   }
   if (state.pendingAction?.playerId === playerId) {
+    const pendingOptions = ensureArray(state.pendingAction.options);
+    const pendingKan = pendingOptions.find((option) => option?.type === "kan" && option?.options?.kanType === "ankan");
+    const timeoutTsumo = canChooseWhitePochiTsumoOrAnkan(state, player, pendingKan?.tile || pendingKan?.sourceTile)
+      ? pendingOptions.find((option) => option?.type === "tsumo")
+      : null;
+    if (timeoutTsumo) {
+      applyServerAction(state, {
+        playerId,
+        actionType: "tsumo",
+        payload: { action: timeoutTsumo, sourceTile: timeoutTsumo.sourceTile || timeoutTsumo.tile || player.drawnTile || null, reason: "timeout" },
+      });
+      return true;
+    }
     applyServerAction(state, {
       playerId,
       actionType: "skip",
@@ -5594,6 +5664,10 @@ const applyAutoResultOk = (state) => {
   state.handLog.result.resultOkPlayerIds = [...state.resultOkPlayerIds];
   appendHandEvent(state, { type: "resultOkAuto", playerId: null, resultOkPlayerIds: [...state.resultOkPlayerIds], turnIndex: state.turnIndex ?? 0 });
   if (continueAfterServerFeverWin(state)) return true;
+  if (!hasEnoughPlayersForNextServerHand(state)) {
+    stopServerGameForMissingPlayers(state);
+    return true;
+  }
   if (isTsumoLossless3maState(state)) {
     const result = state.handLog?.result;
     if (shouldEndTsumoLosslessHanchanAfterResult(state, result)) {
@@ -5642,6 +5716,7 @@ const scheduleRoomResultTimeout = (room) => {
         return;
       }
       queueResultSideEffectsOnce(room, timerResultId, "resultOkAuto");
+      await syncDisconnectedLastHandLeaves(room);
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
         return;
@@ -5660,6 +5735,7 @@ const scheduleRoomResultTimeout = (room) => {
       persistRoom(room);
       await syncDeclaredLastHandLeaves(room);
       await syncDisconnectedLastHandLeaves(room);
+      await syncInterruptedRoomStatusToDb(room);
       broadcastState(room);
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
@@ -6008,6 +6084,7 @@ io.on("connection", (socket) => {
           const endedResultId = getCurrentResultId(room.state) || room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || "gameEnded";
           queueResultSideEffectsOnce(room, endedResultId, "resultOkAlreadyGameEnded");
           const changed = (await syncDeclaredLastHandLeaves(room)) || (await syncDisconnectedLastHandLeaves(room));
+          await syncInterruptedRoomStatusToDb(room);
           if (changed) {
             room.version = Number(room.version || 0) + 1;
             room.state.version = room.version;
@@ -6028,6 +6105,7 @@ io.on("connection", (socket) => {
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         const resultSyncId = getCurrentResultId(room.state);
         queueResultSideEffectsOnce(room, resultSyncId, "resultOk");
+        await syncDisconnectedLastHandLeaves(room);
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
@@ -6087,6 +6165,7 @@ io.on("connection", (socket) => {
         queueResultSideEffectsOnce(room, finalSyncId, "resultOkGameEnded");
         await syncDeclaredLastHandLeaves(room);
         await syncDisconnectedLastHandLeaves(room);
+        await syncInterruptedRoomStatusToDb(room);
       }
       persistRoom(room);
       if (requestId) {

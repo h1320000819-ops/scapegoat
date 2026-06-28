@@ -275,6 +275,19 @@
         padding: 8px 0;
       }
       .table-seat-line { grid-template-columns: 56px minmax(120px, 1fr) auto auto auto; }
+      .stats-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        white-space: nowrap;
+      }
+      .stats-row strong,
+      .stats-row span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .stats-row span {
+        justify-self: end;
+      }
       .seat-row { grid-template-columns: 56px 1fr 96px; }
       .point-user-row { grid-template-columns: minmax(120px, 1fr) 96px 128px 72px 72px; }
       .online-player-row { grid-template-columns: minmax(180px, 1fr) 100px 1.5fr; }
@@ -308,6 +321,9 @@
         .top, .club-main-header, .row, .table-seat-line, .seat-row, .point-user-row, .online-player-row {
           display: grid;
           grid-template-columns: 1fr;
+        }
+        .stats-row {
+          grid-template-columns: minmax(0, 1fr) auto;
         }
         .rule-check-grid { grid-template-columns: 1fr; }
         .table-card { max-width: none; }
@@ -518,7 +534,7 @@
 
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
     <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
-    <script src="../runtime/online-debug.js?v=20260628-default-overwrites-local-a"></script>
+    <script src="../runtime/online-debug.js?v=20260629-top-meld-order-a"></script>
   </body>
 </html>
 

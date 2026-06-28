@@ -4183,7 +4183,7 @@
     const text = Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
     return `${numeric >= 0 ? "+" : ""}${text}${unit}`;
   };
-  const statRowHtml = (label, value) => `<div class="table-seat-line"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`;
+  const statRowHtml = (label, value) => `<div class="table-seat-line stats-row"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>`;
   const fetchMyReplayStats = async (clubId = selectedClubId()) => {
     const user = requireUser();
     if (!clubId) throw new Error("スタッツを見るクラブを選択してください。");
@@ -4239,6 +4239,9 @@
         if (payload.isTobi === true || payload.isTobi === "true" || statNumber(row.final_score) <= 0) tobiCount += 1;
         allRedScoreDelta += statNumber(row.final_score) - 35000;
       });
+      const allRedAverageRank = allRedHalfCount
+        ? `${((rankCounts[1] + rankCounts[2] * 2 + rankCounts[3] * 3) / allRedHalfCount).toFixed(2)}着`
+        : "-";
       body.innerHTML = `
         <p class="muted">現在のクラブ: ${escapeHtml(selectedClub?.name || selectedClub?.club_code || clubId)}</p>
         <section class="card">
@@ -4256,6 +4259,7 @@
           ${statRowHtml("1着率（％）", statPercent(rankCounts[1], allRedHalfCount))}
           ${statRowHtml("2着率（％）", statPercent(rankCounts[2], allRedHalfCount))}
           ${statRowHtml("3着率（％）", statPercent(rankCounts[3], allRedHalfCount))}
+          ${statRowHtml("平均順位（着）", allRedAverageRank)}
           ${statRowHtml("飛び率（％）", statPercent(tobiCount, allRedHalfCount))}
           ${statRowHtml("平均収支（pt）", allRedHalfCount ? statSigned((allRedScoreDelta / allRedHalfCount) / 1000, "pt") : "-")}
           ${statRowHtml("和了率（％）", statPercent(allRedHands.wins, allRedHands.hands))}
