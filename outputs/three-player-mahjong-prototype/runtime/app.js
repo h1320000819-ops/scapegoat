@@ -1387,14 +1387,40 @@ const getCurrentReplaySnapshot = (replay, index) => {
   const snapshots = getReplaySnapshots(replay);
   return snapshots[Math.max(0, Math.min(index, snapshots.length - 1))];
 };
+const replayEventDedupeKey = (event = {}) => {
+  if (!event?.type) return "";
+  const tileId = event.tile?.id || event.tileId || event.selectedTileId || event.sourceTile?.id || event.tiles?.map?.((tile) => tile?.id).filter(Boolean).join(",") || "";
+  const playerId = event.playerId || event.winnerId || event.actorPlayerId || "";
+  return [
+    event.handId || "",
+    event.type,
+    playerId,
+    event.fromPlayerId || event.loserId || "",
+    event.turnIndex ?? "",
+    event.kanType || "",
+    event.discardType || "",
+    tileId,
+  ].join(":");
+};
+const removeConsecutiveDuplicateReplayEvents = (events = []) => {
+  const result = [];
+  let lastKey = "";
+  for (const event of Array.isArray(events) ? events : []) {
+    const key = replayEventDedupeKey(event);
+    if (key && key === lastKey) continue;
+    result.push(event);
+    lastKey = key;
+  }
+  return result;
+};
 const getSimpleReplayPayload = (replay) => {
   const payload = replay?.simpleReplay || replay?.summary?.simpleReplay;
-  if (payload?.format === "anmika-simple-replay-v1") return payload;
+  if (payload?.format === "anmika-simple-replay-v1") return { ...payload, events: removeConsecutiveDuplicateReplayEvents(payload.events) };
   if ((replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) && replay?.initialState && Array.isArray(replay?.events)) {
     return {
       format: "event-log-v1",
       initialState: replay.initialState,
-      events: replay.events,
+      events: removeConsecutiveDuplicateReplayEvents(replay.events),
       result: replay.summary?.finalResult || replay.initialState?.handLog?.result || null,
     };
   }
@@ -1402,7 +1428,7 @@ const getSimpleReplayPayload = (replay) => {
     return {
       format: "anmika-simple-replay-v1",
       initialState: replay.initialState,
-      events: replay.events,
+      events: removeConsecutiveDuplicateReplayEvents(replay.events),
       result: replay.initialState?.handLog?.result || null,
     };
   }
@@ -1576,7 +1602,11 @@ const applySimpleReplayEvent = (state, event) => {
   }
   if (event.type === "pon" && player) {
     const calledTile = removeReplayLastDiscardForEvent(state, event, event.tile);
-    const consumed = [removeReplayTileByKind(player.hand, event.tile), removeReplayTileByKind(player.hand, event.tile)].filter(Boolean);
+    const consumedSource = Array.isArray(event.consumedTiles) && event.consumedTiles.length ? event.consumedTiles : [event.tile, event.tile];
+    const consumed = consumedSource
+      .slice(0, 2)
+      .map((tile) => removeReplayTileById(player.hand, tile?.id) || removeReplayTileByKind(player.hand, tile))
+      .filter(Boolean);
     player.melds ??= [];
     player.melds.push({ type: "pon", tiles: [...consumed, calledTile], calledTile, fromPlayerId: event.fromPlayerId });
     player.hand = sortHandTiles(player.hand);
@@ -1598,7 +1628,8 @@ const applySimpleReplayEvent = (state, event) => {
       }
     } else {
       if (event.fromPlayerId) removeReplayLastDiscardForEvent(state, event, tiles[0]);
-      for (const tile of tiles) removeReplayDrawnOrHandTile(player, tile);
+      const handTilesForKan = event.fromPlayerId ? tiles.slice(1) : tiles;
+      for (const tile of handTilesForKan) removeReplayDrawnOrHandTile(player, tile);
       player.melds ??= [];
       player.melds.push({ type: kanType, tiles, calledTile: event.fromPlayerId ? tiles[0] : undefined, fromPlayerId: event.fromPlayerId });
     }
@@ -1670,6 +1701,12 @@ const buildSimpleReplaySnapshots = (replay) => {
   return snapshots;
 };
 const getReplaySnapshots = (replay) => {
+  const preferStoredSnapshots = Boolean(replay?.snapshots?.length) && (
+    replay?.summary?.scope === "hanchan" ||
+    replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
+    replay?.summary?.replayFormat === "snapshot-v1"
+  );
+  if (preferStoredSnapshots) return replay.snapshots;
   const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
   if (simpleSnapshots.length) return simpleSnapshots;
   const isHanchanReplay = replay?.summary?.scope === "hanchan"
@@ -1709,12 +1746,10 @@ const deriveReplayEventsFromSnapshots = (snapshots = []) => {
       continue;
     }
     if (currentEvents.length > previousEvents.length) {
-      derived.push(currentEvents[previousEvents.length] || currentEvents.at(-1) || null);
-      continue;
+      derived.push(...currentEvents.slice(previousEvents.length));
     }
-    derived.push(currentEvents.at(-1) || null);
   }
-  return derived;
+  return derived.filter(Boolean);
 };
 const getReplayEvents = (replay) => {
   const simpleEvents = getSimpleReplayPayload(replay)?.events;
@@ -1825,6 +1860,9 @@ const isBaibaTriggerTile = (tile) => Boolean(
   )
 );
 const getVisibleBaibaMultiplierDetails = (state, options = {}) => {
+  if (isTsumoLossless3maState(state)) {
+    return { multiplier: 1, labels: [] };
+  }
   const enabled = Boolean(state?.settings?.ruleConfig?.baibaEnabled);
   const hasBaiba = enabled && (state.doraIndicators ?? []).some(isBaibaTriggerTile);
   const hasSpecialUra = enabled && Boolean(state.handLog?.result) && (state.uraDoraIndicators ?? []).some(isBaibaTriggerTile);
@@ -1948,6 +1986,10 @@ const sortHandTiles = (hand) => {
 };
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
 const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
+const setCurrentTileAssetRuleId = (state) => {
+  globalThis.__anmikaTileAssetRuleId = state?.settings?.ruleId || state?.settings?.gameType || state?.summary?.ruleId || state?.replay?.summary?.ruleId || null;
+};
+const getCurrentTileAssetRuleId = () => globalThis.__anmikaTileAssetRuleId || null;
 const soundAssetPath = (fileName) => location.protocol === "file:" ? `./public/sounds/${fileName}` : `/sounds/${fileName}`;
 const GAME_SOUND_FILES = { pon: "pon.wav", kan: "kan.wav", tsumo: "tsumo.wav", ron: "ron.wav", riichi: "riichi.wav", feverRiichi: "fever-riichi.wav", baiba: "baiba.wav", pochiTsumoRed: "pochi-tsumo-red.wav", pochiTsumoBlue: "pochi-tsumo-blue.wav", discard: ["dapai.m4a", "discard.m4a", "discard.mp3"] };
 const gameSoundCache = new Map();
@@ -2144,16 +2186,17 @@ const normalizeTileForView = (tile) => {
 const getTileImagePath = (tile, faceDown = false) => {
   tile = normalizeTileForView(tile);
   if (faceDown || !tile) return tileAssetPath("tile_back.png");
+  const useAllRedBlueAssets = getCurrentTileAssetRuleId() === TSUMO_LOSSLESS_3MA_RULE_ID;
   if (tile.isRocket && tile.suit === "manzu") return tileAssetPath(`man${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
   if (tile.isRocket && tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}_rocket.${rocketAssetExtension(tile.rank)}`);
-  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "pinzu") return tileAssetPath("pin5_rocket.png");
-  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "souzu") return tileAssetPath("sou5_rocket.png");
+  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "pinzu") return tileAssetPath(useAllRedBlueAssets ? "pin5_blue.png" : "pin5_rocket.png");
+  if (tile.rank === 5 && tile.color === "blue" && tile.suit === "souzu") return tileAssetPath(useAllRedBlueAssets ? "sou5_blue.png" : "sou5_rocket.png");
   if (tile.suit === "manzu") return tileAssetPath(`man${tile.rank}.png`);
   if (tile.suit === "pinzu" && tile.color === "turquoise") return tileAssetPath(`pin${tile.rank}_turquoise.jpg`);
   if (tile.suit === "pinzu") return tileAssetPath(`pin${tile.rank}${colorSuffix(tile)}.png`);
   if (tile.suit === "souzu") return tileAssetPath(`sou${tile.rank}${colorSuffix(tile)}.png`);
-  if (tile.suit === "flower" && tile.color === "blue") return tileAssetPath("flower_rocket.png");
+  if (tile.suit === "flower" && tile.color === "blue") return tileAssetPath(useAllRedBlueAssets ? "flower_blue.png" : "flower_rocket.png");
   if (tile.suit === "flower") return tileAssetPath(`flower${colorSuffix(tile)}.png`);
   if (tile.kind === "white" && tile.pochiColor) return tileAssetPath(`haku_${tile.pochiColor}.png`);
   return tileAssetPath(`${{ east: "east", south: "south", west: "west", north: "north", white: "haku", green: "hatsu", red: "chun" }[tile.kind]}.png`);
@@ -6964,6 +7007,7 @@ class GameView {
   }
   render(state) {
     this.currentRenderedState = state;
+    setCurrentTileAssetRuleId(state);
     const isTableScreen = state.screen === "game" || state.screen === "replayViewer";
     if (isTableScreen) this.syncRemoteDefaultLayoutAdjustmentProfiles();
     if (globalThis.document) {

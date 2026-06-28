@@ -2020,9 +2020,9 @@ const replayEventsFromSnapshots = (snapshots) => {
       });
       continue;
     }
-    events.push(currentEvents.length > previousEvents.length
-      ? (currentEvents[previousEvents.length] || currentEvents.at(-1) || null)
-      : (currentEvents.at(-1) || null));
+    if (currentEvents.length > previousEvents.length) {
+      events.push(...currentEvents.slice(previousEvents.length));
+    }
   }
   return events.filter(Boolean).map(compactReplayEvent);
 };
@@ -2660,10 +2660,28 @@ const getChipPointValue = (state) => {
   const rate = Number(state?.settings?.pointRate || 1);
   return roundToTenth((chipValuePoints / 1000) * rate);
 };
+const countTsumoLosslessBlueChipTiles = (winner, scoreResult) => {
+  const sourceTiles = [
+    ...ensureArray(winner?.hand),
+    ...(scoreResult?.winningTile ? [scoreResult.winningTile] : []),
+    ...ensureArray(winner?.melds).flatMap((meld) => ensureArray(meld?.tiles)),
+    ...ensureArray(winner?.nukiDoraTiles),
+  ];
+  const seen = new Set();
+  let count = 0;
+  for (const tile of sourceTiles) {
+    if (!tile || tile.color !== "blue" || tile.isPochi) continue;
+    const key = tile.id || `${tile.suit || tile.kind}:${tile.rank || ""}:${tile.kind || ""}:${count}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    count += 1;
+  }
+  return count;
+};
 const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, scoreResult) => {
   if (!isTsumoLossless3maState(state)) return null;
   const yakuNames = new Set(ensureArray(scoreResult?.yakuList || scoreResult?.yaku).map((item) => item.name));
-  const blueChips = ensureArray(scoreResult?.winningTiles).filter((tile) => tile?.color === "blue" || tile?.isRocket).length + ensureArray(winner?.nukiDoraTiles).filter((tile) => tile?.color === "blue").length;
+  const blueChips = countTsumoLosslessBlueChipTiles(winner, scoreResult);
   const ippatsuChips = yakuNames.has("一発") ? 1 : 0;
   const uraChips = Number(scoreResult?.dora?.ura || 0);
   const yakumanChips = ensureArray(scoreResult?.yakuList || scoreResult?.yaku).some((item) => item.isYakuman && !item.isCountedYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
@@ -3123,6 +3141,9 @@ const isServerBaibaTriggerTile = (tile) => Boolean(
   )
 );
 const getServerBaibaMultiplierDetails = (state, { includeUra = false, pochiColor = null } = {}) => {
+  if (isTsumoLossless3maState(state)) {
+    return { multiplier: 1, conditionCount: 0, hasBaiba: false, hasSpecialUra: false, hasRedOrBluePochiTsumo: false, pochiColor: null, labels: [] };
+  }
   const enabled = Boolean(state?.settings?.ruleConfig?.baibaEnabled);
   const hasBaiba = enabled && ensureArray(state.doraIndicators).some(isServerBaibaTriggerTile);
   const hasSpecialUra = enabled && includeUra && ensureArray(state.uraDoraIndicators).some(isServerBaibaTriggerTile);
