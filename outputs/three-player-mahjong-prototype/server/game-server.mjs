@@ -671,7 +671,7 @@ const normalizeServerSeats = (seats = []) => {
     isLastHandDeclared: false,
   });
 };
-const clearEndedRoomSeatForUser = (room, userId) => {
+const clearEndedRoomSeatForUser = (room, userId, { removeStatePlayer = true } = {}) => {
   if (!room?.state || !userId) return false;
   let changed = false;
   room.state.seats = normalizeServerSeats(room.state.seats);
@@ -688,10 +688,16 @@ const clearEndedRoomSeatForUser = (room, userId) => {
     changed = true;
   }
   if (asArray(room.state.players).some((player) => player?.id === userId)) {
-    room.state.players = asArray(room.state.players).filter((player) => player?.id !== userId);
-    room.state.currentPlayerIndex = Math.max(0, Math.min(Number(room.state.currentPlayerIndex || 0), room.state.players.length - 1));
-    if (room.state.playerClocks && typeof room.state.playerClocks === "object") delete room.state.playerClocks[userId];
-    changed = true;
+    if (removeStatePlayer) {
+      room.state.players = asArray(room.state.players).filter((player) => player?.id !== userId);
+      room.state.currentPlayerIndex = Math.max(0, Math.min(Number(room.state.currentPlayerIndex || 0), room.state.players.length - 1));
+      if (room.state.playerClocks && typeof room.state.playerClocks === "object") delete room.state.playerClocks[userId];
+      room.pendingDisconnectedStatePlayerLeaveUserIds?.delete?.(userId);
+      changed = true;
+    } else {
+      room.pendingDisconnectedStatePlayerLeaveUserIds ??= new Set();
+      room.pendingDisconnectedStatePlayerLeaveUserIds.add(userId);
+    }
   }
   if (changed) {
     room.state.lastHandLeaveSyncedBy ??= [];
@@ -904,7 +910,7 @@ const syncDeclaredLastHandLeaves = async (room) => {
   }
   return changed;
 };
-const syncDisconnectedLastHandLeaves = async (room) => {
+const syncDisconnectedLastHandLeaves = async (room, { removeStatePlayers = true } = {}) => {
   if (!room?.state) return false;
   const canLeaveNow = room.state.phase === "gameEnded" ||
     Boolean(room.state.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(room.state.phase));
@@ -912,12 +918,15 @@ const syncDisconnectedLastHandLeaves = async (room) => {
   if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
     room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
   }
-  const ids = disconnectedHumanPlayerIds(room);
+  const ids = [...new Set([
+    ...disconnectedHumanPlayerIds(room),
+    ...(removeStatePlayers && room.pendingDisconnectedStatePlayerLeaveUserIds instanceof Set ? [...room.pendingDisconnectedStatePlayerLeaveUserIds] : []),
+  ])];
   if (!ids.length) return false;
   let changed = false;
   for (const userId of ids) {
     room.disconnectedLeaveSyncedUserIds.add(userId);
-    changed = clearEndedRoomSeatForUser(room, userId) || changed;
+    changed = clearEndedRoomSeatForUser(room, userId, { removeStatePlayer: removeStatePlayers }) || changed;
     await syncSeatLeaveToDb(room.tableId, userId)
       .then((updated) => console.warn("[Reconnect] disconnected player left after ended hand", { tableId: room.tableId, userId, dbUpdated: updated }))
       .catch((error) => console.error("[Reconnect] failed to leave disconnected player", { tableId: room.tableId, userId, error: error?.message || String(error) }));
@@ -2308,6 +2317,7 @@ const syncReplayEffects = async (room) => {
     if (!result) return;
     if (isTsumoLossless3maState(state)) {
       if (state.phase !== "gameEnded" || !state.finalResult) return;
+      if (state.finalResult?.reason === "playerLeftAfterDisconnect") return;
       const replayRoom = {
         ...room,
         state: clone(state),
@@ -5716,7 +5726,7 @@ const scheduleRoomResultTimeout = (room) => {
         return;
       }
       queueResultSideEffectsOnce(room, timerResultId, "resultOkAuto");
-      await syncDisconnectedLastHandLeaves(room);
+      await syncDisconnectedLastHandLeaves(room, { removeStatePlayers: false });
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
         return;
@@ -6105,7 +6115,7 @@ io.on("connection", (socket) => {
       if (actionType === "resultOk" && room.state?.handLog?.result) {
         const resultSyncId = getCurrentResultId(room.state);
         queueResultSideEffectsOnce(room, resultSyncId, "resultOk");
-        await syncDisconnectedLastHandLeaves(room);
+        await syncDisconnectedLastHandLeaves(room, { removeStatePlayers: false });
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };

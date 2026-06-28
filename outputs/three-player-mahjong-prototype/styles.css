@@ -2700,6 +2700,31 @@ button:hover {
   margin: 0;
 }
 
+.allred-score-result .allred-result-title {
+  font-size: calc(var(--score-big-font-size, 34px) / 3);
+  line-height: 1.05;
+  margin-bottom: 7px;
+}
+
+.allred-player-settlement {
+  display: grid;
+  gap: 4px;
+}
+
+.allred-player-settlement-row {
+  align-items: baseline;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: minmax(88px, 1fr) auto auto auto;
+  white-space: nowrap;
+}
+
+.allred-player-settlement-row strong,
+.allred-player-settlement-row em {
+  font-style: normal;
+  font-weight: 800;
+}
+
 .allred-score-result .result-tiles {
   align-items: center;
   display: flex;
@@ -3694,6 +3719,21 @@ button:hover {
     line-height: 1.05;
     margin: 0;
     padding-left: 10px;
+  }
+
+  .allred-score-result .allred-result-title {
+    font-size: 11px;
+    margin-bottom: 3px;
+  }
+
+  .allred-player-settlement {
+    gap: 2px;
+  }
+
+  .allred-player-settlement-row {
+    font-size: 10px;
+    gap: 2px;
+    grid-template-columns: minmax(72px, 1fr) auto auto auto;
   }
 
   .allred-score-result p {

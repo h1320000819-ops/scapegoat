@@ -9316,6 +9316,11 @@ class GameView {
       const scoreLabel = `${allRedScoreRank}${score.isTsumo ? "ツモ" : "ロン"}`;
       const allRedFinalPoints = Number(score.finalPoints ?? score.totalPoints ?? 0);
       const allRedFinalScoreClass = allRedFinalPoints < 0 ? " final-score-negative" : "";
+      const allRedSettlementRows = state.players.map((player) => {
+        const scoreDelta = Number(payments[player.id] || 0);
+        const chipDelta = pointToChips(currentChipPayments[player.id] || 0);
+        return `<div class="allred-player-settlement-row"><span>${escapeHtml(player.name)}</span><strong>${formatPointDisplay(player.score)}</strong><em>（${signedPointDisplay(scoreDelta)}）</em><em>（${signedChips(chipDelta)}）</em></div>`;
+      }).join("");
       return `<section class="score-result result-modal win-result-modal allred-score-result">
         <p class="score-winner-line">${winner?.name ?? ""} ${score.isTsumo ? "ツモ" : "ロン"}</p>
         <div class="allred-result-grid">
@@ -9326,7 +9331,8 @@ class GameView {
         <div class="score-summary-layout">
           <ul class="score-yaku vertical-yaku">${yakuRowsForAllRed.join("") || "<li>なし</li>"}</ul>
           <div class="score-big-panel">
-            <p class="final-score-line big-final-score${allRedFinalScoreClass}">${scoreLabel}</p>
+            <p class="final-score-line big-final-score allred-result-title${allRedFinalScoreClass}">${scoreLabel}</p>
+            <div class="allred-player-settlement">${allRedSettlementRows}</div>
           </div>
         </div>
         ${renderAgariYameButton(state)}${renderResultOkButton(state)}

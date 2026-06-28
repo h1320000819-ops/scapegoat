@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260629-top-meld-order-a";
+const CACHE_NAME = "anmika-pwa-20260629-allred-result-settlement-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v7";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260629-top-meld-order-a",
-  "/runtime/app.js?v=20260629-top-meld-order-a",
-  "/runtime/online-debug.js?v=20260629-top-meld-order-a",
-  "/runtime/pwa.js?v=20260629-top-meld-order-a",
+  "/styles.css?v=20260629-allred-result-settlement-a",
+  "/runtime/app.js?v=20260629-allred-result-settlement-a",
+  "/runtime/online-debug.js?v=20260629-allred-result-settlement-a",
+  "/runtime/pwa.js?v=20260629-allred-result-settlement-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
