@@ -7871,6 +7871,8 @@ class GameView {
     const hitLayer = overlay.querySelector("[data-layout-hit-layer]");
     const panel = overlay.querySelector(".layout-adjust-panel");
     const panelHandle = overlay.querySelector("[data-layout-panel-drag-handle]");
+    const saveButton = overlay.querySelector("[data-layout-save]");
+    const cancelButton = overlay.querySelector("[data-layout-cancel]");
     if (defaultFamilySelect) defaultFamilySelect.value = session.defaultFamily || this.layoutDeviceFamily();
     select.value = selectedKey;
     snapSelect.value = snap;
@@ -8055,15 +8057,25 @@ class GameView {
       moveSelected(movement.dx, movement.dy);
       dragStart = { x: event.clientX, y: event.clientY };
     });
-    const endOverlayDrag = () => {
+    const endOverlayDrag = (event) => {
       if (panelDragStart && session.panelPosition) {
         localStorage.setItem(panelPositionKey, JSON.stringify(session.panelPosition));
       }
+      try {
+        if (overlay.hasPointerCapture?.(event?.pointerId)) overlay.releasePointerCapture(event.pointerId);
+      } catch {}
       dragStart = null;
       panelDragStart = null;
     };
     overlay.addEventListener("pointerup", endOverlayDrag);
     overlay.addEventListener("pointercancel", endOverlayDrag);
+    panel.addEventListener("pointerdown", (event) => {
+      if (event.target?.closest?.("[data-layout-panel-drag-handle]")) return;
+      event.stopPropagation();
+    });
+    panel.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
     select.addEventListener("change", () => {
       selectLayoutKey(select.value);
       updateFrame();
@@ -8089,33 +8101,74 @@ class GameView {
       if (scaleValue) scaleValue.textContent = `${Math.round(adjustment.scale * 100)}%`;
       updateFrame();
     });
-    overlay.querySelector("[data-layout-save]").addEventListener("click", async () => {
-      if (!refreshLiveTable()) return;
-      const validation = this.validateUserAdjustedLayout(table);
-      const sharedSaved = session.scope === "default"
-        ? await this.saveDefaultLayoutAdjustmentProfile(profile, layout, session.defaultFamily || this.layoutDeviceFamily())
-        : false;
-      if (session.scope !== "default") this.saveLayoutAdjustmentProfile(profile, layout);
-      const defaultTargetLabel = (session.defaultFamily || this.layoutDeviceFamily()) === "mobile" ? "スマホ用" : "PC用";
-      warning.textContent = validation.ok
-        ? (session.scope === "default"
-          ? (sharedSaved ? `全アカウント共通の${defaultTargetLabel}デフォルトとして保存しました` : `${defaultTargetLabel}デフォルトをこの端末に保存しました。共有保存は未完了です`)
-          : "この端末用に保存しました")
-        : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
-      setTimeout(() => {
-        this.layoutAdjustmentSession = null;
-        this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
-        overlay.remove();
-        this.stabilizeTableLayout();
-      }, 450);
+    let saveStartedAt = 0;
+    const runLayoutSave = async (event = null) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      const nowMs = Date.now();
+      if (nowMs - saveStartedAt < 700) return;
+      saveStartedAt = nowMs;
+      dragStart = null;
+      panelDragStart = null;
+      if (!refreshLiveTable()) {
+        warning.textContent = "保存対象の対局画面を取得できませんでした。もう一度押してください。";
+        return;
+      }
+      saveButton.disabled = true;
+      const previousText = saveButton.textContent;
+      saveButton.textContent = "保存中...";
+      warning.textContent = "保存しています...";
+      try {
+        const validation = this.validateUserAdjustedLayout(table);
+        const sharedSaved = session.scope === "default"
+          ? await this.saveDefaultLayoutAdjustmentProfile(profile, layout, session.defaultFamily || this.layoutDeviceFamily())
+          : false;
+        if (session.scope !== "default") this.saveLayoutAdjustmentProfile(profile, layout);
+        const defaultTargetLabel = (session.defaultFamily || this.layoutDeviceFamily()) === "mobile" ? "スマホ用" : "PC用";
+        warning.textContent = validation.ok
+          ? (session.scope === "default"
+            ? (sharedSaved ? `全アカウント共通の${defaultTargetLabel}デフォルトとして保存しました` : `${defaultTargetLabel}デフォルトをこの端末に保存しました。共有保存は未完了です`)
+            : "この端末用に保存しました")
+          : `画面外に出ている配置も保存しました: ${validation.outside.join("、")}`;
+        setTimeout(() => {
+          this.layoutAdjustmentSession = null;
+          this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
+          overlay.remove();
+          this.stabilizeTableLayout();
+        }, 450);
+      } catch (error) {
+        console.warn("[LayoutAdjustment] save failed", error);
+        warning.textContent = "保存に失敗しました。もう一度押してください。";
+        saveStartedAt = 0;
+        saveButton.disabled = false;
+        saveButton.textContent = previousText || "保存";
+      }
+    };
+    saveButton.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
     });
-    overlay.querySelector("[data-layout-cancel]").addEventListener("click", () => {
+    saveButton.addEventListener("pointerup", runLayoutSave);
+    saveButton.addEventListener("click", runLayoutSave);
+    let cancelStartedAt = 0;
+    const runLayoutCancel = (event = null) => {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      const nowMs = Date.now();
+      if (nowMs - cancelStartedAt < 500) return;
+      cancelStartedAt = nowMs;
+      dragStart = null;
+      panelDragStart = null;
       this.layoutAdjustmentSession = null;
       this.root.querySelector(".mahjong-table")?.classList.remove("layout-adjusting");
       overlay.remove();
       const liveTable = this.root.querySelector(".mahjong-table");
       if (liveTable) this.applyUserLayoutAdjustments(liveTable, this.calculateSafeTableLayout());
+    };
+    cancelButton.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
     });
+    cancelButton.addEventListener("pointerup", runLayoutCancel);
+    cancelButton.addEventListener("click", runLayoutCancel);
     overlay.querySelector("[data-layout-reset-selected]").addEventListener("click", () => {
       delete profile.adjustments[selectedKey];
       updateFrame();
