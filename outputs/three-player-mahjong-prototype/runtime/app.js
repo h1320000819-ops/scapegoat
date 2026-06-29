@@ -5541,6 +5541,10 @@ class GameController {
   }
   async handleResultOk(options = {}) {
     console.log("[ResultOk] clicked", this.state.handLog.result?.type, this.state.phase);
+    if (this.state.screen === "replayViewer") {
+      this.stepReplay(-1);
+      return;
+    }
     const result = this.state.handLog.result;
     if (!result) return;
     if (options.resultId && result.resultId && options.resultId !== result.resultId) {
@@ -9099,8 +9103,8 @@ class GameView {
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
         <a class="button-link" href="${replayBackUrl}">牌譜一覧へ戻る</a>
         <span class="replay-step-controls">
-          <button type="button" data-replay-step="1" ${isReplayLastStep ? "disabled" : ""}>次へ</button>
           <button type="button" data-replay-step="-1" ${isReplayFirstStep ? "disabled" : ""}>前へ</button>
+          <button type="button" data-replay-step="1" ${isReplayLastStep ? "disabled" : ""}>次へ</button>
         </span>
         <strong>${index + 1} / ${snapshots.length}</strong>
         ${handSelect}
