@@ -112,6 +112,16 @@ const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
   noTsumoLoss: true,
   settlementTiming: "hanchan",
 };
+const TABLE_BACKGROUND_COLOR_OPTIONS = [
+  { value: "#55B0FF", label: "水色" },
+  { value: "#FFB287", label: "茶色" },
+  { value: "#48D8A0", label: "緑色" },
+];
+const DEFAULT_TABLE_BACKGROUND_COLOR = TABLE_BACKGROUND_COLOR_OPTIONS[0].value;
+const normalizeTableBackgroundColor = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+  return TABLE_BACKGROUND_COLOR_OPTIONS.some((option) => option.value === normalized) ? normalized : DEFAULT_TABLE_BACKGROUND_COLOR;
+};
 const GAME_RULE_DEFINITIONS = [
   { id: "anmika-rocket", name: "アンミカロケット", implemented: true },
   { id: TSUMO_LOSSLESS_3MA_RULE_ID, name: "全赤三麻", implemented: true },
@@ -4092,11 +4102,12 @@ class GameController {
     this.state.screen = "clubSelect";
     this.emit();
   }
-  updateAccountSettings({ displayName, password, iconUrl } = {}) {
+  updateAccountSettings({ displayName, password, iconUrl, tableBackgroundColor } = {}) {
     if (!this.state.currentUser) return;
     let user = this.state.currentUser;
     if (displayName) user = authRepository.updateUser(user.id, { displayName }) ?? user;
     if (iconUrl) user = authRepository.updateUser(user.id, { iconUrl }) ?? user;
+    if (tableBackgroundColor !== undefined) user = authRepository.updateUser(user.id, { tableBackgroundColor: normalizeTableBackgroundColor(tableBackgroundColor) }) ?? user;
     if (password) user = authRepository.changePassword(user.id, password) ?? user;
     this.state.currentUser = user;
     this.refreshStoredData();
@@ -8622,6 +8633,7 @@ class GameView {
       this.handlers.onUpdateAccount({
         displayName: this.root.querySelector("[data-account-display-name]")?.value ?? "",
         password: this.root.querySelector("[data-account-password]")?.value ?? "",
+        tableBackgroundColor: this.root.querySelector("[data-account-table-background]")?.value ?? DEFAULT_TABLE_BACKGROUND_COLOR,
       });
     }));
     this.root.querySelectorAll("[data-account-icon]").forEach((input) => input.addEventListener("change", () => {
@@ -8872,11 +8884,16 @@ class GameView {
     if (!user) return this.authScreen(state);
     const clubs = clubRepository.listMyClubs(user.id);
     const clubList = clubs.map((club) => `<li><span>${club.name}</span><span class="inline-id">ID: ${club.id}</span><button type="button" data-copy-club-id="${club.id}">コピー</button></li>`).join("") || "<li>未所属</li>";
+    const selectedTableBackgroundColor = normalizeTableBackgroundColor(user.tableBackgroundColor);
+    const tableBackgroundOptions = TABLE_BACKGROUND_COLOR_OPTIONS.map((option) =>
+      `<option value="${option.value}" ${option.value === selectedTableBackgroundColor ? "selected" : ""}>${option.label} ${option.value}</option>`
+    ).join("");
     return `<section class="lobby-panel">
       <div class="screen-actions"><button type="button" data-nav="clubSelect">クラブ選択へ</button></div>
       <h3>アカウント設定</h3>
       <label class="setting-row"><span>アイコン</span><input type="file" accept="image/*" data-account-icon /> <small>現在はlocalStorageに保存します</small></label>
       <label class="setting-row"><span>プレイヤー名</span><input type="text" data-account-display-name value="${user.displayName ?? ""}" /></label>
+      <label class="setting-row"><span>卓の背景色</span><select data-account-table-background>${tableBackgroundOptions}</select></label>
       <label class="setting-row"><span>新しいパスワード</span><input type="password" data-account-password placeholder="変更時のみ入力" /></label>
       <div class="screen-actions">
         <button type="button" data-update-account>保存</button>
@@ -9314,7 +9331,8 @@ class GameView {
         (state.onlineLoadingMessageStartedAt && Date.now() - state.onlineLoadingMessageStartedAt >= ONLINE_LOADING_DISPLAY_DELAY_MS)
       )
     );
-    return `<section class="mahjong-table">
+    const tableBackgroundColor = normalizeTableBackgroundColor((state.currentUser || authRepository.getCurrentUser?.())?.tableBackgroundColor);
+    return `<section class="mahjong-table" style="--table-background-color:${tableBackgroundColor};">
       <div class="table-frame"></div>
       ${this.centerInfoClean(state, dealer)}
       ${this.discardAreaClean(seats.bottom, "bottom")}

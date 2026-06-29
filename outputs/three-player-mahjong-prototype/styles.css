@@ -294,7 +294,7 @@ button:hover {
 }
 
 .mahjong-table {
-  background: #55B0FF !important;
+  background: var(--table-background-color, #55B0FF) !important;
   background-image: none !important;
   height: 100dvh;
   min-height: 620px;
@@ -304,7 +304,7 @@ button:hover {
 }
 
 .mahjong-table::before {
-  background: #55B0FF;
+  background: var(--table-background-color, #55B0FF);
   box-shadow: none;
   content: "";
   inset: 0;
@@ -313,7 +313,7 @@ button:hover {
 }
 
 .mahjong-table::after {
-  background: #55B0FF;
+  background: var(--table-background-color, #55B0FF);
   border: 0;
   border-radius: 0;
   box-shadow: none;
