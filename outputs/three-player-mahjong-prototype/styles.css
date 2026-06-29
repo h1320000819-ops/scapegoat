@@ -3622,10 +3622,6 @@ button:hover {
     width: var(--exposed-slot-width);
   }
 
-  .seat-right .hand-row > .meld-area .meld-set + .meld-set {
-    margin-top: calc(var(--right-meld-overlap) * -1);
-  }
-
   .seat-right .nuki-dora-area .exposed-tiles {
     align-items: flex-end;
     flex-direction: column;
@@ -4447,7 +4443,6 @@ button:hover {
 
 .seat-right .hand-row {
   --right-meld-gap: 0px;
-  --right-meld-overlap: var(--other-tile-width, 28px);
   --right-meld-set-height: clamp(26px, 6.5dvh, 56px);
   grid-template-areas:
     "nuki"
@@ -4506,10 +4501,6 @@ button:hover {
   margin-bottom: 0;
   min-height: var(--right-meld-set-height);
   width: var(--exposed-slot-width);
-}
-
-.seat-right .hand-row > .meld-area .meld-set + .meld-set {
-  margin-top: calc(var(--right-meld-overlap) * -1);
 }
 
 .seat-right .hand-row > .meld-area .newest-meld {
@@ -4619,7 +4610,6 @@ button:hover {
   --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: 0px;
-  --safe-right-meld-overlap: var(--safe-other-tile-width);
   --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
   --safe-river-side-gap: var(--center-river-margin);
   --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
@@ -4736,10 +4726,11 @@ button:hover {
 }
 
 .mahjong-table .seat-right .hand-row > .meld-area {
-  align-self: stretch;
+  align-self: start;
   justify-self: end;
-  max-height: 100%;
-  min-height: calc(var(--right-meld-set-height) * 1.55);
+  height: auto;
+  max-height: none;
+  min-height: 0;
   min-width: 0;
   overflow: visible;
   width: var(--exposed-slot-width);
@@ -4752,9 +4743,9 @@ button:hover {
   flex-direction: column !important;
   flex-wrap: nowrap !important;
   gap: var(--safe-right-meld-gap) !important;
-  height: 100%;
-  justify-content: end !important;
-  max-height: 100%;
+  height: auto;
+  justify-content: flex-start !important;
+  max-height: none;
   overflow: visible;
 }
 
@@ -4764,8 +4755,20 @@ button:hover {
   width: var(--exposed-slot-width);
 }
 
-.mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set {
-  margin-top: calc(var(--safe-right-meld-overlap) * -1);
+.mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles:has(> .meld-set:nth-child(1)) {
+  min-height: var(--right-meld-set-height);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles:has(> .meld-set:nth-child(2)) {
+  min-height: calc(var(--right-meld-set-height) * 2);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles:has(> .meld-set:nth-child(3)) {
+  min-height: calc(var(--right-meld-set-height) * 3);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles:has(> .meld-set:nth-child(4)) {
+  min-height: calc(var(--right-meld-set-height) * 4);
 }
 
 .mahjong-table .seat-right .hand-row > .meld-area .meld-tiles {
@@ -5151,7 +5154,8 @@ button:hover {
   body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles,
   html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles {
     gap: var(--safe-right-meld-gap) !important;
-    justify-content: end !important;
+    height: auto !important;
+    justify-content: flex-start !important;
     max-height: none;
   }
 
@@ -5159,11 +5163,6 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set {
     flex: 0 0 var(--safe-right-meld-height);
     min-height: var(--safe-right-meld-height);
-  }
-
-  body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set,
-  html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set {
-    margin-top: calc(var(--safe-right-meld-overlap) * -1);
   }
 }
 
@@ -5403,17 +5402,14 @@ button:hover {
 
   .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .exposed-tiles {
     gap: var(--right-meld-gap) !important;
-    max-height: 100% !important;
-    overflow: hidden !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
   }
 
   .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .meld-set {
     flex: 0 0 var(--right-meld-set-height) !important;
     min-height: var(--right-meld-set-height) !important;
-  }
-
-  .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .meld-set + .meld-set {
-    margin-top: calc(var(--layout-other-tile-width) * -1) !important;
   }
 
   .mahjong-table.auto-safe-layout .seat-mini-name {
