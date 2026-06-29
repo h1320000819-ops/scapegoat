@@ -2657,7 +2657,7 @@ const normalizeRuleConfig = (config = {}) => ({
 const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   ...DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG,
   ...(config || {}),
-  fiveTileComposition: ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : "red3blue1",
+  fiveTileComposition: ["red3blue1", "red2blue2", "blueRedBlackBlack", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : "red3blue1",
   flowerComposition: ["red3blue1", "red4", "red2blue2"].includes(config?.flowerComposition) ? config.flowerComposition : "red3blue1",
   entryRakePoints: Math.max(0.1, Math.min(10, Number(config?.entryRakePoints ?? 5))),
   chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : 5000,
@@ -5138,8 +5138,8 @@ const applyServerClockTimeout = (state) => {
 const isRocketTargetTile = (suit, rank) => (suit === "manzu" && (rank === 1 || rank === 9)) || ((suit === "pinzu" || suit === "souzu") && (rank === 1 || rank === 9));
 
 const colorByComposition = (composition, copy) => {
-  if (composition === "red4") return "red";
   if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  if (composition === "blueRedBlackBlack") return copy === 1 ? "blue" : copy === 2 ? "red" : "normal";
   if (composition === "blackBlackRedRed") return copy <= 2 ? "normal" : "red";
   return copy <= 3 ? "red" : "blue";
 };
@@ -5904,14 +5904,14 @@ const scheduleRoomResultTimeout = (room) => {
       room.updatedAt = now();
       persistRoom(room);
       const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
+      if (shouldContinueSeats) {
+        await syncDeclaredLastHandLeaves(room);
+        await syncDisconnectedLastHandLeaves(room);
+      }
       const continued = shouldContinueSeats
         ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOkAuto" })
         : false;
-      if (!continued) {
-        await syncDeclaredLastHandLeaves(room);
-        await syncDisconnectedLastHandLeaves(room);
-        await syncInterruptedRoomStatusToDb(room);
-      }
+      if (!continued) await syncInterruptedRoomStatusToDb(room);
       broadcastState(room);
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
@@ -6269,10 +6269,12 @@ io.on("connection", (socket) => {
           const endedResultId = getCurrentResultId(room.state) || room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || "gameEnded";
           queueResultSideEffectsOnce(room, endedResultId, "resultOkAlreadyGameEnded");
           const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
+          const changed = shouldContinueSeats
+            ? ((await syncDeclaredLastHandLeaves(room)) || (await syncDisconnectedLastHandLeaves(room)))
+            : false;
           const continued = shouldContinueSeats
             ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOk" })
             : false;
-          const changed = continued ? false : ((await syncDeclaredLastHandLeaves(room)) || (await syncDisconnectedLastHandLeaves(room)));
           if (!continued) await syncInterruptedRoomStatusToDb(room);
           if (changed) {
             room.version = Number(room.version || 0) + 1;
@@ -6353,14 +6355,14 @@ io.on("connection", (socket) => {
         ].join(":");
         queueResultSideEffectsOnce(room, finalSyncId, "resultOkGameEnded");
         const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
+        if (shouldContinueSeats) {
+          await syncDeclaredLastHandLeaves(room);
+          await syncDisconnectedLastHandLeaves(room);
+        }
         const continued = shouldContinueSeats
           ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOk" })
           : false;
-        if (!continued) {
-          await syncDeclaredLastHandLeaves(room);
-          await syncDisconnectedLastHandLeaves(room);
-          await syncInterruptedRoomStatusToDb(room);
-        }
+        if (!continued) await syncInterruptedRoomStatusToDb(room);
       }
       persistRoom(room);
       if (requestId) {

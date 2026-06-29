@@ -3800,25 +3800,26 @@
       settingsHost.innerHTML = `
         <section id="tsumoLossless3maSettings" hidden>
           <h4>全赤三麻 詳細ルール</h4>
+          <p class="muted rule-help">基本はアンミカロケットと同じ三人麻雀です。半荘戦、35000点持ち、東1局から南3局まで進行し、男気・ロケット牌・フィーバーリーチは使いません。</p>
           <div class="row">
-            <label>5p・5sの内訳
+            <label>5の内訳（5p/5sの4枚の色）
               <select id="threeMaFiveComposition">
                 <option value="red3blue1">赤赤赤青</option>
-                <option value="red4">赤赤赤赤</option>
                 <option value="red2blue2">赤赤青青</option>
+                <option value="blueRedBlackBlack">青赤黒黒</option>
                 <option value="blackBlackRedRed">黒黒赤赤</option>
               </select>
             </label>
             <label>華牌の構成
               <select id="threeMaFlowerComposition">
-                <option value="red3blue1">赤赤赤青</option>
                 <option value="red4">赤赤赤赤</option>
+                <option value="red3blue1">赤赤赤青</option>
                 <option value="red2blue2">赤赤青青</option>
               </select>
             </label>
           </div>
           <div class="row">
-            <label>開始時レーキ: <span id="threeMaEntryRakeValue">5.0</span>pt
+            <label>開始時レーキ（半荘開始時に各プレイヤーからクラブへ回収）: <span id="threeMaEntryRakeValue">5.0</span>pt
               <input id="threeMaEntryRake" type="range" min="0.1" max="10" step="0.1" value="5.0" />
             </label>
             <label>ウマ
@@ -3830,15 +3831,16 @@
             </label>
           </div>
           <div class="row">
-            <label>祝儀価値
+            <label>祝儀価値（チップ1枚を何点相当にするか）
               <select id="threeMaChipValue">
                 <option value="2000">2000点</option>
                 <option value="5000" selected>5000点</option>
                 <option value="10000">10000点</option>
               </select>
             </label>
-            <label><input id="threeMaNorthNukiDora" type="checkbox" /> 北を抜きドラにする</label>
+            <label><input id="threeMaNorthNukiDora" type="checkbox" /> 北を抜きドラにする（初期値はオフ）</label>
           </div>
+          <p class="muted rule-help">レートは上のスライダーで「1000点 = 何pt」かを設定します。祝儀・飛び賞はクラブポイントでその場精算、半荘終了時は点棒・ウマ・レートで精算します。</p>
         </section>
       `;
       if (has("threeMaEntryRake")) $("threeMaEntryRake").addEventListener("input", updateRangeLabels);
@@ -3847,11 +3849,11 @@
       const selected = $("threeMaFiveComposition").value || "red3blue1";
       $("threeMaFiveComposition").innerHTML = [
         ["red3blue1", "赤赤赤青"],
-        ["red4", "赤赤赤赤"],
         ["red2blue2", "赤赤青青"],
+        ["blueRedBlackBlack", "青赤黒黒"],
         ["blackBlackRedRed", "黒黒赤赤"],
       ].map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
-      $("threeMaFiveComposition").value = ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(selected) ? selected : "red3blue1";
+      $("threeMaFiveComposition").value = ["red3blue1", "red2blue2", "blueRedBlackBlack", "blackBlackRedRed"].includes(selected) ? selected : "red3blue1";
     }
     if (has("threeMaFlowerComposition")) {
       const selected = $("threeMaFlowerComposition").value || "red3blue1";
@@ -3936,7 +3938,7 @@
     const entryRake = Number(table.entry_rake_points ?? configValue.entryRakePoints ?? 5).toFixed(1);
     const chip = Number(configValue.chipValuePoints || 5000).toLocaleString();
     const umaLabel = String(configValue.umaType || "20-0--20").replace("--", "-▲");
-    const fiveLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青", blackBlackRedRed: "黒黒赤赤" }[configValue.fiveTileComposition || "red3blue1"];
+    const fiveLabel = { red3blue1: "赤赤赤青", red2blue2: "赤赤青青", blueRedBlackBlack: "青赤黒黒", blackBlackRedRed: "黒黒赤赤" }[configValue.fiveTileComposition || "red3blue1"];
     const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[configValue.flowerComposition || "red3blue1"];
     const items = [
       textItem("レート", `${Number(table.point_rate || 1).toFixed(1)}pt/1000点`),
@@ -5610,7 +5612,6 @@
     bind("loadRakeButton", loadRake);
     bind("settingsGearButton", toggleSettings);
     bind("settingsToggleButton", toggleSettings);
-    bind("globalReloadButton", () => window.location.reload());
     bind("showCreateTableButton", async () => showCreateTablePanel());
     bind("cancelCreateTableButton", async () => hideCreateTablePanel());
     bind("showClubPointsButton", showClubPoints);

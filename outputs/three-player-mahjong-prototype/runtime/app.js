@@ -97,7 +97,7 @@ const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
 };
 const TSUMO_LOSSLESS_3MA_RULE_ID = "tsumo-lossless-red-3ma";
 const MIN_ANMIKA_RAKE_PERCENT = 0.5;
-const MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS = 0.5;
+const MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS = 0.1;
 const TSUMO_LOSSLESS_ROUNDS = ["東1局", "東2局", "東3局", "南1局", "南2局", "南3局"];
 const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
   fiveTileComposition: "red3blue1",
@@ -135,7 +135,7 @@ const normalizeAnmikaRocketRuleConfig = (config = {}) => ({
 const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   ...DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG,
   ...(config || {}),
-  fiveTileComposition: ["red3blue1", "red4", "red2blue2", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.fiveTileComposition,
+  fiveTileComposition: ["red3blue1", "red2blue2", "blueRedBlackBlack", "blackBlackRedRed"].includes(config?.fiveTileComposition) ? config.fiveTileComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.fiveTileComposition,
   flowerComposition: ["red3blue1", "red4", "red2blue2"].includes(config?.flowerComposition) ? config.flowerComposition : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.flowerComposition,
   entryRakePoints: Math.max(MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS, Math.min(10, Number(config?.entryRakePoints ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.entryRakePoints))),
   chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.chipValuePoints,
@@ -859,21 +859,7 @@ const leaveOnlineTableForSync = async (sync) => {
       return null;
     });
     if (rpcResponse?.ok) return;
-    await fetch(`${sync.supabaseUrl}/rest/v1/game_states?table_id=eq.${encodeURIComponent(sync.tableId)}&is_active=eq.true`, {
-      method: "PATCH",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({ is_active: false, updated_at: new Date().toISOString() }),
-    }).catch((error) => console.warn("[OnlineSync] active game close failed", error));
-    await fetch(`${sync.supabaseUrl}/rest/v1/games?table_id=eq.${encodeURIComponent(sync.tableId)}&status=eq.playing`, {
-      method: "PATCH",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({ status: "ended", ended_at: new Date().toISOString() }),
-    }).catch((error) => console.warn("[OnlineSync] game close failed", error));
-    await fetch(`${sync.supabaseUrl}/rest/v1/tables?table_id=eq.${encodeURIComponent(sync.tableId)}`, {
-      method: "PATCH",
-      headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({ status: "waiting" }),
-    }).catch((error) => console.warn("[OnlineSync] table waiting update failed", error));
+    console.warn("[OnlineSync] table waiting update skipped because active-game safety RPC was unavailable");
   };
   const resolveLastHandWaitingQueue = async () => {
     const response = await fetch(`${sync.supabaseUrl}/rest/v1/rpc/resolve_last_hand_and_waiting_queue`, {
@@ -2052,7 +2038,11 @@ const sortHandTiles = (hand) => {
   });
 };
 const colorSuffix = (tile) => tile.color === "normal" ? "" : `_${tile.color}`;
-const tileAssetPath = (fileName) => location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
+const TILE_ASSET_VERSION = "20260629-blue5s-refresh-a";
+const tileAssetPath = (fileName) => {
+  const path = location.protocol === "file:" ? `./public/tiles/${fileName}` : `/tiles/${fileName}`;
+  return `${path}?v=${TILE_ASSET_VERSION}`;
+};
 const setCurrentTileAssetRuleId = (state) => {
   globalThis.__anmikaTileAssetRuleId = state?.settings?.ruleId || state?.settings?.gameType || state?.summary?.ruleId || state?.replay?.summary?.ruleId || null;
 };
@@ -2517,10 +2507,11 @@ const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLast
 const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   const localUserId = sync?.userId || gameState?.onlineSync?.userId || CURRENT_USER_ID;
   if (!localUserId) return false;
+  const localSeat = ensureArray(gameState?.seats ?? gameState?.onlineTableSeats)
+    .find((seat) => seat?.playerId === localUserId || seat?.userId === localUserId || seat?.user_id === localUserId);
+  if (localSeat) return Boolean(localSeat.isLastHandDeclared ?? localSeat.is_last_hand_declared);
   const declaredBy = Array.isArray(gameState?.lastHandDeclaredBy) ? gameState.lastHandDeclaredBy : [];
-  if (declaredBy.includes(localUserId)) return true;
-  const localSeat = gameState?.onlineTableSeats?.find?.((seat) => seat.userId === localUserId || seat.playerId === localUserId);
-  return Boolean(localSeat?.isLastHandDeclared);
+  return declaredBy.includes(localUserId);
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
   Boolean(sync?.tableId && gameState?.phase === "gameEnded" && !isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync));
@@ -2814,8 +2805,8 @@ const createInitialGameState = (players) => {
 };
 
 const colorByComposition = (composition, copy) => {
-  if (composition === "red4") return "red";
   if (composition === "red2blue2") return copy <= 2 ? "red" : "blue";
+  if (composition === "blueRedBlackBlack") return copy === 1 ? "blue" : copy === 2 ? "red" : "normal";
   if (composition === "blackBlackRedRed") return copy <= 2 ? "normal" : "red";
   return copy <= 3 ? "red" : "blue";
 };
@@ -5793,6 +5784,9 @@ class GameController {
           this.emit();
           return;
         }
+        this.state.log.unshift("全赤三麻は強制退席以外では卓から出られません。次の半荘開始待ちです。");
+        this.emit();
+        return;
       } catch (error) {
         console.warn("[SocketGame] final result ok failed", error);
         this.state.log.unshift(`次の半荘開始に失敗: ${error.message}`);
@@ -5855,8 +5849,13 @@ class GameController {
     this.state.clockStartedAt = null;
     this.emit();
   }
-  async leaveOnlineGameToLobby() {
+  async leaveOnlineGameToLobby(options = {}) {
     const sync = loadOnlineSync();
+    if (isTsumoLossless3maState(this.state) && !options.force) {
+      this.state.log.unshift("全赤三麻は強制退席以外では卓から出られません。");
+      this.emit();
+      return;
+    }
     const activeTableId = this.state.activeTableId || sync?.localTableId || sync?.tableId || "";
     const leavePlayerId = sync?.userId || getLocalHumanPlayerId(this.state);
     const clubId = localStorage.getItem(ONLINE_DEBUG_RETURN_CLUB_KEY) || this.state.activeClubId || this.state.selectedClubId || "";
@@ -7429,8 +7428,8 @@ class GameView {
     const discardGap = clamp(discardTileW * 0.11 * Number(profile.adjustment?.discardGapScale || 1), 1, 3);
     const riverW = discardTileW * 8 + discardGap * 7;
     const riverH = discardTileH * 3 + discardGap * 2;
-    const centerW = clamp(width * 0.17, 104, 132) * scale;
-    const centerH = clamp(height * 0.205, 64, 84) * scale;
+    const centerW = clamp(width * 0.22, 142, 184) * scale;
+    const centerH = clamp(height * 0.25, 86, 112) * scale;
     const bottomLaneH = Math.max(selfTileH + 24, height * 0.19);
     const topLaneH = Math.max(otherTileH + 22, height * 0.13);
     const rightLaneW = clamp(otherTileW * 4 + edge * 3, 60, Math.min(116, width * 0.16));
@@ -9008,7 +9007,7 @@ class GameView {
       </section>` : "";
     return `<section class="lobby-panel club-select-panel">
       <p class="current-user-line">現在のユーザー:${escapeHtml(displayName)} / ${escapeHtml(loginId)}</p>
-      <div class="screen-actions"><button type="button" data-nav="auth">戻る</button><button type="button" data-page-reload>画面更新</button></div>
+      <div class="screen-actions"><button type="button" data-nav="auth">戻る</button></div>
       <h2 class="club-select-title">クラブ選択</h2>
       <h3 class="club-select-heading">加入済みクラブ</h3>
       <div class="card-grid joined-club-list">${myClubs.map((club) => `<article class="lobby-card">
@@ -9078,20 +9077,20 @@ class GameView {
         <h4>ルール設定</h4>
         <label class="setting-row"><span>${isTsumoLossless ? "レート: 1000点 = " : "レート: 1点 = "}${Number(settings.pointRate ?? 1).toFixed(1)}ポイント</span><input type="range" min="0.1" max="10" step="0.1" value="${settings.pointRate ?? 1}" data-create-table-point-rate /></label>
         ${isTsumoLossless ? `
-          <label class="setting-row"><span>5p・5sの内訳</span><select data-rule-config-key="fiveTileComposition">
-            ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"], ["blackBlackRedRed", "黒黒赤赤"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.fiveTileComposition === value ? "selected" : ""}>${label}</option>`).join("")}
+          <label class="setting-row"><span>5の内訳（5p/5sの4枚）</span><select data-rule-config-key="fiveTileComposition">
+            ${[["red3blue1", "赤赤赤青"], ["red2blue2", "赤赤青青"], ["blueRedBlackBlack", "青赤黒黒"], ["blackBlackRedRed", "黒黒赤赤"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.fiveTileComposition === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
           <label class="setting-row"><span>華牌の構成</span><select data-rule-config-key="flowerComposition">
             ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.flowerComposition === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt</span><input type="range" min="${MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS}" max="10" step="0.5" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
+          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt（各プレイヤーから半荘開始時に回収）</span><input type="range" min="${MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS}" max="10" step="0.1" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
           <label class="setting-row"><span>ウマ</span><select data-rule-config-key="umaType">
             ${[["20-0--20", "20-0-▲20"], ["30-0--30", "30-0-▲30"], ["20-10--30", "20-10-▲30"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.umaType === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label class="setting-row"><span>祝儀価値</span><select data-rule-config-number="chipValuePoints">
+          <label class="setting-row"><span>祝儀価値（1枚を点数換算）</span><select data-rule-config-number="chipValuePoints">
             ${[2000, 5000, 10000].map((value) => `<option value="${value}" ${threeMaConfig.chipValuePoints === value ? "selected" : ""}>${value.toLocaleString()}点</option>`).join("")}
           </select></label>
-          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="northNukiDoraEnabled" ${threeMaConfig.northNukiDoraEnabled ? "checked" : ""} /> 北を抜きドラにする</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="northNukiDoraEnabled" ${threeMaConfig.northNukiDoraEnabled ? "checked" : ""} /> 北を抜きドラにする（初期値はオフ）</label>
         ` : `
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="rocket19Enabled" ${anmikaConfig.rocket19Enabled ? "checked" : ""} /> 1・9牌ロケット</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${anmikaConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
@@ -9209,7 +9208,7 @@ class GameView {
     const maybeRuleId = config?.ruleId || config?.gameType;
     if (maybeRuleId === TSUMO_LOSSLESS_3MA_RULE_ID || config?.fiveTileComposition || config?.flowerComposition) {
       const ruleConfig = normalizeTsumoLossless3maRuleConfig(config);
-      const fiveLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青", blackBlackRedRed: "黒黒赤赤" }[ruleConfig.fiveTileComposition];
+      const fiveLabel = { red3blue1: "赤赤赤青", red2blue2: "赤赤青青", blueRedBlackBlack: "青赤黒黒", blackBlackRedRed: "黒黒赤赤" }[ruleConfig.fiveTileComposition];
       const flowerLabel = { red3blue1: "赤赤赤青", red4: "赤赤赤赤", red2blue2: "赤赤青青" }[ruleConfig.flowerComposition];
       const umaLabel = String(ruleConfig.umaType).replace("--", "-▲");
       return [
@@ -9378,7 +9377,7 @@ class GameView {
       const tableBackgroundColor = normalizeTableBackgroundColor((state.currentUser || authRepository.getCurrentUser?.())?.tableBackgroundColor);
       return `<section class="mahjong-table" style="--table-background-color:${tableBackgroundColor};">
         <div class="table-frame"></div>
-        <section class="online-loading-message">卓が終了しました。<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></section>
+        <section class="online-loading-message">卓が終了しました。<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button></div></section>
       </section>`;
     }
     const viewState = buildViewStateForPlayer(state, viewer.id);
@@ -9417,13 +9416,13 @@ class GameView {
         ${state.discardDebugMessage ? `<div class="discard-debug-message">${escapeHtml(state.discardDebugMessage)}${state.discardRecoveryVisible ? ` <button type="button" data-force-discard-resync>再同期</button>` : ""}</div>` : ""}
       </section>`}
       ${state.phase === "idle" ? this.startOverlay() : ""}
-      ${state.isReplayView ? "" : this.reloadButton(state)}
+      ${this.shouldShowTableReloadButton(state) ? this.reloadButton(state) : ""}
       ${state.isReplayView ? "" : this.settingsButton(state)}
       ${state.settingsOpen ? this.settingsPanel(state) : ""}
       ${this.layoutOnlyBottomIcon(viewer, { visible: !state.isReplayView })}
       ${!state.isReplayView && viewer?.type !== "cpu" ? this.assistControls(viewer) : ""}
       ${state.isReplayView ? this.layoutOnlyAssistControls(viewer) : ""}
-      ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></div>` : ""}
+      ${showOnlineLoadingMessage ? `<div class="online-loading-message">${escapeHtml(state.onlineLoadingMessage)}<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button></div></div>` : ""}
       ${state.phase === "gameEnded" ? this.finalResult(state) : ""}
       ${state.phase === "showingWinAnnouncement" ? this.winAnnouncement(state) : ""}
       ${state.serverAnnouncement && state.phase !== "showingWinAnnouncement" ? this.serverAnnouncement(state) : ""}
@@ -9468,12 +9467,24 @@ class GameView {
   reloadButton(_state) {
     return `<button type="button" class="table-reload-button" data-page-reload>画面再読み込み</button>`;
   }
+  shouldShowTableReloadButton(state) {
+    return Boolean(
+      !state.isReplayView &&
+      state.screen === "game" &&
+      !state.handLog?.result &&
+      !["onlineLoading", "gameEnded", "showingWinAnnouncement"].includes(state.phase)
+    );
+  }
   settingsPanel(state) {
     const sync = loadOnlineSync();
     const showDebugLeave = shouldShowForceLeaveButton(state) && Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
+    const localSeat = ensureArray(state.seats ?? state.onlineTableSeats)
+      .find((seat) => seat?.playerId === localPlayer?.id || seat?.userId === localPlayer?.id || seat?.user_id === localPlayer?.id);
     const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
-    const localLastHandChecked = Boolean(localPlayer && declaredBy.includes(localPlayer.id));
+    const localLastHandChecked = localSeat
+      ? Boolean(localSeat.isLastHandDeclared ?? localSeat.is_last_hand_declared)
+      : Boolean(localPlayer && declaredBy.includes(localPlayer.id));
     const currentUser = state.currentUser || authRepository.getCurrentUser?.();
     const selectedTableBackgroundColor = normalizeTableBackgroundColor(currentUser?.tableBackgroundColor);
     const tableBackgroundOptions = TABLE_BACKGROUND_COLOR_OPTIONS.map((option) =>
@@ -9940,7 +9951,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onResultOk: (resultId = "") => controller.handleResultOk({ resultId }),
   onFinalResultOk: () => controller.handleFinalResultOk(),
   onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
-  onForceTableLeave: () => controller.leaveOnlineGameToLobby(),
+  onForceTableLeave: () => controller.leaveOnlineGameToLobby({ force: true }),
   onToggleSettings: () => controller.toggleSettings(),
   onCloseSettings: () => controller.closeSettings(),
   onUpdateSettings: (partial) => controller.updateSettings(partial),
