@@ -4443,7 +4443,7 @@ button:hover {
 
 .seat-right .hand-row {
   --right-meld-gap: 0px;
-  --right-meld-set-height: clamp(26px, 6.5dvh, 56px);
+  --right-meld-set-height: clamp(13px, 3.25dvh, 28px);
   grid-template-areas:
     "nuki"
     "meld"
@@ -4542,7 +4542,7 @@ button:hover {
 
   .seat-right .hand-row {
     --right-meld-gap: 0px;
-    --right-meld-set-height: clamp(14px, 4.25dvh, 19px);
+    --right-meld-set-height: clamp(7px, 2.125dvh, 10px);
     grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(220px, 1fr);
     max-height: calc(var(--anmika-viewport-height, 100dvh) - 12px);
     min-height: min(328px, calc(var(--anmika-viewport-height, 100dvh) - 12px));
@@ -4610,7 +4610,7 @@ button:hover {
   --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: 0px;
-  --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
+  --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 0.75);
   --safe-river-side-gap: var(--center-river-margin);
   --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
 }
@@ -5139,7 +5139,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table {
     --safe-right-lane-width: clamp(92px, 15dvw, 124px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 0.75);
   }
 
   body[data-pwa="standalone"] .mahjong-table.layout-tight-right,
@@ -5148,7 +5148,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right {
     --safe-right-lane-width: clamp(88px, 14dvw, 118px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 1.5);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 0.75);
   }
 
   body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles,
@@ -5229,7 +5229,7 @@ button:hover {
     --safe-center-y: 39%;
     --safe-right-lane-width: clamp(54px, 9.2dvw, 74px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 1.5);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 0.75);
     --safe-other-tile-width: clamp(10px, 2.8dvh, 13px);
     --safe-river-side-gap: 1px;
   }
