@@ -1766,6 +1766,9 @@ const isSkippedReplayStepEvent = (event) => {
 const getReplayVisibleSnapshotIndexes = (replay) => {
   const snapshots = getReplaySnapshots(replay);
   if (snapshots.length <= 1) return snapshots.map((_, index) => index);
+  if (replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
+    return snapshots.map((_, index) => index);
+  }
   const events = getReplayEvents(replay);
   if (!events.length) return snapshots.map((_, index) => index);
   const indexes = [0];
@@ -5056,6 +5059,10 @@ class GameController {
     const endedAt = now();
     const replayId = createId("replay");
     const table = this.state.activeTableId ? tableRepository.listTables().find((item) => item.id === this.state.activeTableId) : null;
+    const rawSnapshots = [...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)];
+    const replaySnapshots = (table?.ruleId ?? this.state.settings?.ruleId ?? this.state.settings?.gameType) === TSUMO_LOSSLESS_3MA_RULE_ID
+      ? rawSnapshots
+      : pickReplaySnapshots(rawSnapshots, 40);
     const replay = {
       replayId,
       summary: {
@@ -5076,7 +5083,7 @@ class GameController {
       },
       initialState: this.state.replayInitialState ?? cloneSnapshot(this.state),
       events: [...this.state.handLog.events],
-      snapshots: pickReplaySnapshots([...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)], 40),
+      snapshots: replaySnapshots,
     };
     replayRepository.saveReplay(replay);
     this.state.lastSavedReplayId = this.state.handLog.handId;
@@ -6923,6 +6930,7 @@ const layoutBucketFromCount = (count) => {
 };
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION = 2;
 const SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:sharedTable";
+const ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:accountTable";
 const DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:defaultTable";
 const DEFAULT_TABLE_LAYOUT_REMOTE_PREFIX = "layout-default";
 const DEFAULT_TABLE_LAYOUT_REMOTE_TABLE = "app_settings";
@@ -7220,7 +7228,7 @@ class GameView {
       width: riverH,
       height: riverW,
     };
-    const meldGap = clamp(otherTileH * 0.15 * Number(profile.adjustment?.meldGapScale || 1), 1, 8);
+    const meldGap = clamp(otherTileH * 0.28 * Number(profile.adjustment?.meldGapScale || 1), 3, 14);
     return {
       profile,
       safeRect,
@@ -7243,7 +7251,7 @@ class GameView {
       topDiscard,
       rightDiscard,
       rightMeldGap: meldGap,
-      rightMeldSetH: otherTileW * 3 + 2,
+      rightMeldSetH: otherTileW * 4.8 + 10,
       nukiW: discardTileW * 2 + 2,
       nukiH: discardTileH * 2 + 2,
     };
@@ -7377,6 +7385,11 @@ class GameView {
     const family = options.family === "desktop" || options.family === "mobile" ? options.family : this.layoutDeviceFamily();
     return `${family}:${orientation}`;
   }
+  layoutAccountKey() {
+    const sync = loadOnlineSync();
+    const userId = this.currentRenderedState?.currentUser?.id || sync?.userId || authRepository.getCurrentUser?.()?.id || CURRENT_USER_ID;
+    return String(userId || CURRENT_USER_ID).replace(/[^A-Za-z0-9_-]/g, "_");
+  }
   shouldUseSafeTableLayout() {
     const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
@@ -7413,6 +7426,9 @@ class GameView {
     return `anmikaLayoutAdjustments:${this.layoutDeviceKey(layout)}`;
   }
   layoutAdjustmentStorageKey(layout = null) {
+    return `${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.layoutAccountKey()}:${this.sharedLayoutDeviceKey()}`;
+  }
+  sharedLayoutAdjustmentStorageKey(layout = null) {
     return `${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
   }
   defaultLayoutAdjustmentStorageKey(layout = null, family = null) {
@@ -7522,7 +7538,10 @@ class GameView {
     let bestCount = 0;
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index) || "";
-      if (!key.startsWith("anmikaLayoutAdjustments:") || key.startsWith(SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX)) continue;
+      if (!key.startsWith("anmikaLayoutAdjustments:")
+        || key.startsWith(SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX)
+        || key.startsWith(ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX)
+        || key.startsWith(DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX)) continue;
       const saved = readSaved(key);
       const count = saved ? Object.keys(saved.adjustments || {}).length : 0;
       if (count > bestCount) {
@@ -7534,6 +7553,7 @@ class GameView {
   }
   loadLayoutAdjustmentProfile(layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
+    const sharedKey = this.sharedLayoutAdjustmentStorageKey(layout);
     const normalizeProfile = (saved) => {
       if (!saved?.adjustments) return saved;
       if (!saved.adjustments["assist.controls"]) {
@@ -7545,6 +7565,23 @@ class GameView {
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
       if (saved?.version >= 1 && saved.adjustments) return normalizeProfile(saved);
+    } catch {}
+    try {
+      const shared = JSON.parse(localStorage.getItem(sharedKey) || "null");
+      if (shared?.version >= 1 && shared.adjustments) {
+        const migrated = normalizeProfile({
+          ...shared,
+          version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+          scope: "account-device",
+          accountKey: this.layoutAccountKey(),
+          deviceKey: this.sharedLayoutDeviceKey(),
+          migratedFrom: sharedKey,
+          updatedAt: Number(shared.updatedAt || Date.now()),
+          userEditedAt: shared.overwrittenByDefault || shared.inheritedDefault ? Number(shared.userEditedAt || 0) : Number(shared.userEditedAt || shared.updatedAt || Date.now()),
+        });
+        localStorage.setItem(key, JSON.stringify(migrated));
+        return migrated;
+      }
     } catch {}
     const defaultProfile = this.loadDefaultLayoutAdjustmentProfile(layout);
     if (defaultProfile?.adjustments && Object.keys(defaultProfile.adjustments).length) {
@@ -7570,22 +7607,32 @@ class GameView {
     const key = this.layoutAdjustmentStorageKey(layout);
     localStorage.setItem(key, JSON.stringify({
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
-      scope: "all-tables",
+      scope: "account-device",
       rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      accountKey: this.layoutAccountKey(),
       deviceKey: this.sharedLayoutDeviceKey(),
       selectedKey: profile.selectedKey || "",
       adjustments: profile.adjustments || {},
       updatedAt: Date.now(),
+      userEditedAt: Date.now(),
     }));
   }
   overwriteLocalLayoutAdjustmentWithDefaultProfile(profile, layout = null, family = null) {
     if (this.sharedLayoutDeviceKey({ family }) !== this.sharedLayoutDeviceKey()) return false;
     const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
     if (!normalized) return false;
-    localStorage.setItem(this.layoutAdjustmentStorageKey(layout), JSON.stringify({
+    const storageKey = this.layoutAdjustmentStorageKey(layout);
+    try {
+      const existing = JSON.parse(localStorage.getItem(storageKey) || "null");
+      const existingEditedAt = Number(existing?.userEditedAt || 0);
+      const defaultUpdatedAt = Number(normalized.updatedAt || Date.now());
+      if (existing?.adjustments && !existing.overwrittenByDefault && existingEditedAt > defaultUpdatedAt) return false;
+    } catch {}
+    localStorage.setItem(storageKey, JSON.stringify({
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
-      scope: "all-tables",
+      scope: "account-device",
       rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+      accountKey: this.layoutAccountKey(),
       deviceKey: this.sharedLayoutDeviceKey(),
       selectedKey: normalized.selectedKey || "",
       adjustments: normalized.adjustments || {},

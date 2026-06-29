@@ -1848,7 +1848,9 @@ const buildRoomReplayPayload = (room) => {
   const sourceReplaySnapshots = asArray(state.replaySnapshots);
   const sourceHanchanReplaySnapshots = asArray(state.hanchanReplaySnapshots);
   const replaySnapshots = compactReplaySnapshotList(sourceReplaySnapshots, REPLAY_ANCHOR_SNAPSHOT_LIMIT);
-  const hanchanReplaySnapshots = compactReplaySnapshotList(sourceHanchanReplaySnapshots, REPLAY_ANCHOR_SNAPSHOT_LIMIT);
+  const hanchanReplaySnapshots = isTsumoLossless3maState(state)
+    ? sourceHanchanReplaySnapshots.map(compactStateForReplay)
+    : compactReplaySnapshotList(sourceHanchanReplaySnapshots, REPLAY_ANCHOR_SNAPSHOT_LIMIT);
   if (!replaySnapshots.length && !hanchanReplaySnapshots.length) return null;
   const isAllRedHanchanReplay = isTsumoLossless3maState(state) && hanchanReplaySnapshots.length > replaySnapshots.length;
   const events = isAllRedHanchanReplay
