@@ -6977,6 +6977,7 @@ const LAYOUT_ADJUSTMENT_ITEMS = [
   ["flower.top", "上側プレイヤーの華牌", ".seat-top .nuki-dora-area"],
   ["assist.controls", "自動和了・鳴きなし", ".assist-controls"],
   ["control.reload", "画面再読み込み", ".table-reload-button"],
+  ["replay.menu", "牌譜再生メニュー", ".replay-toolbar"],
   ...["self", "right", "top"].flatMap((seat) =>
     [1, 4, 7, 10, 13].map((count) => [
       `hand.${seat}.count${count}`,
@@ -7342,7 +7343,7 @@ class GameView {
       topDiscard,
       rightDiscard,
       rightMeldGap: meldGap,
-      rightMeldSetH: otherTileW * 14.4 + 30,
+      rightMeldSetH: otherTileW * 7.2 + 15,
       nukiW: discardTileW * 2 + 2,
       nukiH: discardTileH * 2 + 2,
     };
@@ -7796,6 +7797,7 @@ class GameView {
     if (item.key.startsWith("flower.")) return item.key;
     if (item.key.startsWith("assist.")) return item.key;
     if (item.key.startsWith("control.")) return item.key;
+    if (item.key.startsWith("replay.")) return item.key;
     const seatClass = layoutSeatClassFromKey(item.key);
     const seat = table.querySelector(`.seat-${seatClass}`);
     if (!seat) return "";
@@ -7811,6 +7813,9 @@ class GameView {
     return "";
   }
   targetElementForLayoutItem(table, item) {
+    if (item.key.startsWith("replay.")) {
+      return table.closest(".replay-screen")?.querySelector(item.selector) || this.root?.querySelector?.(item.selector) || document.querySelector(item.selector);
+    }
     return table.querySelector(item.selector);
   }
   resetUserLayoutTransforms(table) {
@@ -9093,9 +9098,11 @@ class GameView {
       ${this.mahjongTableClean(displayState, current, dealer, replayViewerId)}
       <div class="replay-toolbar replay-toolbar-bottom" data-replay-control>
         <a class="button-link" href="${replayBackUrl}">牌譜一覧へ戻る</a>
-        <button type="button" data-replay-step="-1" ${isReplayFirstStep ? "disabled" : ""}>前へ</button>
+        <span class="replay-step-controls">
+          <button type="button" data-replay-step="1" ${isReplayLastStep ? "disabled" : ""}>次へ</button>
+          <button type="button" data-replay-step="-1" ${isReplayFirstStep ? "disabled" : ""}>前へ</button>
+        </span>
         <strong>${index + 1} / ${snapshots.length}</strong>
-        <button type="button" data-replay-step="1" ${isReplayLastStep ? "disabled" : ""}>次へ</button>
         ${handSelect}
         <label>視点: <select data-replay-viewer>${viewerOptions}</select></label>
         <label><input type="checkbox" data-replay-reveal-hands ${state.replayRevealHands ? "checked" : ""} /> 他家の手牌を開く</label>
