@@ -2523,7 +2523,7 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   return Boolean(localSeat?.isLastHandDeclared);
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
-  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && didLocalPlayerDeclareLastHand(gameState, sync));
+  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && !isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync));
 const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
 const roundToTenth = (value) => {
   const numeric = Number(value || 0);

@@ -1154,13 +1154,22 @@
     if (amount > CLUB_POINT_FIXED_TOTAL) throw new Error(`${label}は${CLUB_POINT_FIXED_TOTAL}ポイント以下にしてください。`);
     return amount;
   };
+  const isAllRedState = (gameState) =>
+    gameState?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
+    gameState?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+  const isFinishedActiveGameState = (gameState) => Boolean(
+    gameState?.phase === "gameEnded" ||
+    gameState?.finalResult ||
+    gameState?.handLog?.result?.finalResult ||
+    (gameState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(gameState?.phase) && !isAllRedState(gameState))
+  );
   const loadActiveGameState = async (tableId = selectedTableId()) => {
     tableId = normalizeRemoteTableId(tableId);
     if (!tableId || !state.accessToken) return null;
     const rows = await rest(`/game_states?select=*&table_id=eq.${encodeURIComponent(tableId)}&is_active=eq.true&order=updated_at.desc&limit=1`);
     state.activeGameState = rows[0] || null;
     const activeState = state.activeGameState?.state || null;
-    const activeEnded = Boolean(activeState?.phase === "gameEnded" || (activeState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(activeState?.phase)) || activeState?.finalResult || activeState?.handLog?.result?.finalResult);
+    const activeEnded = isFinishedActiveGameState(activeState);
     if (state.activeGameState && activeEnded) {
       await deactivateTableActiveGameState(tableId, "終了済みGameStateを無効化").catch((error) => log("終了済みGameStateの無効化に失敗しました。", rawErrorText(error)));
       state.activeGameState = null;
@@ -3477,7 +3486,7 @@
     await waitForGameServerReady();
     clearLaunchingTable();
     const lastState = state.activeGameState?.table_id === tableId ? state.activeGameState?.state : null;
-    const endedState = Boolean(lastState?.phase === "gameEnded" || (lastState?.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(lastState?.phase)) || lastState?.finalResult || lastState?.handLog?.result?.finalResult);
+    const endedState = isFinishedActiveGameState(lastState);
     const gameId = endedState ? newSocketGameId(tableId, { fresh: true }) : newSocketGameId(tableId);
     if (endedState) await deactivateTableActiveGameState(tableId, "終了済み対局への再参加前").catch(() => {});
     startLocalDebugMahjong(tableId, rows, { game_id: gameId, version: 0, resetRoom: endedState });
