@@ -2524,6 +2524,8 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
   Boolean(sync?.tableId && gameState?.phase === "gameEnded" && !isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync));
+const shouldShowForceLeaveButton = (gameState) =>
+  Boolean(isTsumoLossless3maState(gameState) && isSocketAuthoritativeGame());
 const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
 const roundToTenth = (value) => {
   const numeric = Number(value || 0);
@@ -9468,7 +9470,7 @@ class GameView {
   }
   settingsPanel(state) {
     const sync = loadOnlineSync();
-    const showDebugLeave = DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
+    const showDebugLeave = shouldShowForceLeaveButton(state) && Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
     const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
     const localLastHandChecked = Boolean(localPlayer && declaredBy.includes(localPlayer.id));
@@ -9523,7 +9525,7 @@ class GameView {
     });
     if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
     return `<section class="score-result result-modal"><h2>最終結果</h2>
-      ${DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && isSocketAuthoritativeGame() ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
+      ${shouldShowForceLeaveButton(state) ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
       <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${formatPointDisplay(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
@@ -9703,7 +9705,7 @@ class GameView {
     const result = state.handLog.result;
     if (!result) return "";
     const content = result.type === "exhaustiveDraw" ? this.exhaustiveDrawResult(state, result) : this.scoreBreakdown(result.scoreResult, state);
-    const forceLeave = DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && isSocketAuthoritativeGame()
+    const forceLeave = shouldShowForceLeaveButton(state)
       ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>`
       : "";
     return `<div class="result-backdrop">${forceLeave}${content}</div>`;

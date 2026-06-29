@@ -5388,7 +5388,7 @@
           <div class="table-card-actions">
             ${table.status === "playing" ? '<button type="button" data-action="enterGame" class="primary">対局へ入る</button>' : ""}
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
-            ${DEBUG_FORCE_LEAVE_BUTTONS_ENABLED ? `<button type="button" data-action="forceLeave" class="danger">強制退席</button>` : ""}
+            ${table.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID ? `<button type="button" data-action="forceLeave" class="danger">強制退席</button>` : ""}
             <button type="button" data-action="addCpu" class="super-only">CPU追加</button>
             <button type="button" data-action="removeCpu" class="super-only secondary">CPU削除</button>
             <button type="button" data-action="deleteTable" class="admin-only danger">卓削除</button>
