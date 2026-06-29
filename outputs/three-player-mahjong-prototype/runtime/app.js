@@ -4869,12 +4869,18 @@ class GameController {
       if (!didInitialJoin || !socket.connected) return;
       try {
         const latestSync = loadOnlineSync();
+        const currentUser = this.state.currentUser || authRepository.getCurrentUser?.();
         const response = await socketEmitWithAck(socket, "game:join", {
           tableId: latestSync?.tableId || sync.tableId,
           gameId: latestSync?.gameId || sync.gameId,
           userId: latestSync?.userId || sync.userId,
           reason,
           resetRoom: false,
+          playerProfile: {
+            id: latestSync?.userId || sync.userId,
+            name: currentUser?.displayName || getPlayerNameById(latestSync?.userId || sync.userId),
+            iconUrl: currentUser?.iconUrl || "",
+          },
         });
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
@@ -5006,11 +5012,17 @@ class GameController {
       this.onStateChanged(this.state);
     });
     await waitForSocketConnected(socket, SOCKET_CONNECT_TIMEOUT_MS + 15000);
+    const currentUser = this.state.currentUser || authRepository.getCurrentUser?.();
     const joinResponse = await socketEmitWithAck(socket, "game:join", {
       tableId: sync.tableId,
       gameId: sync.gameId,
       userId: sync.userId,
       resetRoom: Boolean(sync.resetRoom),
+      playerProfile: {
+        id: sync.userId,
+        name: currentUser?.displayName || getPlayerNameById(sync.userId),
+        iconUrl: currentUser?.iconUrl || "",
+      },
     });
     didInitialJoin = true;
     this.socketInitialConnectRetryCount = 0;
@@ -7387,6 +7399,8 @@ class GameView {
     const scale = Number(profile.adjustment?.globalScale || 1) * adjustmentScale + (1 - adjustmentScale);
     const width = safeRect.width;
     const height = safeRect.height;
+    const originX = safeRect.x + width / 2;
+    const originY = safeRect.y + height / 2;
     const edge = clamp(Math.min(width, height) * 0.018, 4, 10);
     let selfTileH = clamp(height * 0.128, 40, 58) * scale;
     let selfTileW = selfTileH * 0.72;
@@ -7408,27 +7422,35 @@ class GameView {
     const bottomLaneH = Math.max(selfTileH + 24, height * 0.19);
     const topLaneH = Math.max(otherTileH + 22, height * 0.13);
     const rightLaneW = clamp(otherTileW * 4 + edge * 3, 60, Math.min(116, width * 0.16));
-    const centerX = apply(safeRect.x + width * 0.49, "centerOffsetX");
-    const centerY = apply(safeRect.y + height * 0.43, "centerOffsetY");
+    const fromOrigin = (ratioX, ratioY, offsetXKey = "", offsetYKey = "") => ({
+      x: apply(originX + width * ratioX, offsetXKey),
+      y: apply(originY + height * ratioY, offsetYKey),
+    });
+    const centerPoint = fromOrigin(-0.01, -0.07, "centerOffsetX", "centerOffsetY");
+    const bottomSeatPoint = fromOrigin(0, 0.5 - (bottomLaneH / 2 + edge * 0.2) / Math.max(1, height), "bottomHandOffsetX", "bottomHandOffsetY");
+    const topSeatPoint = fromOrigin((rightLaneW + edge) / Math.max(1, width) / -2, -0.5 + (topLaneH / 2 + edge * 0.5) / Math.max(1, height), "topHandOffsetX", "topHandOffsetY");
+    const rightSeatPoint = fromOrigin(0.5 - (rightLaneW / 2 + edge) / Math.max(1, width), (topLaneH - bottomLaneH) / (2 * Math.max(1, height)), "rightHandOffsetX", "rightHandOffsetY");
     const bottomSeat = {
-      x: apply(safeRect.x + edge, "bottomHandOffsetX"),
-      y: apply(safeRect.y + height - bottomLaneH + edge * 0.3, "bottomHandOffsetY"),
+      x: bottomSeatPoint.x - (width - edge * 2) / 2,
+      y: bottomSeatPoint.y - (bottomLaneH - edge) / 2,
       width: width - edge * 2,
       height: bottomLaneH - edge,
     };
     const topSeat = {
-      x: apply(safeRect.x + edge, "topHandOffsetX"),
-      y: apply(safeRect.y + edge, "topHandOffsetY"),
+      x: topSeatPoint.x - (width - rightLaneW - edge * 3) / 2,
+      y: topSeatPoint.y - (topLaneH - edge) / 2,
       width: width - rightLaneW - edge * 3,
       height: topLaneH - edge,
     };
     const rightSeat = {
-      x: apply(safeRect.x + width - rightLaneW - edge, "rightHandOffsetX"),
-      y: apply(safeRect.y + topLaneH + edge, "rightHandOffsetY"),
+      x: rightSeatPoint.x - rightLaneW / 2,
+      y: rightSeatPoint.y - (height - topLaneH - bottomLaneH - edge * 2) / 2,
       width: rightLaneW,
       height: height - topLaneH - bottomLaneH - edge * 2,
     };
     const centerMargin = clamp(Math.min(width, height) * 0.012, 2, 6);
+    const centerX = centerPoint.x;
+    const centerY = centerPoint.y;
     const bottomDiscard = { x: centerX - riverW / 2, y: centerY + centerH / 2 + centerMargin, width: riverW, height: riverH };
     const topDiscard = { x: centerX - riverW / 2, y: centerY - centerH / 2 - centerMargin - riverH, width: riverW, height: riverH };
     const rightDiscard = {
@@ -7441,6 +7463,7 @@ class GameView {
     return {
       profile,
       safeRect,
+      origin: { x: originX, y: originY },
       edge,
       selfTileW,
       selfTileH,
@@ -7533,6 +7556,8 @@ class GameView {
     table.style.setProperty("--layout-safe-y", px(layout.safeRect.y));
     table.style.setProperty("--layout-safe-width", px(layout.safeRect.width));
     table.style.setProperty("--layout-safe-height", px(layout.safeRect.height));
+    table.style.setProperty("--layout-origin-x", px(layout.origin?.x ?? (layout.safeRect.x + layout.safeRect.width / 2)));
+    table.style.setProperty("--layout-origin-y", px(layout.origin?.y ?? (layout.safeRect.y + layout.safeRect.height / 2)));
     table.style.setProperty("--center-info-width", px(layout.center.width));
     table.style.setProperty("--center-info-height", px(layout.center.height));
     table.style.setProperty("--layout-center-x", px(layout.center.x + layout.center.width / 2));
@@ -9319,6 +9344,13 @@ class GameView {
     this.currentStateForClock = state;
     viewerPlayerId ??= getLocalHumanPlayerId(state);
     const viewer = state.players.find((player) => player.id === viewerPlayerId) ?? state.players.find((player) => player.type !== "cpu") ?? state.players[0];
+    if (!viewer) {
+      const tableBackgroundColor = normalizeTableBackgroundColor((state.currentUser || authRepository.getCurrentUser?.())?.tableBackgroundColor);
+      return `<section class="mahjong-table" style="--table-background-color:${tableBackgroundColor};">
+        <div class="table-frame"></div>
+        <section class="online-loading-message">卓が終了しました。<div class="online-loading-actions"><button type="button" data-leave-online-loading>ロビーへ戻る</button><button type="button" onclick="location.reload()">再読み込み</button></div></section>
+      </section>`;
+    }
     const viewState = buildViewStateForPlayer(state, viewer.id);
     setRenderSeatMap(state, viewState.seats);
     if (state.isReplayRevealHands) {

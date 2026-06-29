@@ -903,6 +903,15 @@ const mergeSubmittedPlayerProfiles = (room, players = []) => {
   });
   return changed;
 };
+const mergeJoinedPlayerProfile = (room, userId, profile = {}) => {
+  if (!room?.state || !userId) return false;
+  const incoming = {
+    id: userId,
+    name: profile.name || profile.displayName || profile.display_name || "",
+    iconUrl: profile.iconUrl || profile.icon_url || "",
+  };
+  return mergeSubmittedPlayerProfiles(room, [incoming]);
+};
 const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoStart", requireTsumoLossless = false } = {}) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
   if (requireTsumoLossless && !isTsumoLossless3maState(room.state)) return false;
@@ -6097,7 +6106,7 @@ io.on("connection", (socket) => {
   });
   socket.on("game:join", async (payload = {}, ack) => {
     try {
-      const { tableId, gameId, userId, resetRoom = false } = payload;
+      const { tableId, gameId, userId, resetRoom = false, playerProfile = null } = payload;
       let room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
       if (!resetRoom && isEndedRoomState(room.state)) {
         console.log("[AnmikaGameServer] reset ended room on join", { tableId: room.tableId, previousGameId: room.gameId, userId });
@@ -6114,6 +6123,7 @@ io.on("connection", (socket) => {
       socket.data.userId = userId;
       markRoomPlayerConnected(room, userId, socket);
       if (room.state) {
+        mergeJoinedPlayerProfile(room, userId, playerProfile);
         resumeClockForReconnectedPlayer(room, userId);
         if (applyDueRoomServerEffect(room)) {
           broadcastState(room);

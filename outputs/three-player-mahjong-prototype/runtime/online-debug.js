@@ -2788,6 +2788,7 @@
     if (!state.user?.id) return;
     const dbBody = {
       display_name: state.user.displayName || "あなた",
+      icon_url: state.user.iconUrl || "",
     };
     const localBody = {
       ...dbBody,
