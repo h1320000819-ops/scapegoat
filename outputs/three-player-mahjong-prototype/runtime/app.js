@@ -7411,7 +7411,7 @@ class GameView {
       width: riverH,
       height: riverW,
     };
-    const meldGap = otherTileW * Number(profile.adjustment?.meldGapScale || 1);
+    const meldGap = 0;
     return {
       profile,
       safeRect,
