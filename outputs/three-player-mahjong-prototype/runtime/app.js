@@ -1904,6 +1904,14 @@ const formatTile = (tile) => {
   if (tile.suit === "flower") return `${colorText[tile.color] ?? ""}華`;
   return `${tile.isRocket ? "ロケット" : colorText[tile.color] ?? ""}${tile.rank}${suitText[tile.suit]}`;
 };
+const formatPochiSelectedWaitTile = (state, score, tile) => {
+  const isAnmikaRocket = !isTsumoLossless3maState(state);
+  const isBlueFiveCandidate = tile?.color === "blue" && Number(tile?.rank) === 5 && (tile?.suit === "pinzu" || tile?.suit === "souzu");
+  if (score?.pochiActivated && isAnmikaRocket && isBlueFiveCandidate) {
+    return formatTile({ ...tile, isRocket: true, color: "normal" });
+  }
+  return formatTile(tile);
+};
 const isFlowerTile = (tile) => tile?.suit === "flower";
 const tileKindKey = (tile) => tile.suit === "honor" || tile.suit === "flower" ? `${tile.suit}-${tile.kind}` : `${tile.suit}-${tile.rank}`;
 const sameTileKind = (a, b) => tileKindKey(a) === tileKindKey(b);
@@ -7142,6 +7150,8 @@ const ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:accountT
 const DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:defaultTable";
 const DEFAULT_TABLE_LAYOUT_REMOTE_PREFIX = "layout-default";
 const DEFAULT_TABLE_LAYOUT_REMOTE_TABLE = "app_settings";
+const MOBILE_VIRTUAL_LAYOUT_WIDTH = 960;
+const MOBILE_VIRTUAL_LAYOUT_HEIGHT = 540;
 const DEBUG_FORCE_LEAVE_BUTTONS_ENABLED = false;
 const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
 const isPrivilegedLayoutUser = (user) => Boolean(
@@ -7531,11 +7541,29 @@ class GameView {
       height: window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
     };
     const insets = this.safeAreaInsets();
-    const safeRect = {
+    const availableRect = {
       x: insets.left,
       y: insets.top,
       width: Math.max(1, viewport.width - insets.left - insets.right),
       height: Math.max(1, viewport.height - insets.top - insets.bottom),
+    };
+    const virtualAspect = MOBILE_VIRTUAL_LAYOUT_WIDTH / MOBILE_VIRTUAL_LAYOUT_HEIGHT;
+    const availableAspect = availableRect.width / Math.max(1, availableRect.height);
+    const virtualWidth = availableAspect > virtualAspect
+      ? availableRect.height * virtualAspect
+      : availableRect.width;
+    const virtualHeight = availableAspect > virtualAspect
+      ? availableRect.height
+      : availableRect.width / virtualAspect;
+    const safeRect = {
+      x: availableRect.x + (availableRect.width - virtualWidth) / 2,
+      y: availableRect.y + (availableRect.height - virtualHeight) / 2,
+      width: Math.max(1, virtualWidth),
+      height: Math.max(1, virtualHeight),
+      availableRect,
+      virtualWidth: MOBILE_VIRTUAL_LAYOUT_WIDTH,
+      virtualHeight: MOBILE_VIRTUAL_LAYOUT_HEIGHT,
+      virtualAspect,
     };
     const profile = this.detectLayoutProfile(safeRect, insets);
     let fallback = null;
@@ -9856,7 +9884,7 @@ class GameView {
     const multiplierLabels = score.baibaDetails?.labels?.length ? `（${score.baibaDetails.labels.join("・")}）` : "";
     const pochiLabel = score.pochiColor ? (pochiText[score.pochiColor] ?? `${score.pochiColor}ぽっち`) : "";
     const selectedWaitLine = score.pochiActivated && scoringWinningTile
-      ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatTile(scoringWinningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
+      ? `<p class="score-pochi-line">${escapeHtml(pochiLabel)}発動 / 採用待ち: ${escapeHtml(formatPochiSelectedWaitTile(state, score, scoringWinningTile))} / 白ぽっち倍率: ${pochiMultiplier}</p>`
       : "";
     const finalScoreValue = Number(score.finalPoints ?? score.totalPoints ?? 0);
     const finalScoreClass = finalScoreValue < 0 ? " final-score-negative" : "";

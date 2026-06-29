@@ -5285,8 +5285,22 @@ button:hover {
     --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
     height: var(--anmika-viewport-height, 100dvh) !important;
     max-height: var(--anmika-viewport-height, 100dvh) !important;
+    background: #000 !important;
     overflow: hidden !important;
     width: var(--anmika-viewport-width, 100vw) !important;
+  }
+
+  .mahjong-table.auto-safe-layout::before {
+    background: var(--table-background-color, #55B0FF) !important;
+    inset: auto !important;
+    left: var(--layout-safe-x) !important;
+    top: var(--layout-safe-y) !important;
+    width: var(--layout-safe-width) !important;
+    height: var(--layout-safe-height) !important;
+  }
+
+  .mahjong-table.auto-safe-layout::after {
+    display: none !important;
   }
 
   .mahjong-table.auto-safe-layout .center-info {
