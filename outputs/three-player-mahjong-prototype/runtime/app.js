@@ -118,7 +118,7 @@ const TABLE_BACKGROUND_COLOR_OPTIONS = [
   { value: "#4F2916", label: "濃い茶色" },
   { value: "#48D8A0", label: "緑色" },
 ];
-const DEFAULT_TABLE_BACKGROUND_COLOR = TABLE_BACKGROUND_COLOR_OPTIONS[0].value;
+const DEFAULT_TABLE_BACKGROUND_COLOR = "#4F2916";
 const normalizeTableBackgroundColor = (value) => {
   const normalized = String(value || "").trim().toUpperCase();
   return TABLE_BACKGROUND_COLOR_OPTIONS.some((option) => option.value === normalized) ? normalized : DEFAULT_TABLE_BACKGROUND_COLOR;
@@ -9475,14 +9475,14 @@ class GameView {
   }
   centerInfoClean(state, dealer) {
     const baibaDetails = getVisibleBaibaMultiplierDetails(state);
-    const roundLabel = `${formatCenterRoundLabel(state)}${baibaDetails.multiplier > 1 ? `（×${baibaDetails.multiplier}）` : ""}`;
+    const baibaLabel = baibaDetails.multiplier > 1 ? `<span class="round-baiba-label">倍場</span>` : "";
+    const roundLabel = `${formatCenterRoundLabel(state)}${baibaLabel}`;
     const playerRows = (state.players ?? []).map((player) => {
       const role = getSeatRoleLabel(state, player.id);
       return `<li><span class="center-player-name">${escapeHtml(player.name)}</span><strong>${formatPointDisplay(player.score)}点</strong><em>${role}</em></li>`;
     }).join("");
     const doraTiles = (state.doraIndicators ?? []).map((tile) => renderTileView({ tile })).join("");
     const liveWallCount = state.liveWall?.length ?? 0;
-    const rinshanWallCount = state.rinshanWall?.length ?? 0;
     const riichiStickLine = isTsumoLossless3maState(state) ? `<div class="center-riichi-sticks">リーチ棒 x${Number(state.riichiStickCount || 0)}</div>` : "";
     const centerClass = `center-info${isTsumoLossless3maState(state) ? " center-info-allred" : ""}`;
     return `<section class="${centerClass}">
@@ -9490,7 +9490,7 @@ class GameView {
       <ul class="center-scores">${playerRows}</ul>
       ${riichiStickLine}
       <div class="center-bottom-info">
-        <div class="center-wall"><span>山 ${liveWallCount}枚</span><span>嶺上 ${rinshanWallCount}枚</span></div>
+        <div class="center-wall"><span>山 ${liveWallCount}枚</span></div>
         <div class="center-dora"><span>ドラ表示牌</span><div class="center-dora-tiles">${doraTiles || "なし"}</div></div>
       </div>
     </section>`;

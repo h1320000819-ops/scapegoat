@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260629-table-bg-dark-brown-a";
+const CACHE_NAME = "anmika-pwa-20260629-baiba-label-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v12";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260629-table-bg-dark-brown-a",
-  "/runtime/app.js?v=20260629-table-bg-dark-brown-a",
-  "/runtime/online-debug.js?v=20260629-table-bg-dark-brown-a",
-  "/runtime/pwa.js?v=20260629-table-bg-dark-brown-a",
+  "/styles.css?v=20260629-baiba-label-a",
+  "/runtime/app.js?v=20260629-baiba-label-a",
+  "/runtime/online-debug.js?v=20260629-baiba-label-a",
+  "/runtime/pwa.js?v=20260629-baiba-label-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
