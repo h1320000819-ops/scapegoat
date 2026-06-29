@@ -2507,7 +2507,12 @@ const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLast
 const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   const localUserId = sync?.userId || gameState?.onlineSync?.userId || CURRENT_USER_ID;
   if (!localUserId) return false;
-  const localSeat = ensureArray(gameState?.seats ?? gameState?.onlineTableSeats)
+  const seats = Array.isArray(gameState?.seats)
+    ? gameState.seats
+    : Array.isArray(gameState?.onlineTableSeats)
+      ? gameState.onlineTableSeats
+      : [];
+  const localSeat = seats
     .find((seat) => seat?.playerId === localUserId || seat?.userId === localUserId || seat?.user_id === localUserId);
   if (localSeat) return Boolean(localSeat.isLastHandDeclared ?? localSeat.is_last_hand_declared);
   const declaredBy = Array.isArray(gameState?.lastHandDeclaredBy) ? gameState.lastHandDeclaredBy : [];
@@ -9479,7 +9484,12 @@ class GameView {
     const sync = loadOnlineSync();
     const showDebugLeave = shouldShowForceLeaveButton(state) && Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
-    const localSeat = ensureArray(state.seats ?? state.onlineTableSeats)
+    const seats = Array.isArray(state.seats)
+      ? state.seats
+      : Array.isArray(state.onlineTableSeats)
+        ? state.onlineTableSeats
+        : [];
+    const localSeat = seats
       .find((seat) => seat?.playerId === localPlayer?.id || seat?.userId === localPlayer?.id || seat?.user_id === localPlayer?.id);
     const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
     const localLastHandChecked = localSeat
