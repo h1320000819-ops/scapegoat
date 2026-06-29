@@ -2539,6 +2539,78 @@ const signedPointDisplay = (value = 0) => {
   const rounded = roundToTenth(value);
   return `${rounded > 0 ? "+" : ""}${formatPointDisplay(rounded)}`;
 };
+const arrayFromMaybe = (value) => Array.isArray(value) ? value : (value ? [value] : []);
+const getTsumoLosslessChipPointValue = (state) => {
+  const chipValuePoints = Number(state?.settings?.ruleConfig?.chipValuePoints || 5000);
+  const rate = Number(state?.settings?.pointRate || 1);
+  return roundToTenth((chipValuePoints / 1000) * rate);
+};
+const countTsumoLosslessBlueChipTiles = (winner, scoreResult = {}) => {
+  const sourceGroups = [
+    arrayFromMaybe(winner?.hand),
+    arrayFromMaybe(winner?.drawnTile),
+    arrayFromMaybe(scoreResult?.winningTile),
+    arrayFromMaybe(scoreResult?.displayWinningTile),
+    arrayFromMaybe(scoreResult?.scoringWinningTile),
+    arrayFromMaybe(scoreResult?.selectedWait),
+    arrayFromMaybe(winner?.nukiDoraTiles),
+    arrayFromMaybe(winner?.melds).flatMap((meld) => arrayFromMaybe(meld?.tiles)),
+  ];
+  const seen = new Set();
+  let count = 0;
+  sourceGroups.forEach((sourceTiles, groupIndex) => {
+    sourceTiles.forEach((tile, tileIndex) => {
+      if (!tile || tile.color !== "blue" || tile.isPochi) return;
+      const tileKindKey = `${tile.suit || tile.kind}:${tile.rank || ""}:${tile.kind || ""}:${tile.color || ""}`;
+      const key = tile.id || (groupIndex >= 1 && groupIndex <= 5 ? `winning:${tileKindKey}` : `${groupIndex}:${tileIndex}:${tileKindKey}`);
+      if (seen.has(key)) return;
+      seen.add(key);
+      count += 1;
+    });
+  });
+  return count;
+};
+const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, scoreResult = {}) => {
+  if (!isTsumoLossless3maState(state) || !winner) return null;
+  const yakuItems = arrayFromMaybe(scoreResult?.yakuList || scoreResult?.yaku);
+  const yakuNames = new Set(yakuItems.map((item) => typeof item === "string" ? item : item?.name).filter(Boolean));
+  const blueChips = countTsumoLosslessBlueChipTiles(winner, scoreResult);
+  const ippatsuChips = yakuNames.has("一発") ? 1 : 0;
+  const uraChips = Number(scoreResult?.dora?.ura || 0);
+  const yakumanChips = yakuItems.some((item) => item?.isYakuman && !item?.isCountedYakuman) ? (winType === "tsumo" ? 5 : 10) : 0;
+  const chipsPerPayer = blueChips + ippatsuChips + uraChips + yakumanChips;
+  const chipPoint = getTsumoLosslessChipPointValue(state);
+  const pointPerPayer = roundToTenth(chipsPerPayer * chipPoint);
+  const payments = Object.fromEntries((state.players || []).map((player) => [player.id, 0]));
+  if (pointPerPayer !== 0) {
+    if (winType === "tsumo") {
+      for (const player of state.players || []) {
+        if (player.id === winner.id) continue;
+        payments[player.id] -= pointPerPayer;
+        payments[winner.id] += pointPerPayer;
+      }
+    } else if (loserId) {
+      payments[loserId] -= pointPerPayer;
+      payments[winner.id] += pointPerPayer;
+    }
+  }
+  return { type: "chipSettlement", chipPoint, chipsPerPayer, blueChips, ippatsuChips, uraChips, yakumanChips, pointPerPayer, payments };
+};
+const calculateTsumoLosslessTobiPrize = (state, winnerId) => {
+  if (!isTsumoLossless3maState(state) || !winnerId) return null;
+  const chipPoint = getTsumoLosslessChipPointValue(state);
+  const prize = roundToTenth(chipPoint * 2);
+  if (prize <= 0) return null;
+  const payments = Object.fromEntries((state.players || []).map((player) => [player.id, 0]));
+  const entries = [];
+  for (const player of state.players || []) {
+    if (player.id === winnerId || Number(player.score || 0) > 0) continue;
+    payments[player.id] -= prize;
+    payments[winnerId] += prize;
+    entries.push({ payerId: player.id, recipientId: winnerId, points: prize });
+  }
+  return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
+};
 const calculateRake = (winnerGain, rakePercent) => {
   const gain = Math.max(0, Number(winnerGain || 0));
   const percent = Math.max(0, Number(rakePercent || 0));
@@ -6180,9 +6252,24 @@ class GameController {
     for (const player of this.state.players) player.status = player.id === winner.id ? "declared-win" : "waiting";
     const scoringWinningTile = score.selectedWait ?? input.selectedWait ?? winningTiles.at(-1);
     const displayWinningTile = input.displayWinningTile ?? score.displayWinningTile ?? scoringWinningTile;
+    const allRedScoreForExtras = {
+      ...score,
+      selectedWait: score.selectedWait ?? input.selectedWait,
+      winningTile: score.winningTile ?? scoringWinningTile,
+      scoringWinningTile,
+      displayWinningTile,
+    };
+    const chipSettlement = isTsumoLossless3maState(this.state)
+      ? (score.chipSettlement || calculateTsumoLosslessChipSettlement(this.state, winner, input.winType, input.discarderId, allRedScoreForExtras))
+      : null;
+    const tobiPrize = isTsumoLossless3maState(this.state)
+      ? (score.tobiPrize || calculateTsumoLosslessTobiPrize(this.state, winner.id))
+      : null;
+    if (chipSettlement) score.chipSettlement = chipSettlement;
+    if (tobiPrize) score.tobiPrize = tobiPrize;
     appendHandLogEvent(this.state.handLog, { type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
     appendHandLogEvent(this.state.handLog, input.winType === "tsumo" ? { type: "tsumo", playerId: winner.id, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex } : { type: "ron", playerId: winner.id, fromPlayerId: input.discarderId, tile: displayWinningTile, scoringTile: scoringWinningTile, scoreResult: score, turnIndex: this.state.turnIndex });
-    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
+    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "win", winnerId: winner.id, loserId: input.discarderId, winType: input.winType, winningTile: displayWinningTile, scoringWinningTile, scoreResult: score, payments: score.paymentDeltas ?? Object.entries(score.payments ?? {}).map(([playerId, delta]) => ({ playerId, delta })), chipSettlement, tobiPrize, isFeverContinuation, feverWinCount: winner.feverWinCount ?? 0 };
     score.winningTiles ??= winningTiles;
     score.winningTile ??= scoringWinningTile;
     score.displayWinningTile ??= displayWinningTile;
@@ -7324,7 +7411,7 @@ class GameView {
       width: riverH,
       height: riverW,
     };
-    const meldGap = clamp(otherTileH * 0.28 * Number(profile.adjustment?.meldGapScale || 1), 3, 14);
+    const meldGap = otherTileW * Number(profile.adjustment?.meldGapScale || 1);
     return {
       profile,
       safeRect,
@@ -7524,6 +7611,9 @@ class GameView {
   layoutAdjustmentStorageKey(layout = null) {
     return `${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.layoutAccountKey()}:${this.sharedLayoutDeviceKey()}`;
   }
+  layoutRuleMigrationMarkerKey(layout = null) {
+    return `${this.layoutAdjustmentStorageKey(layout)}:rule-shared-migrated`;
+  }
   accountLayoutAdjustmentStorageKey(accountKey = this.layoutAccountKey(), family = null) {
     return `${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${String(accountKey || CURRENT_USER_ID).replace(/[^A-Za-z0-9_-]/g, "_")}:${this.sharedLayoutDeviceKey({ family })}`;
   }
@@ -7651,6 +7741,34 @@ class GameView {
     }
     return best;
   }
+  loadAnmikaRuleLayoutAdjustmentProfile(layout = null) {
+    const accountKey = this.layoutAccountKey();
+    const deviceKey = this.sharedLayoutDeviceKey();
+    const candidates = [];
+    const readSaved = (key) => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(key) || "null");
+        if (saved?.version >= 1 && saved.adjustments) return saved;
+      } catch {}
+      return null;
+    };
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index) || "";
+      if (!key.includes("anmika-rocket")) continue;
+      if (!key.startsWith("anmikaLayoutAdjustments:") && !key.startsWith(`${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`) && !key.startsWith(`${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`) && !key.startsWith(`${DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`)) continue;
+      if (!key.includes(accountKey) && key.startsWith(`${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`)) continue;
+      if (!key.includes(deviceKey) && !key.includes(this.layoutDeviceFamily())) continue;
+      const saved = readSaved(key);
+      if (saved) candidates.push({ key, saved });
+    }
+    candidates.sort((a, b) => {
+      const aTime = Number(a.saved.userEditedAt || a.saved.updatedAt || 0);
+      const bTime = Number(b.saved.userEditedAt || b.saved.updatedAt || 0);
+      if (aTime !== bTime) return bTime - aTime;
+      return Object.keys(b.saved.adjustments || {}).length - Object.keys(a.saved.adjustments || {}).length;
+    });
+    return candidates[0]?.saved || null;
+  }
   loadLayoutAdjustmentProfile(layout = null) {
     const key = this.layoutAdjustmentStorageKey(layout);
     const sharedKey = this.sharedLayoutAdjustmentStorageKey(layout);
@@ -7662,6 +7780,28 @@ class GameView {
       }
       return saved;
     };
+    try {
+      if (!localStorage.getItem(this.layoutRuleMigrationMarkerKey(layout))) {
+        const anmikaProfile = normalizeProfile(this.loadAnmikaRuleLayoutAdjustmentProfile(layout));
+        if (anmikaProfile?.adjustments && Object.keys(anmikaProfile.adjustments).length) {
+          const migrated = {
+            ...anmikaProfile,
+            version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
+            scope: "account-device",
+            rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
+            accountKey: this.layoutAccountKey(),
+            deviceKey: this.sharedLayoutDeviceKey(),
+            migratedFromRule: "anmika-rocket",
+            updatedAt: Date.now(),
+            userEditedAt: Number(anmikaProfile.userEditedAt || anmikaProfile.updatedAt || Date.now()),
+          };
+          localStorage.setItem(key, JSON.stringify(migrated));
+          localStorage.setItem(this.layoutRuleMigrationMarkerKey(layout), String(Date.now()));
+          return migrated;
+        }
+        localStorage.setItem(this.layoutRuleMigrationMarkerKey(layout), String(Date.now()));
+      }
+    } catch {}
     try {
       const saved = JSON.parse(localStorage.getItem(key) || "null");
       if (saved?.version >= 1 && saved.adjustments) return normalizeProfile(saved);
@@ -7716,6 +7856,7 @@ class GameView {
       updatedAt: Date.now(),
       userEditedAt: Date.now(),
     }));
+    try { localStorage.setItem(this.layoutRuleMigrationMarkerKey(layout), String(Date.now())); } catch {}
   }
   buildDefaultBasedAccountLayoutProfile(profile, layout = null, family = null) {
     const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);

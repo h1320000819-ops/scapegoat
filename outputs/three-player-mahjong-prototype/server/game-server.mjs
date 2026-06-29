@@ -2694,22 +2694,36 @@ const getChipPointValue = (state) => {
   return roundToTenth((chipValuePoints / 1000) * rate);
 };
 const countTsumoLosslessBlueChipTiles = (winner, scoreResult) => {
-  const sourceTiles = [
-    ...ensureArray(winner?.hand),
-    ...(scoreResult?.winningTile ? [scoreResult.winningTile] : []),
-    ...ensureArray(winner?.melds).flatMap((meld) => ensureArray(meld?.tiles)),
-    ...ensureArray(winner?.nukiDoraTiles),
+  const sourceGroups = [
+    ensureArray(winner?.hand),
+    ensureArray(winner?.drawnTile),
+    ensureArray(scoreResult?.winningTile),
+    ensureArray(scoreResult?.displayWinningTile),
+    ensureArray(scoreResult?.scoringWinningTile),
+    ensureArray(scoreResult?.selectedWait),
+    ensureArray(winner?.nukiDoraTiles),
+    ensureArray(winner?.melds).flatMap((meld) => ensureArray(meld?.tiles)),
   ];
   const seen = new Set();
   let count = 0;
-  for (const tile of sourceTiles) {
-    if (!tile || tile.color !== "blue" || tile.isPochi) continue;
-    const key = tile.id || `${tile.suit || tile.kind}:${tile.rank || ""}:${tile.kind || ""}:${count}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    count += 1;
-  }
+  sourceGroups.forEach((sourceTiles, groupIndex) => {
+    sourceTiles.forEach((tile, tileIndex) => {
+      if (!tile || tile.color !== "blue" || tile.isPochi) return;
+      const tileKindKey = `${tile.suit || tile.kind}:${tile.rank || ""}:${tile.kind || ""}:${tile.color || ""}`;
+      const key = tile.id || (groupIndex >= 1 && groupIndex <= 5 ? `winning:${tileKindKey}` : `${groupIndex}:${tileIndex}:${tileKindKey}`);
+      if (seen.has(key)) return;
+      seen.add(key);
+      count += 1;
+    });
+  });
   return count;
+};
+const getTsumoLosslessTobiPayers = (state) => {
+  const busted = [];
+  for (const player of ensureArray(state?.players)) {
+    if (Number(player.score || 0) <= 0) busted.push(player);
+  }
+  return busted;
 };
 const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, scoreResult) => {
   if (!isTsumoLossless3maState(state)) return null;
@@ -2738,21 +2752,15 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
 };
 const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
   if (!isTsumoLossless3maState(state)) return null;
+  if (!winnerId) return null;
   const chipPoint = getChipPointValue(state);
   const prize = roundToTenth(chipPoint * 2);
   if (prize <= 0) return null;
   const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
-  const recipientFor = (payerId) => {
-    if (winnerId) return winnerId;
-    const order = ensureArray(state.round?.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state.players).map((player) => player.id);
-    const index = order.indexOf(payerId);
-    return order[(index + 1 + order.length) % order.length] || winnerId;
-  };
   const entries = [];
-  for (const player of ensureArray(state.players)) {
-    if (Number(player.score || 0) > 0) continue;
-    const recipient = winType === "ron" && loserId === player.id ? winnerId : recipientFor(player.id);
-    if (!recipient || recipient === player.id) continue;
+  for (const player of getTsumoLosslessTobiPayers(state)) {
+    const recipient = winnerId;
+    if (recipient === player.id) continue;
     payments[player.id] -= prize;
     payments[recipient] += prize;
     entries.push({ payerId: player.id, recipientId: recipient, points: prize });
