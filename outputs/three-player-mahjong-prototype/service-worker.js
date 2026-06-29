@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260629-right-meld-area-half-a";
+const CACHE_NAME = "anmika-pwa-20260629-right-meld-overlap-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v12";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260629-right-meld-area-half-a",
-  "/runtime/app.js?v=20260629-right-meld-area-half-a",
-  "/runtime/online-debug.js?v=20260629-right-meld-area-half-a",
-  "/runtime/pwa.js?v=20260629-right-meld-area-half-a",
+  "/styles.css?v=20260629-right-meld-overlap-a",
+  "/runtime/app.js?v=20260629-right-meld-overlap-a",
+  "/runtime/online-debug.js?v=20260629-right-meld-overlap-a",
+  "/runtime/pwa.js?v=20260629-right-meld-overlap-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

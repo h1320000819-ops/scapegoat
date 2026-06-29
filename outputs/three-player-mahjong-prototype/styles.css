@@ -3608,7 +3608,7 @@ button:hover {
   }
 
   .seat-right .hand-row > .meld-area {
-    margin-top: 34px;
+    margin-top: 0;
   }
 
   .seat-right .hand-row > .meld-area .exposed-tiles {
@@ -3620,6 +3620,10 @@ button:hover {
     justify-content: flex-start;
     min-height: var(--right-meld-set-height);
     width: var(--exposed-slot-width);
+  }
+
+  .seat-right .hand-row > .meld-area .meld-set + .meld-set {
+    margin-top: calc(var(--right-meld-overlap) * -1);
   }
 
   .seat-right .nuki-dora-area .exposed-tiles {
@@ -4443,6 +4447,7 @@ button:hover {
 
 .seat-right .hand-row {
   --right-meld-gap: 0px;
+  --right-meld-overlap: var(--other-tile-width, 28px);
   --right-meld-set-height: clamp(26px, 6.5dvh, 56px);
   grid-template-areas:
     "nuki"
@@ -4501,6 +4506,10 @@ button:hover {
   margin-bottom: 0;
   min-height: var(--right-meld-set-height);
   width: var(--exposed-slot-width);
+}
+
+.seat-right .hand-row > .meld-area .meld-set + .meld-set {
+  margin-top: calc(var(--right-meld-overlap) * -1);
 }
 
 .seat-right .hand-row > .meld-area .newest-meld {
@@ -4610,6 +4619,7 @@ button:hover {
   --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: 0px;
+  --safe-right-meld-overlap: var(--safe-other-tile-width);
   --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
   --safe-river-side-gap: var(--center-river-margin);
   --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
@@ -4752,6 +4762,10 @@ button:hover {
   flex: 0 1 var(--safe-right-meld-height);
   min-height: 0;
   width: var(--exposed-slot-width);
+}
+
+.mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set {
+  margin-top: calc(var(--safe-right-meld-overlap) * -1);
 }
 
 .mahjong-table .seat-right .hand-row > .meld-area .meld-tiles {
@@ -5146,6 +5160,11 @@ button:hover {
     flex: 0 0 var(--safe-right-meld-height);
     min-height: var(--safe-right-meld-height);
   }
+
+  body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set,
+  html[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .meld-set + .meld-set {
+    margin-top: calc(var(--safe-right-meld-overlap) * -1);
+  }
 }
 
 .mahjong-table .seat-identity {
@@ -5391,6 +5410,10 @@ button:hover {
   .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .meld-set {
     flex: 0 0 var(--right-meld-set-height) !important;
     min-height: var(--right-meld-set-height) !important;
+  }
+
+  .mahjong-table.auto-safe-layout .seat-right .hand-row > .meld-area .meld-set + .meld-set {
+    margin-top: calc(var(--layout-other-tile-width) * -1) !important;
   }
 
   .mahjong-table.auto-safe-layout .seat-mini-name {
