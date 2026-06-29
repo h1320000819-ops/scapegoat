@@ -887,6 +887,14 @@
     }
     return { Authorization: assertHeaderValue("Authorization", "Bearer " + state.accessToken) };
   };
+  const buildOptionalServerApiAuthHeaders = () => {
+    try {
+      return buildSafeAuthHeaders();
+    } catch (error) {
+      console.warn("[Auth] server API auth header omitted", { error: error?.message || String(error) });
+      return {};
+    }
+  };
 
   const request = async (path, options = {}, retry = true) => {
     requireConfig();
@@ -3560,7 +3568,7 @@
     if (userId) params.set("userId", userId);
     const apiUrl = `${window.location.origin}/api/club-rake/${encodeURIComponent(clubId)}${params.toString() ? `?${params}` : ""}`;
     const response = await fetch(apiUrl, {
-      headers: buildSafeAuthHeaders(),
+      headers: buildOptionalServerApiAuthHeaders(),
       cache: "no-store",
     }).catch(() => null);
     if (response?.ok) {
@@ -4462,7 +4470,7 @@
     let rows;
     try {
       const serverResponse = await fetch(`${window.location.origin}/api/replay/${encodeURIComponent(replayId)}`, {
-        headers: buildSafeAuthHeaders(),
+        headers: buildOptionalServerApiAuthHeaders(),
         cache: "no-store",
       }).catch(() => null);
       if (serverResponse?.ok) {

@@ -52,8 +52,20 @@ const sendJson = (response, status, payload) => {
   response.end(body);
 };
 
+const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
+const isLikelyJwtToken = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
+const safeBearerTokenFromRequest = (request) => {
+  const authorization = request.headers.authorization || "";
+  const token = String(authorization).match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  if (!token || !isByteStringHeaderValue(token) || !isLikelyJwtToken(token)) return "";
+  return token;
+};
+
 const supabaseServerRest = async (pathName) => {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error("Supabase service role is not configured");
+  if (!isByteStringHeaderValue(SUPABASE_SERVICE_ROLE_KEY) || !isLikelyJwtToken(SUPABASE_SERVICE_ROLE_KEY)) {
+    throw new Error("Supabase service role key is invalid");
+  }
   const response = await fetch(`${SUPABASE_URL}/rest/v1${pathName}`, {
     headers: {
       apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -68,12 +80,13 @@ const supabaseServerRest = async (pathName) => {
 };
 
 const getSupabaseUserFromRequest = async (request) => {
-  const authorization = request.headers.authorization || "";
-  const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  const token = safeBearerTokenFromRequest(request);
   if (!token || !SUPABASE_URL) return null;
+  const apiKey = SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY;
+  if (!isByteStringHeaderValue(apiKey) || !isLikelyJwtToken(apiKey)) return null;
   const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: {
-      apikey: SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY,
+      apikey: apiKey,
       authorization: `Bearer ${token}`,
     },
   });

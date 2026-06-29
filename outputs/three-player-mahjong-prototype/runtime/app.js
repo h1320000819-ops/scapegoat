@@ -372,6 +372,14 @@ const buildSupabaseAuthHeaders = ({ anonKey = "", accessToken = "", json = false
     ...(json ? { "Content-Type": "application/json" } : {}),
   };
 };
+const buildOptionalServerApiAuthHeaders = ({ anonKey = "", accessToken = "" } = {}) => {
+  try {
+    return { Authorization: buildSupabaseAuthHeaders({ anonKey, accessToken }).Authorization };
+  } catch (error) {
+    console.warn("[Auth] server API auth header omitted", { error: error?.message || String(error) });
+    return {};
+  }
+};
 const loadSocketDebugStatus = () => safeReadJson(APP_STORAGE_KEYS.socketDebug, {});
 const saveSocketDebugStatus = (patch = {}) => {
   const sync = loadOnlineSync() || {};
@@ -1237,7 +1245,7 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   };
   if (replayId) {
     const serverResponse = await fetch(`${globalThis.location?.origin || ""}/api/replay/${encodeURIComponent(replayId)}`, {
-      headers: { Authorization: buildSupabaseAuthHeaders({ anonKey, accessToken }).Authorization },
+      headers: buildOptionalServerApiAuthHeaders({ anonKey, accessToken }),
       cache: "no-store",
     }).catch(() => null);
     if (serverResponse?.ok) {

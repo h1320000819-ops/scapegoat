@@ -4809,7 +4809,7 @@ button:hover {
     --safe-top-lane-height: clamp(46px, 13dvh, 64px);
     --safe-bottom-lane-height: clamp(72px, 19dvh, 92px);
     --safe-other-tile-width: clamp(14px, 4.2dvh, 19px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-river-side-gap: var(--center-river-margin);
     --right-river-left-pull: calc(clamp(14px, 4.8dvh, 28px) + (var(--discard-tile-width) * 0.5));
   }
@@ -4972,14 +4972,14 @@ button:hover {
   .mahjong-table.layout-tight-right {
     --safe-right-lane-width: clamp(68px, 12dvw, 96px);
     --safe-other-tile-width: clamp(13px, 3.7dvh, 17px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-river-side-gap: 4px;
   }
 
   .mahjong-table.layout-ultra-tight-right {
     --safe-right-lane-width: clamp(60px, 10dvw, 84px);
     --safe-other-tile-width: clamp(12px, 3.3dvh, 15px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-river-side-gap: 2px;
   }
 
@@ -4997,7 +4997,7 @@ button:hover {
     --safe-top-lane-height: clamp(40px, 11dvh, 54px);
     --safe-bottom-lane-height: clamp(58px, 16dvh, 78px);
     --safe-other-tile-width: clamp(10px, 2.8dvh, 13px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-river-side-gap: 1px;
     --right-river-left-pull: calc(var(--discard-tile-width) * 0.25);
   }
@@ -5159,7 +5159,7 @@ button:hover {
   body[data-pwa="standalone"] .mahjong-table,
   html[data-pwa="standalone"] .mahjong-table {
     --safe-right-lane-width: clamp(92px, 15dvw, 124px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 0.75);
   }
 
@@ -5168,7 +5168,7 @@ button:hover {
   body[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right,
   html[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right {
     --safe-right-lane-width: clamp(88px, 14dvw, 118px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 0.75);
   }
 
@@ -5249,7 +5249,7 @@ button:hover {
     --river-height: calc(var(--discard-tile-height) * 3 + var(--discard-gap) * 2);
     --safe-center-y: 39%;
     --safe-right-lane-width: clamp(54px, 9.2dvw, 74px);
-    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 2);
+    --safe-right-meld-gap: calc(var(--safe-other-tile-width) * 3);
     --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 0.75);
     --safe-other-tile-width: clamp(10px, 2.8dvh, 13px);
     --safe-river-side-gap: 1px;
@@ -5397,7 +5397,7 @@ button:hover {
     --draw-slot-width: calc(var(--layout-other-tile-height) * 2);
     --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
     --right-hand-area-height: calc(var(--layout-other-tile-height) * 9.1 + 8px);
-    --right-meld-gap: calc(var(--layout-other-tile-width) * 2);
+    --right-meld-gap: calc(var(--layout-other-tile-width) * 3);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
       minmax(calc(var(--right-meld-set-height) * 1.55), 1.5fr)
