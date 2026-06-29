@@ -651,11 +651,13 @@ const syncSeatLeaveToDb = async (tableId, userId) => {
 const tableSeatPlayerId = (seat) => seat?.playerId || seat?.user_id || seat?.userId || null;
 const tableSeatPlayerType = (seat) => seat?.playerType || seat?.player_type || (tableSeatPlayerId(seat) ? "human" : "empty");
 const tableSeatDisplayName = (seat, fallback = "") => seat?.displayName || seat?.display_name || fallback || null;
+const tableSeatIconUrl = (seat, fallback = "") => seat?.iconUrl || seat?.icon_url || seat?.users?.icon_url || fallback || "";
 const normalizeServerSeat = (seat, index = 0) => ({
   seatIndex: Number(seat?.seatIndex ?? seat?.seat_index ?? index),
   playerId: tableSeatPlayerId(seat),
   playerType: tableSeatPlayerType(seat),
   displayName: tableSeatDisplayName(seat),
+  iconUrl: tableSeatIconUrl(seat),
   isLastHandDeclared: Boolean(seat?.isLastHandDeclared ?? seat?.is_last_hand_declared),
 });
 const normalizeServerSeats = (seats = []) => {
@@ -668,6 +670,7 @@ const normalizeServerSeats = (seats = []) => {
     playerId: null,
     playerType: "empty",
     displayName: null,
+    iconUrl: "",
     isLastHandDeclared: false,
   });
 };
@@ -680,6 +683,7 @@ const clearEndedRoomSeatForUser = (room, userId, { removeStatePlayer = true } = 
     seat.playerId = null;
     seat.playerType = "empty";
     seat.displayName = null;
+    seat.iconUrl = "";
     seat.isLastHandDeclared = false;
     changed = true;
   }
@@ -755,7 +759,7 @@ const fillRoomSeatsFromWaitingList = async (room) => {
   const emptySeats = room.state.seats.filter((seat) => !seat.playerId || seat.playerType === "empty");
   if (!emptySeats.length) return false;
   const rows = await supabaseRest(
-    `/table_waiting_list?select=user_id,created_at,users(display_name,login_id)&table_id=eq.${encodeURIComponent(room.tableId)}&order=created_at.asc`
+    `/table_waiting_list?select=user_id,created_at,users(display_name,login_id,icon_url)&table_id=eq.${encodeURIComponent(room.tableId)}&order=created_at.asc`
   ).catch((error) => {
     console.warn("[WaitingQueue] load failed", { tableId: room.tableId, error: error?.message || String(error) });
     return [];
@@ -766,9 +770,11 @@ const fillRoomSeatsFromWaitingList = async (room) => {
     if (!next) break;
     occupied.add(next.user_id);
     const name = waitingDisplayName(next);
+    const iconUrl = tableSeatIconUrl(next);
     seat.playerId = next.user_id;
     seat.playerType = "human";
     seat.displayName = name;
+    seat.iconUrl = iconUrl;
     seat.isLastHandDeclared = false;
     await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}&seat_index=eq.${encodeURIComponent(String(seat.seatIndex))}`, {
       method: "PATCH",
@@ -815,6 +821,7 @@ const nextHanchanPlayersFromSeats = (state) => {
       id: seat.playerId || `cpu${index}`,
       name: seat.displayName || (seat.playerType === "cpu" ? `CPU${Number(seat.seatIndex) + 1}` : `Player ${String(seat.playerId || "").slice(0, 8)}`),
       type: seat.playerType === "cpu" ? "cpu" : "remote",
+      iconUrl: tableSeatIconUrl(seat),
     }));
   if (seatPlayers.length < 3) return [];
   const previousOrder = asArray(state?.round?.initialSeatOrder).filter((id) => seatPlayers.some((player) => player.id === id));
@@ -822,6 +829,30 @@ const nextHanchanPlayersFromSeats = (state) => {
   const rotatedOrder = [...baseOrder.slice(1), baseOrder[0]];
   const byId = new Map(seatPlayers.map((player) => [player.id, player]));
   return rotatedOrder.map((id) => byId.get(id)).filter(Boolean);
+};
+const mergeSubmittedPlayerProfiles = (room, players = []) => {
+  if (!room?.state) return false;
+  const incomingById = new Map(asArray(players).map((player) => [player?.id, player]).filter(([id]) => id));
+  let changed = false;
+  for (const player of asArray(room.state.players)) {
+    const incoming = incomingById.get(player?.id);
+    if (!incoming) continue;
+    const iconUrl = incoming.iconUrl || incoming.icon_url || "";
+    if (iconUrl && player.iconUrl !== iconUrl) {
+      player.iconUrl = iconUrl;
+      changed = true;
+    }
+  }
+  room.state.seats = normalizeServerSeats(room.state.seats).map((seat) => {
+    const incoming = incomingById.get(seat.playerId);
+    const iconUrl = incoming?.iconUrl || incoming?.icon_url || seat.iconUrl || "";
+    if (iconUrl && seat.iconUrl !== iconUrl) {
+      changed = true;
+      return { ...seat, iconUrl };
+    }
+    return seat;
+  });
+  return changed;
 };
 const startNextTsumoLosslessHanchanIfReady = async (room) => {
   if (!room?.state || !isTsumoLossless3maState(room.state) || room.state.phase !== "gameEnded") return false;
@@ -2923,6 +2954,12 @@ const drawFromWall = (state, player, source = "liveWall") => {
   const wall = source === "rinshanWall" ? state.rinshanWall : state.liveWall;
   if (!Array.isArray(wall) || wall.length === 0) return null;
   const tile = wall.shift();
+  if (player.drawnTile) {
+    player.hand ??= [];
+    player.hand.push(player.drawnTile);
+    player.hand = sortHandTiles(player.hand);
+    appendHandEvent(state, { type: "handRepair", playerId: player.id, reason: `${source}DrawWouldOverwriteDrawnTile`, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
+  }
   player.drawnTile = tile;
   state.lastDrawnTile = tile;
   if (source === "rinshanWall" && state.pendingRinshanKaihouFromKan) {
@@ -2934,6 +2971,40 @@ const drawFromWall = (state, player, source = "liveWall") => {
   }
   appendHandEvent(state, { type: "draw", playerId: player.id, tile, from: source, turnIndex: state.turnIndex ?? 0 });
   return tile;
+};
+const moveDrawnTileToHandBeforeReplacement = (state, player, reason = "replacementDraw") => {
+  if (!player?.drawnTile) return false;
+  const tile = player.drawnTile;
+  player.hand ??= [];
+  player.hand.push(tile);
+  player.drawnTile = null;
+  player.hand = sortHandTiles(player.hand);
+  appendHandEvent(state, { type: "handRepair", playerId: player.id, reason, tile, turnIndex: state.turnIndex ?? 0 });
+  return true;
+};
+const expectedServerDiscardTileCount = (player) => Math.max(2, 14 - ensureArray(player?.melds).length * 3);
+const repairShortHandBeforeDiscard = (state, player, reason = "beforeDiscard") => {
+  if (!state || !player) return false;
+  const expected = expectedServerDiscardTileCount(player);
+  let count = ensureArray(player.hand).length + (player.drawnTile ? 1 : 0);
+  let changed = false;
+  while (count < expected) {
+    const wall = ensureArray(state.liveWall);
+    if (!wall.length) break;
+    const tile = wall.shift();
+    if (!tile) break;
+    if (!player.drawnTile) player.drawnTile = tile;
+    else {
+      player.hand ??= [];
+      player.hand.push(tile);
+      player.hand = sortHandTiles(player.hand);
+    }
+    state.lastDrawnTile = tile;
+    appendHandEvent(state, { type: "handRepair", playerId: player.id, reason, tile, countBefore: count, expected, turnIndex: state.turnIndex ?? 0 });
+    count++;
+    changed = true;
+  }
+  return changed;
 };
 const isServerRinshanKaihouTsumo = (state, player, tile) => {
   if (!state?.rinshanKaihou || !player?.drawnTile || !tile) return false;
@@ -4331,6 +4402,7 @@ const enterCurrentTurnOnServer = (state) => {
 const discardForServer = (state, player, tileId, { isRiichiDiscard = false, resolveAfterDiscard = true } = {}) => {
   stopServerClockForPlayer(state, player.id, { recoverAfterDiscard: true });
   state.pendingAction = null;
+  repairShortHandBeforeDiscard(state, player, "discardBeforeTileRemoval");
   const drawn = player.drawnTile?.id === tileId ? player.drawnTile : null;
   const tile = drawn || removeTileById(player.hand, tileId);
   if (!tile) throw new Error("指定された牌を持っていません");
@@ -4735,6 +4807,7 @@ const applyServerAction = (state, event) => {
       appendHandEvent(state, { type: "kan", playerId: player.id, tiles: targetMeld.tiles, addedTile, kanType: "kakan", turnIndex: state.turnIndex ?? 0 });
       clearServerIppatsu(state, "kan");
       addDoraAfterKan(state);
+      moveDrawnTileToHandBeforeReplacement(state, player, "kakanBeforeRinshanDraw");
       state.pendingRinshanKaihouFromKan = true;
       drawFromWall(state, player, "rinshanWall");
       player.hand = sortHandTiles(player.hand);
@@ -4768,11 +4841,7 @@ const applyServerAction = (state, event) => {
     if (isMinkan) updateServerPaoResponsibilityAfterOpenMeld(state, player, meld, fromPlayerId);
     clearServerIppatsu(state, "kan");
     addDoraAfterKan(state);
-    if (!isMinkan && player.drawnTile) {
-      player.hand ??= [];
-      player.hand.push(player.drawnTile);
-      player.drawnTile = null;
-    }
+    if (!isMinkan) moveDrawnTileToHandBeforeReplacement(state, player, "kanBeforeRinshanDraw");
     state.pendingRinshanKaihouFromKan = true;
     drawFromWall(state, player, "rinshanWall");
     player.hand = sortHandTiles(player.hand);
@@ -5365,6 +5434,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     id: player.id || `cpu${index}`,
     name: player.name || (player.type === "cpu" ? `CPU${index}` : `プレイヤー${index + 1}`),
     type: player.type === "cpu" ? "cpu" : "remote",
+    iconUrl: player.iconUrl || player.icon_url || "",
     score: ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? startingScore : Number(player.score ?? startingScore),
     hand: [],
     drawnTile: null,
@@ -5390,6 +5460,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       id: `cpu${index}`,
       name: `CPU${index}`,
       type: "cpu",
+      iconUrl: "",
       score: startingScore,
       hand: [],
       drawnTile: null,
@@ -5453,6 +5524,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       playerId: player.id,
       playerType: player.type === "cpu" ? "cpu" : "human",
       displayName: player.name,
+      iconUrl: player.iconUrl || "",
       isLastHandDeclared: false,
     })),
     screen: "game",
@@ -5468,7 +5540,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       dealerId,
       events: [],
       initialSeatOrder,
-      initialPlayers: normalizedPlayers.map((player, seatIndex) => ({ id: player.id, name: player.name, type: player.type, seatIndex })),
+      initialPlayers: normalizedPlayers.map((player, seatIndex) => ({ id: player.id, name: player.name, type: player.type, iconUrl: player.iconUrl || "", seatIndex })),
       initialHands: Object.fromEntries(normalizedPlayers.map((player) => [player.id, [...player.hand]])),
       initialDoraIndicators: [...walls.doraIndicators],
       initialScores: Object.fromEntries(normalizedPlayers.map((player) => [player.id, player.score])),
@@ -6017,7 +6089,9 @@ io.on("connection", (socket) => {
         console.log("[AnmikaGameServer] initState", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId: userId || socket.data.userId, alreadyInitialized: Boolean(room.state), version: room.version });
         if (room.state) {
           const viewerId = userId || socket.data.userId || null;
-          if (clearRoomLastHandForUser(room, viewerId)) {
+          const profileChanged = mergeSubmittedPlayerProfiles(room, players);
+          const lastHandCleared = clearRoomLastHandForUser(room, viewerId);
+          if (profileChanged || lastHandCleared) {
             room.updatedAt = now();
             persistRoom(room);
           }

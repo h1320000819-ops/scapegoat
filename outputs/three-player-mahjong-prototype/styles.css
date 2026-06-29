@@ -2373,11 +2373,11 @@ button:hover {
   max-width: min(92vw, 520px);
   overflow: auto;
   padding: 18px 18px 76px;
-  position: absolute;
+  position: fixed;
   top: 50%;
   transform: translate(-50%, -50%);
   width: 520px;
-  z-index: 30;
+  z-index: 1201;
 }
 
 .result-modal [data-result-ok],
@@ -2415,8 +2415,8 @@ button:hover {
 
 .result-backdrop {
   inset: 0;
-  position: absolute;
-  z-index: 29;
+  position: fixed;
+  z-index: 1200;
 }
 
 .win-announcement {
@@ -4540,7 +4540,7 @@ button:hover {
   --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: clamp(12px, 2.8dvh, 34px);
-  --safe-right-meld-height: calc(var(--safe-other-tile-width) * 5 + 12px);
+  --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 3);
   --safe-river-side-gap: var(--center-river-margin);
   --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
 }
@@ -4620,9 +4620,9 @@ button:hover {
   grid-template-columns: minmax(0, var(--exposed-slot-width));
   grid-template-rows:
     minmax(0, var(--nuki-slot-height))
-    minmax(calc(var(--right-meld-set-height) * 1.55), 1fr)
+    minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
     minmax(0, var(--draw-slot-width))
-    minmax(0, calc(var(--safe-other-tile-height) * 4 + 10px));
+    minmax(calc(var(--safe-other-tile-height) * 12 + 30px), 2fr);
   height: 100%;
   max-height: 100%;
   min-height: 0;
@@ -4659,7 +4659,7 @@ button:hover {
   align-self: stretch;
   justify-self: end;
   max-height: 100%;
-  min-height: 0;
+  min-height: calc(var(--right-meld-set-height) * 1.55);
   min-width: 0;
   overflow: visible;
   width: var(--exposed-slot-width);
@@ -4691,7 +4691,7 @@ button:hover {
 }
 
 .mahjong-table .seat-right .concealed-hand-tiles {
-  min-height: 0;
+  min-height: calc(var(--safe-other-tile-height) * 12 + 30px);
   justify-content: end !important;
 }
 
@@ -4743,9 +4743,9 @@ button:hover {
     --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 2px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(0, 1fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
       minmax(0, var(--draw-slot-width))
-      minmax(0, calc(var(--safe-other-tile-height) * 4 + 4px));
+      minmax(calc(var(--safe-other-tile-height) * 12 + 12px), 2fr);
   }
 
   .mahjong-table .seat-right .seat-mini-name {
@@ -4921,9 +4921,9 @@ button:hover {
     --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 1px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(0, 1fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
       minmax(0, var(--draw-slot-width))
-      minmax(0, calc(var(--safe-other-tile-height) * 4 + 2px));
+      minmax(calc(var(--safe-other-tile-height) * 12 + 6px), 2fr);
   }
 
   .mahjong-table.layout-fit-screen .seat-top {
@@ -5052,7 +5052,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table {
     --safe-right-lane-width: clamp(92px, 15dvw, 124px);
     --safe-right-meld-gap: clamp(12px, 2.8dvh, 22px);
-    --safe-right-meld-height: calc(var(--safe-other-tile-width) * 5 + 12px);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 3);
   }
 
   body[data-pwa="standalone"] .mahjong-table.layout-tight-right,
@@ -5061,7 +5061,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right {
     --safe-right-lane-width: clamp(88px, 14dvw, 118px);
     --safe-right-meld-gap: clamp(10px, 2.4dvh, 18px);
-    --safe-right-meld-height: calc(var(--safe-other-tile-width) * 5 + 10px);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 3);
   }
 
   body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles,
@@ -5141,7 +5141,7 @@ button:hover {
     --safe-center-y: 39%;
     --safe-right-lane-width: clamp(54px, 9.2dvw, 74px);
     --safe-right-meld-gap: 4px;
-    --safe-right-meld-height: calc(var(--safe-other-tile-width) * 5 + 6px);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 3);
     --safe-other-tile-width: clamp(10px, 2.8dvh, 13px);
     --safe-river-side-gap: 1px;
   }
@@ -5289,9 +5289,9 @@ button:hover {
     --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(calc(var(--right-meld-set-height) * 1.55), 1fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
       minmax(0, var(--draw-slot-width))
-      minmax(0, calc(var(--layout-other-tile-height) * 4 + 6px)) !important;
+      minmax(calc(var(--layout-other-tile-height) * 12 + 18px), 2fr) !important;
     height: 100% !important;
     max-height: 100% !important;
     min-height: 0 !important;

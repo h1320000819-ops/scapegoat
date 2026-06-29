@@ -37,6 +37,7 @@
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
   const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
   const ENABLE_AUTO_TABLE_START = true;
+  const DEBUG_FORCE_LEAVE_BUTTONS_ENABLED = false;
   const LOBBY_AUTO_REFRESH_MS = 3000;
   const GAME_AUTO_REFRESH_MS = 2500;
 
@@ -2274,7 +2275,7 @@
     if (!forceOpen && wasAutoOpenedRecently(table.table_id)) return;
     if (forceOpen) clearRecentlyLeftTable(table.table_id);
     else clearRecentlyLeftTableIfExpired();
-    const seats = normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id);
+    const seats = await enrichSeatRowsWithUserProfiles(normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id));
     if (!forceOpen && isRecentlyLeftTable(table.table_id) && !isCurrentUserSeatedAt(seats)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
       clearLocalUserSeatsForTable(table.table_id);
@@ -2775,6 +2776,31 @@
     }
     clearLocalUserLastHandFlagForTable(tableId, state.user.id);
   };
+  const syncCurrentUserSeatProfile = async (tableId = null) => {
+    if (!state.user?.id) return;
+    const dbBody = {
+      display_name: state.user.displayName || "あなた",
+    };
+    const localBody = {
+      ...dbBody,
+      icon_url: state.user.iconUrl || "",
+    };
+    const tableFilter = tableId ? "&table_id=eq." + encodeURIComponent(tableId) : "";
+    await rest("/table_seats?user_id=eq." + encodeURIComponent(state.user.id) + tableFilter, {
+      method: "PATCH",
+      body: JSON.stringify(dbBody),
+    }).catch((error) => log("席のアイコン同期に失敗しました。", rawErrorText(error)));
+    const updateSeat = (seat) => seat?.user_id === state.user.id ? { ...seat, ...localBody } : seat;
+    state.tables = state.tables.map((table) => {
+      if (tableId && String(table.table_id) !== String(tableId)) return table;
+      return { ...table, table_seats: normalizeSeats(table.table_seats || [], table.table_id).map(updateSeat) };
+    });
+    Object.entries(state.localSeatsByTable || {}).forEach(([key, rows]) => {
+      if (tableId && String(key) !== String(tableId)) return;
+      state.localSeatsByTable[key] = normalizeSeats(rows, key).map(updateSeat);
+    });
+    saveLocalSeatsCache();
+  };
   const clearRemoteUserSeatsExcept = async (tableId, keepSeatIndex = null) => {
     const user = requireUser();
     const ownSeats = await rest("/table_seats?select=table_id,seat_index&user_id=eq." + encodeURIComponent(user.id)).catch(() => []);
@@ -2830,15 +2856,17 @@
       await clearOwnLastHandFlag(tableId);
       await clearMyWaiting().catch((error) => log("着席後のウェイティング解除に失敗しました。", rawErrorText(error)));
       await loadTables();
-      const rows = await loadSeats();
+      await syncCurrentUserSeatProfile(tableId);
+      let rows = await loadSeats();
       queueAutoStartCheckForTable(tableId, rows, "着席", { forceNewGame: true });
       const ownSeat = rows.find((seat) => seat.user_id === state.user?.id);
       if (ownSeat) {
         await clearRemoteUserSeatsExcept(tableId, ownSeat.seat_index).catch((error) => log("着席後の重複席解除に失敗しました。", rawErrorText(error)));
+        await syncCurrentUserSeatProfile(tableId);
         clearLocalUserSeatsExcept(tableId, ownSeat.seat_index);
         await loadTables();
         enforceOneVisibleSeatForCurrentUser(tableId, ownSeat.seat_index);
-        await loadSeats();
+        rows = await loadSeats();
       }
       return;
     } catch (error) {
@@ -2915,6 +2943,7 @@
     }
   };
   const addCpu = async (tableId = selectedTableId()) => {
+    if (!isSuperClubCreator()) throw new Error("CPU追加は特権アカウントだけが使えます。");
     tableId = requireTableId(tableId, "CPU追加");
     setActiveTableId(tableId);
     try {
@@ -2945,6 +2974,7 @@
     }
   };
   const removeCpu = async (tableId = selectedTableId()) => {
+    if (!isSuperClubCreator()) throw new Error("CPU削除は特権アカウントだけが使えます。");
     tableId = requireTableId(tableId, "CPU削除");
     setActiveTableId(tableId);
     try {
@@ -3128,6 +3158,7 @@
       latestProfile = latestProfile || await getProfile(user.id).catch(() => null);
       state.user = latestProfile?.user_id ? profileToUser(latestProfile) : { ...state.user, iconUrl };
       localStorage.setItem("anmikaDebugUser", JSON.stringify(state.user));
+      await syncCurrentUserSeatProfile().catch(() => {});
       await loadClubs().catch(() => {});
       render();
       log("アカウントアイコンを変更しました。");
@@ -5339,9 +5370,9 @@
           <div class="table-card-actions">
             ${table.status === "playing" ? '<button type="button" data-action="enterGame" class="primary">対局へ入る</button>' : ""}
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
-            <button type="button" data-action="forceLeave" class="danger">強制退席</button>
-            <button type="button" data-action="addCpu" class="admin-only">CPU追加</button>
-            <button type="button" data-action="removeCpu" class="admin-only secondary">CPU削除</button>
+            ${DEBUG_FORCE_LEAVE_BUTTONS_ENABLED ? `<button type="button" data-action="forceLeave" class="danger">強制退席</button>` : ""}
+            <button type="button" data-action="addCpu" class="super-only">CPU追加</button>
+            <button type="button" data-action="removeCpu" class="super-only secondary">CPU削除</button>
             <button type="button" data-action="deleteTable" class="admin-only danger">卓削除</button>
           </div>
         `;
@@ -5419,12 +5450,12 @@
           clearError();
           forceLeaveTable(table.table_id).catch((error) => showError("強制退席に失敗しました", error));
         });
-        card.querySelector('[data-action="addCpu"]').addEventListener("click", () => {
+        card.querySelector('[data-action="addCpu"]')?.addEventListener("click", () => {
           uiLog("add cpu clicked", { tableId: table.table_id });
           clearError();
           addCpu(table.table_id).catch((error) => showError("CPU追加に失敗しました", error));
         });
-        card.querySelector('[data-action="removeCpu"]').addEventListener("click", () => {
+        card.querySelector('[data-action="removeCpu"]')?.addEventListener("click", () => {
           uiLog("remove cpu clicked", { tableId: table.table_id });
           clearError();
           removeCpu(table.table_id).catch((error) => showError("CPU削除に失敗しました", error));

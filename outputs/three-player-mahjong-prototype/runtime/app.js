@@ -1413,14 +1413,51 @@ const removeConsecutiveDuplicateReplayEvents = (events = []) => {
   }
   return result;
 };
+const isReplayRiichiForDiscard = (riichiEvent, discardEvent) => {
+  if (!riichiEvent || !discardEvent) return false;
+  if (riichiEvent.type !== "riichi" && riichiEvent.type !== "fever_riichi") return false;
+  if (discardEvent.type !== "discard" || !discardEvent.isRiichiDiscard) return false;
+  if ((riichiEvent.playerId || "") !== (discardEvent.playerId || "")) return false;
+  const riichiTurn = Number(riichiEvent.turnIndex);
+  const discardTurn = Number(discardEvent.turnIndex);
+  if (Number.isFinite(riichiTurn) && Number.isFinite(discardTurn) && Math.abs(riichiTurn - discardTurn) > 1) return false;
+  return true;
+};
+const normalizeReplayPresentationEvents = (events = []) => {
+  const source = removeConsecutiveDuplicateReplayEvents(events);
+  const result = [];
+  const consumed = new Set();
+  for (let index = 0; index < source.length; index++) {
+    if (consumed.has(index)) continue;
+    const event = source[index];
+    if (event?.type === "discard" && event.isRiichiDiscard) {
+      let riichiIndex = -1;
+      for (let lookahead = index + 1; lookahead < Math.min(source.length, index + 5); lookahead++) {
+        if (consumed.has(lookahead)) continue;
+        const candidate = source[lookahead];
+        if (isReplayRiichiForDiscard(candidate, event)) {
+          riichiIndex = lookahead;
+          break;
+        }
+        if (["draw", "discard", "pon", "kan", "ron", "tsumo", "win", "exhaustiveDraw", "handStart"].includes(candidate?.type)) break;
+      }
+      if (riichiIndex >= 0) {
+        result.push({ ...source[riichiIndex], replayPresentationOrder: "beforeRiichiDiscard" });
+        consumed.add(riichiIndex);
+      }
+    }
+    result.push(event);
+  }
+  return result;
+};
 const getSimpleReplayPayload = (replay) => {
   const payload = replay?.simpleReplay || replay?.summary?.simpleReplay;
-  if (payload?.format === "anmika-simple-replay-v1") return { ...payload, events: removeConsecutiveDuplicateReplayEvents(payload.events) };
+  if (payload?.format === "anmika-simple-replay-v1") return { ...payload, events: normalizeReplayPresentationEvents(payload.events) };
   if ((replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) && replay?.initialState && Array.isArray(replay?.events)) {
     return {
       format: "event-log-v1",
       initialState: replay.initialState,
-      events: removeConsecutiveDuplicateReplayEvents(replay.events),
+      events: normalizeReplayPresentationEvents(replay.events),
       result: replay.summary?.finalResult || replay.initialState?.handLog?.result || null,
     };
   }
@@ -1428,7 +1465,7 @@ const getSimpleReplayPayload = (replay) => {
     return {
       format: "anmika-simple-replay-v1",
       initialState: replay.initialState,
-      events: removeConsecutiveDuplicateReplayEvents(replay.events),
+      events: normalizeReplayPresentationEvents(replay.events),
       result: replay.initialState?.handLog?.result || null,
     };
   }
@@ -1754,13 +1791,13 @@ const deriveReplayEventsFromSnapshots = (snapshots = []) => {
 const getReplayEvents = (replay) => {
   const simpleEvents = getSimpleReplayPayload(replay)?.events;
   if (simpleEvents) return simpleEvents;
-  if (replayUsesSnapshotSteps(replay)) return deriveReplayEventsFromSnapshots(replay.snapshots);
-  return replay?.events || [];
+  if (replayUsesSnapshotSteps(replay)) return normalizeReplayPresentationEvents(deriveReplayEventsFromSnapshots(replay.snapshots));
+  return normalizeReplayPresentationEvents(replay?.events || []);
 };
 const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
   if (event.type === "skipAction") return true;
-  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichi", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "feverForcedDiscard", "nukiDora"].includes(event.type)) return true;
+  if (["doraReveal", "ippatsuCleared", "flowerAnnouncement", "riichiAutoDiscardWait", "riichiAutoDiscard", "feverForcedDiscardWait", "feverForcedDiscard", "nukiDora"].includes(event.type)) return true;
   return false;
 };
 const getReplayVisibleSnapshotIndexes = (replay) => {
@@ -2070,6 +2107,7 @@ const getPlayableGameSoundAudio = (type) => {
 const soundTypeForEvent = (event) => {
   if (!event?.type) return "";
   if (event.type === "discard") return "discard";
+  if (event.type === "riichiAutoDiscard" || event.type === "feverForcedDiscard" || event.type === "disconnectedGraceDiscard") return "discard";
   if (event.type === "pon") return "pon";
   if (event.type === "kan" || event.type === "added_kan" || event.type === "closed_kan") return "kan";
   if (event.type === "tsumo") return soundTypeForPochiTsumo(event.scoreResult) || "tsumo";
@@ -2412,6 +2450,7 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
   if (!gameState) return fail("局面がありません");
   if (gameState.screen && gameState.screen !== "game") return fail("対局画面ではありません");
   if (gameState.handLog?.result) return fail("結果画面を表示中です");
+  if (gameState.optimisticDiscardRequestId) return fail("打牌送信中です");
   if (gameState.phase === "showingWinAnnouncement" || gameState.phase === "showingFlowerAnnouncement" || gameState.phase === "showingCallAnnouncement") return fail("演出中です");
   const pendingRiichiChoice = isRiichiChoicePending(gameState.pendingAction);
   if (gameState.pendingAction && !pendingRiichiChoice) return fail("pendingAction が残っています");
@@ -2426,7 +2465,10 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
   if (tileId && player.drawnTile?.id !== tileId && !(player.hand ?? []).some((tile) => tile.id === tileId)) return fail("その牌を持っていません");
   const tileCount = (player.hand?.length ?? 0) + (player.drawnTile ? 1 : 0);
   const expected = expectedDiscardTileCount(player);
-  if (tileCount < expected) return fail(`手牌枚数が不足しています (${tileCount}/${expected})`);
+  if (tileCount < expected) {
+    if (isSocketAuthoritativeGame()) return ok(`手牌枚数不足をサーバーで補正します (${tileCount}/${expected})`);
+    return fail(`手牌枚数が不足しています (${tileCount}/${expected})`);
+  }
   if (gameState.phase === "waitingForRiichiDiscard" && tileId && !(Array.isArray(player.riichiDiscardTileIds) ? player.riichiDiscardTileIds : []).includes(tileId)) {
     return fail("この牌ではリーチ後テンパイになりません");
   }
@@ -4183,6 +4225,11 @@ class GameController {
     this.maybeStartTable(table.id);
   }
   fillTableWithCpu(tableId) {
+    if (!isPrivilegedLayoutUser(this.state.currentUser || authRepository.getCurrentUser())) {
+      this.state.log.unshift("CPU追加は特権アカウントだけが使えます");
+      this.emit();
+      return;
+    }
     const table = loadTables().find((item) => item.id === tableId);
     if (!table || table.status !== "waiting") return;
     let cpuNumber = 1;
@@ -4385,10 +4432,13 @@ class GameController {
         return false;
       }
     }
+    const seatIconByPlayerId = new Map((next.seats ?? next.onlineTableSeats ?? [])
+      .map((seat) => [seat?.playerId || seat?.userId || seat?.user_id, seat?.iconUrl || seat?.icon_url || ""])
+      .filter(([playerId, iconUrl]) => playerId && iconUrl));
     next.players = (next.players ?? []).map((player) => ({
       ...player,
       type: isCpuPlayerId(player.id) || player.type === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote",
-      iconUrl: (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || this.state.players?.find((item) => item.id === player.id)?.iconUrl || "",
+      iconUrl: (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || seatIconByPlayerId.get(player.id) || this.state.players?.find((item) => item.id === player.id)?.iconUrl || "",
     }));
     const previousResultKey = this.state.handLog?.result
       ? JSON.stringify({
@@ -4443,6 +4493,12 @@ class GameController {
     })();
     const primarySoundEvent = [...newEvents].reverse().find((event) => ["riichi", "fever_riichi", "pon", "kan", "ron", "tsumo", "win"].includes(event?.type))
       || [...newEvents].reverse().find((event) => event?.type === "discard");
+    const discardSoundEvent = [...newEvents].reverse().find((event) =>
+      event?.type === "discard" ||
+      event?.type === "riichiAutoDiscard" ||
+      event?.type === "feverForcedDiscard" ||
+      event?.type === "disconnectedGraceDiscard"
+    ) || fallbackRemoteDiscardEvent;
     if (primarySoundEvent?.type === "riichi" || primarySoundEvent?.type === "fever_riichi") {
       const isFever = primarySoundEvent.feverRiichiActive || primarySoundEvent.type === "fever_riichi";
       const announcementKey = onlineSoundEventKey(primarySoundEvent);
@@ -4465,11 +4521,9 @@ class GameController {
       }
     } else if (primarySoundEvent?.type === "pon" || primarySoundEvent?.type === "kan") {
       this.showActionAnnouncement(primarySoundEvent, { targetState: next, durationMs: primarySoundEvent.type === "kan" ? 1600 : 1200 });
-    } else {
-      const discardSoundEvent = primarySoundEvent?.type === "discard" ? primarySoundEvent : fallbackRemoteDiscardEvent;
-      if (discardSoundEvent && !discardSoundEvent.isRiichiDiscard) {
-        playGameSound("discard", { key: `online:${onlineSoundEventKey(discardSoundEvent) || `${discardSoundEvent.playerId}:${incomingVersion}`}` });
-      }
+    }
+    if (discardSoundEvent) {
+      playGameSound("discard", { key: `online:${onlineSoundEventKey(discardSoundEvent) || `${discardSoundEvent.playerId}:${incomingVersion}`}` });
     }
     const announcementKind = next.phase === "showingWinAnnouncement"
       ? (next.serverAnnouncement?.kind || (next.winAnnouncement === "ツモ" ? "tsumo" : next.winAnnouncement === "ロン" ? "ron" : ""))
@@ -4804,6 +4858,7 @@ class GameController {
             id: player.id,
             name: player.name,
             type: player.type === "cpu" ? "cpu" : "human",
+            iconUrl: player.iconUrl || "",
             score: player.score ?? 0,
           })),
           settings: {
@@ -5831,6 +5886,12 @@ class GameController {
     if (!this.ruleEngine.canDraw(this.state, player)) return null;
     const tile = this.state.liveWall.shift();
     if (!tile) { this.endExhaustiveDraw(); if (!suppressEmit) this.emit(); return null; }
+    if (player.drawnTile) {
+      const previousDrawn = player.drawnTile;
+      player.hand.push(previousDrawn);
+      player.hand = sortHandTiles(player.hand);
+      appendHandLogEvent(this.state.handLog, { type: "handRepair", playerId: player.id, reason: "liveDrawWouldOverwriteDrawnTile", tile: previousDrawn, turnIndex: this.state.turnIndex });
+    }
     player.drawnTile = tile;
     player.sameTurnFuriten = false;
     if (player.isRiichi && player.ippatsu && player.riichiTurnIndex !== null && this.state.turnIndex > player.riichiTurnIndex) {
@@ -5846,6 +5907,26 @@ class GameController {
     if (!suppressEmit) this.emit();
     return tile;
   }
+  repairShortHandBeforeDiscard(player, reason = "beforeDiscard") {
+    if (!player || isSocketAuthoritativeGame()) return false;
+    const expected = expectedDiscardTileCount(player);
+    let count = (player.hand?.length ?? 0) + (player.drawnTile ? 1 : 0);
+    let changed = false;
+    while (count < expected && this.state.liveWall?.length) {
+      const tile = this.state.liveWall.shift();
+      if (!tile) break;
+      if (!player.drawnTile) player.drawnTile = tile;
+      else {
+        player.hand.push(tile);
+        player.hand = sortHandTiles(player.hand);
+      }
+      this.state.lastDrawnTile = tile;
+      appendHandLogEvent(this.state.handLog, { type: "handRepair", playerId: player.id, reason, tile, countBefore: count, expected, turnIndex: this.state.turnIndex });
+      count++;
+      changed = true;
+    }
+    return changed;
+  }
   discardTile(tileId, { isCpuAction = false, suppressEmit = false, suppressCpuAutoProgress = false } = {}) {
     const clickedAt = performance.now?.() ?? Date.now();
     const player = getCurrentPlayer(this.state);
@@ -5855,6 +5936,7 @@ class GameController {
       tileId = player.drawnTile.id;
     }
     const viewerPlayerId = isCpuAction ? player?.id : (isSocketAuthoritativeGame() ? loadOnlineSync()?.userId : getLocalHumanPlayerId(this.state));
+    this.repairShortHandBeforeDiscard(player, "discardBeforeStatusCheck");
     const discardStatus = isCpuAction ? { can: true, reason: "" } : getDiscardStatus(this.state, viewerPlayerId, tileId);
     const syncForLog = loadOnlineSync();
     console.log("[DiscardClick] tile=", tileId);
@@ -5943,7 +6025,7 @@ class GameController {
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
-    if (!isRiichiDiscardPhase) playGameSound("discard", { key: `local-discard:${player.id}:${this.state.turnIndex}:${tileId}` });
+    playGameSound("discard", { key: `local-discard:${player.id}:${this.state.turnIndex}:${tileId}` });
     if (player.isRiichi && player.ippatsu && !isRiichiDiscardPhase) {
       player.ippatsu = false;
       player.ippatsuOwnDrawStarted = false;
@@ -6276,9 +6358,11 @@ class GameController {
     appendReplaySnapshot(this.state);
     this.revealAdditionalDoraIndicator("kan");
     if (player.drawnTile) {
+      const previousDrawn = player.drawnTile;
       player.hand.push(player.drawnTile);
       player.hand = sortHandTiles(player.hand);
       player.drawnTile = null;
+      appendHandLogEvent(this.state.handLog, { type: "handRepair", playerId: player.id, reason: "kanBeforeRinshanDraw", tile: previousDrawn, turnIndex: this.state.turnIndex });
     }
     const rinshan = this.state.rinshanWall.shift();
     if (!rinshan) {
@@ -6934,6 +7018,7 @@ const ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:accountT
 const DEFAULT_TABLE_LAYOUT_ADJUSTMENT_PREFIX = "anmikaLayoutAdjustments:defaultTable";
 const DEFAULT_TABLE_LAYOUT_REMOTE_PREFIX = "layout-default";
 const DEFAULT_TABLE_LAYOUT_REMOTE_TABLE = "app_settings";
+const DEBUG_FORCE_LEAVE_BUTTONS_ENABLED = false;
 const defaultLayoutAdjustment = () => ({ offsetX: 0, offsetY: 0, scale: 1, gapScale: 1 });
 const isPrivilegedLayoutUser = (user) => Boolean(
   user?.id === SUPER_CLUB_CREATOR_USER_ID ||
@@ -6993,8 +7078,12 @@ class GameView {
     start?.addEventListener("click", this.handlers.onStart);
     draw?.addEventListener("click", this.handlers.onDraw);
   }
+  isResultConfirmationState(state = this.currentRenderedState) {
+    return Boolean(state?.screen === "game" && (state.phase === "gameEnded" || state.handLog?.result));
+  }
   scheduleTableRelayout({ force = false } = {}) {
     if (typeof window === "undefined") return;
+    if (this.isResultConfirmationState() && !this.layoutAdjustmentSession) return;
     const viewport = {
       width: Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0),
       height: Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0),
@@ -7093,9 +7182,11 @@ class GameView {
     }));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
-    this.scheduleTableRelayout({ force: true });
-    this.restoreLayoutAdjustmentMode();
-    window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
+    if (!this.isResultConfirmationState(state) || this.layoutAdjustmentSession) {
+      this.scheduleTableRelayout({ force: true });
+      this.restoreLayoutAdjustmentMode();
+      window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
+    }
   }
   updateClockBadges(state) {
     if (!this.root?.querySelector?.(".mahjong-table")) return false;
@@ -7251,7 +7342,7 @@ class GameView {
       topDiscard,
       rightDiscard,
       rightMeldGap: meldGap,
-      rightMeldSetH: otherTileW * 4.8 + 10,
+      rightMeldSetH: otherTileW * 14.4 + 30,
       nukiW: discardTileW * 2 + 2,
       nukiH: discardTileH * 2 + 2,
     };
@@ -8908,7 +8999,8 @@ class GameView {
     const club = table.clubId ? clubRepository.getClub(table.clubId) : null;
     if (club && state.currentUser && !isClubMember(state.currentUser.id, club)) return `<section class="lobby-panel"><button type="button" data-nav="clubSelect">クラブ選択へ</button><p>この卓に参加する権限がありません</p></section>`;
     const currentUserId = state.currentUser?.id ?? CURRENT_USER_ID;
-    return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="${table.clubId ? "clubTables" : "tableList"}">卓一覧へ</button><button type="button" data-copy-table-url="${table.id}">URLコピー</button><button type="button" data-fill-cpu="${table.id}">CPUで埋める</button></div>
+    const canUseDebugCpu = isPrivilegedLayoutUser(state.currentUser || authRepository.getCurrentUser());
+    return `<section class="lobby-panel"><div class="screen-actions"><button type="button" data-nav="${table.clubId ? "clubTables" : "tableList"}">卓一覧へ</button><button type="button" data-copy-table-url="${table.id}">URLコピー</button>${canUseDebugCpu ? `<button type="button" data-fill-cpu="${table.id}">CPUで埋める</button>` : ""}</div>
       <h3>${table.name}</h3>
       <p class="replay-url">${tableUrlFor(table.id)}</p>
       <p>クラブ: ${club?.name ?? "未設定"} / ルール: ${GAME_RULE_DEFINITIONS.find((rule) => rule.id === table.ruleId)?.name ?? table.ruleId ?? "アンミカロケット"} / レート: 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ: ${table.rakePercent ?? 0}%</p>
@@ -9131,7 +9223,7 @@ class GameView {
   }
   settingsPanel(state) {
     const sync = loadOnlineSync();
-    const showDebugLeave = Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
+    const showDebugLeave = DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && Boolean(state.activeTableId || sync?.tableId || sync?.localTableId);
     const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
     const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
     const localLastHandChecked = Boolean(localPlayer && declaredBy.includes(localPlayer.id));
@@ -9177,7 +9269,7 @@ class GameView {
     });
     if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
     return `<section class="score-result result-modal"><h2>最終結果</h2>
-      ${isSocketAuthoritativeGame() ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
+      ${DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && isSocketAuthoritativeGame() ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
       <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${formatPointDisplay(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
       <button type="button" class="primary-action" data-final-result-ok>OK</button>
     </section>`;
@@ -9212,8 +9304,10 @@ class GameView {
   playerIconUrl(player) {
     if (!player || player.type === "cpu") return "";
     const currentUser = this.currentStateForClock?.currentUser;
+    const seatIconUrl = (this.currentStateForClock?.seats ?? this.state?.seats ?? [])
+      .find((seat) => (seat?.playerId || seat?.userId || seat?.user_id) === player.id)?.iconUrl || "";
     if (currentUser?.id === player.id) return currentUser.iconUrl || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || "";
-    return authRepository.getUser(player.id)?.iconUrl || player.iconUrl || "";
+    return authRepository.getUser(player.id)?.iconUrl || player.iconUrl || seatIconUrl || "";
   }
   playerIconClean(player) {
     const iconUrl = this.playerIconUrl(player);
@@ -9355,7 +9449,7 @@ class GameView {
     const result = state.handLog.result;
     if (!result) return "";
     const content = result.type === "exhaustiveDraw" ? this.exhaustiveDrawResult(state, result) : this.scoreBreakdown(result.scoreResult, state);
-    const forceLeave = isSocketAuthoritativeGame()
+    const forceLeave = DEBUG_FORCE_LEAVE_BUTTONS_ENABLED && isSocketAuthoritativeGame()
       ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>`
       : "";
     return `<div class="result-backdrop">${forceLeave}${content}</div>`;

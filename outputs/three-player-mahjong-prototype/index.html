@@ -11,7 +11,7 @@
     <link rel="manifest" href="/manifest.json" />
     <link rel="icon" href="/public/icons/anmika-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/public/icons/anmika-icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=20260629-default-layout-all-players-a" />
+    <link rel="stylesheet" href="styles.css?v=20260629-hide-debug-cpu-guard-a" />
     <title>アンミカロケット</title>
     <style>
       .online-debug-page {
@@ -192,23 +192,13 @@
     }
 
     const assetBase = location.protocol === "file:" ? "./" : "/";
-    const assetVersion = "20260629-default-layout-all-players-a";
+    const assetVersion = "20260629-hide-debug-cpu-guard-a";
     loadScript(`${assetBase}runtime/pwa.js?v=${assetVersion}`).catch(() => {});
     loadScript(`${assetBase}runtime/app.js?v=${assetVersion}`).catch((error) => showFatal(error.message));
   })();
 </script>
   </body>
 </html>
-
-
-
-
-
-
-
-
-
-
 
 
 
