@@ -7428,6 +7428,9 @@ class GameView {
   layoutAdjustmentStorageKey(layout = null) {
     return `${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.layoutAccountKey()}:${this.sharedLayoutDeviceKey()}`;
   }
+  accountLayoutAdjustmentStorageKey(accountKey = this.layoutAccountKey(), family = null) {
+    return `${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${String(accountKey || CURRENT_USER_ID).replace(/[^A-Za-z0-9_-]/g, "_")}:${this.sharedLayoutDeviceKey({ family })}`;
+  }
   sharedLayoutAdjustmentStorageKey(layout = null) {
     return `${SHARED_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:${this.sharedLayoutDeviceKey()}`;
   }
@@ -7464,6 +7467,7 @@ class GameView {
     if (!normalized) return false;
     localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
     this.overwriteLocalLayoutAdjustmentWithDefaultProfile(normalized, layout, family);
+    this.overwriteDefaultBasedAccountLayoutProfiles(normalized, layout, family);
     return true;
   }
   async fetchRemoteDefaultLayoutAdjustmentProfile(layout = null, family = null) {
@@ -7617,30 +7621,62 @@ class GameView {
       userEditedAt: Date.now(),
     }));
   }
-  overwriteLocalLayoutAdjustmentWithDefaultProfile(profile, layout = null, family = null) {
-    if (this.sharedLayoutDeviceKey({ family }) !== this.sharedLayoutDeviceKey()) return false;
+  buildDefaultBasedAccountLayoutProfile(profile, layout = null, family = null) {
     const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
-    if (!normalized) return false;
-    const storageKey = this.layoutAdjustmentStorageKey(layout);
-    try {
-      const existing = JSON.parse(localStorage.getItem(storageKey) || "null");
-      const existingEditedAt = Number(existing?.userEditedAt || 0);
-      const defaultUpdatedAt = Number(normalized.updatedAt || Date.now());
-      if (existing?.adjustments && !existing.overwrittenByDefault && existingEditedAt > defaultUpdatedAt) return false;
-    } catch {}
-    localStorage.setItem(storageKey, JSON.stringify({
+    if (!normalized) return null;
+    return {
       version: SHARED_TABLE_LAYOUT_ADJUSTMENT_VERSION,
       scope: "account-device",
       rules: ["anmika-rocket", TSUMO_LOSSLESS_3MA_RULE_ID],
       accountKey: this.layoutAccountKey(),
-      deviceKey: this.sharedLayoutDeviceKey(),
+      deviceKey: this.sharedLayoutDeviceKey({ family }),
       selectedKey: normalized.selectedKey || "",
       adjustments: normalized.adjustments || {},
       updatedAt: Date.now(),
       overwrittenByDefault: true,
       defaultUpdatedAt: normalized.updatedAt || Date.now(),
-    }));
+    };
+  }
+  overwriteLocalLayoutAdjustmentWithDefaultProfile(profile, layout = null, family = null, options = {}) {
+    if (this.sharedLayoutDeviceKey({ family }) !== this.sharedLayoutDeviceKey()) return false;
+    const accountProfile = this.buildDefaultBasedAccountLayoutProfile(profile, layout, family);
+    if (!accountProfile) return false;
+    const storageKey = this.layoutAdjustmentStorageKey(layout);
+    try {
+      const existing = JSON.parse(localStorage.getItem(storageKey) || "null");
+      const existingEditedAt = Number(existing?.userEditedAt || 0);
+      const defaultUpdatedAt = Number(accountProfile.defaultUpdatedAt || Date.now());
+      if (!options.force && existing?.adjustments && !existing.overwrittenByDefault && existingEditedAt > defaultUpdatedAt) return false;
+    } catch {}
+    localStorage.setItem(storageKey, JSON.stringify(accountProfile));
     return true;
+  }
+  overwriteDefaultBasedAccountLayoutProfiles(profile, layout = null, family = null, options = {}) {
+    const targetDeviceKey = this.sharedLayoutDeviceKey({ family });
+    const normalized = this.normalizeRemoteDefaultLayoutProfile(profile, layout, family);
+    if (!normalized) return 0;
+    const keys = new Set([this.accountLayoutAdjustmentStorageKey(this.layoutAccountKey(), family)]);
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index) || "";
+      if (key.startsWith(`${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`) && key.endsWith(`:${targetDeviceKey}`)) keys.add(key);
+    }
+    let count = 0;
+    for (const key of keys) {
+      try {
+        const existing = JSON.parse(localStorage.getItem(key) || "null");
+        const existingEditedAt = Number(existing?.userEditedAt || 0);
+        const defaultUpdatedAt = Number(normalized.updatedAt || Date.now());
+        const canOverwrite = options.force || !existing?.adjustments || existing.overwrittenByDefault || existing.inheritedDefault || !existingEditedAt || existingEditedAt <= defaultUpdatedAt;
+        if (!canOverwrite) continue;
+        const accountKey = key.slice(`${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`.length, Math.max(`${ACCOUNT_TABLE_LAYOUT_ADJUSTMENT_PREFIX}:`.length, key.length - targetDeviceKey.length - 1));
+        localStorage.setItem(key, JSON.stringify({
+          ...this.buildDefaultBasedAccountLayoutProfile(normalized, layout, family),
+          accountKey,
+        }));
+        count += 1;
+      } catch {}
+    }
+    return count;
   }
   saveDefaultLayoutAdjustmentProfile(profile, layout = null, family = null) {
     const normalized = {
@@ -7654,7 +7690,7 @@ class GameView {
       updatedAt: Date.now(),
     };
     localStorage.setItem(this.defaultLayoutAdjustmentStorageKey(layout, family), JSON.stringify(normalized));
-    this.overwriteLocalLayoutAdjustmentWithDefaultProfile(normalized, layout, family);
+    this.overwriteDefaultBasedAccountLayoutProfiles(normalized, layout, family, { force: true });
     return this.saveRemoteDefaultLayoutAdjustmentProfile(normalized, layout, family)
       .catch((error) => {
         console.warn("[LayoutDefault] remote save failed", error);
