@@ -115,6 +115,7 @@ const DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG = {
 const TABLE_BACKGROUND_COLOR_OPTIONS = [
   { value: "#55B0FF", label: "水色" },
   { value: "#FFB287", label: "茶色" },
+  { value: "#4F2916", label: "濃い茶色" },
   { value: "#48D8A0", label: "緑色" },
 ];
 const DEFAULT_TABLE_BACKGROUND_COLOR = TABLE_BACKGROUND_COLOR_OPTIONS[0].value;
