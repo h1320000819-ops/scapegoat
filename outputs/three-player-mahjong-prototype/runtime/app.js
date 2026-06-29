@@ -7434,7 +7434,7 @@ class GameView {
       topDiscard,
       rightDiscard,
       rightMeldGap: meldGap,
-      rightMeldSetH: otherTileW * 7.2 + 15,
+      rightMeldSetH: otherTileW * 3.6 + 8,
       nukiW: discardTileW * 2 + 2,
       nukiH: discardTileH * 2 + 2,
     };

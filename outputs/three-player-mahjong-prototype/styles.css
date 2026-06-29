@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color: #f6f8f7;
   background: #071018;
   font-family: "Noto Sans JP", "Yu Gothic", "Meiryo", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
@@ -4443,7 +4443,7 @@ button:hover {
 
 .seat-right .hand-row {
   --right-meld-gap: 0px;
-  --right-meld-set-height: clamp(52px, 13dvh, 112px);
+  --right-meld-set-height: clamp(26px, 6.5dvh, 56px);
   grid-template-areas:
     "nuki"
     "meld"
@@ -4542,7 +4542,7 @@ button:hover {
 
   .seat-right .hand-row {
     --right-meld-gap: 0px;
-    --right-meld-set-height: clamp(28px, 8.5dvh, 38px);
+    --right-meld-set-height: clamp(14px, 4.25dvh, 19px);
     grid-template-rows: var(--nuki-slot-height) auto var(--draw-slot-width) minmax(220px, 1fr);
     max-height: calc(var(--anmika-viewport-height, 100dvh) - 12px);
     min-height: min(328px, calc(var(--anmika-viewport-height, 100dvh) - 12px));
@@ -4610,7 +4610,7 @@ button:hover {
   --safe-other-tile-width: clamp(20px, 2.15vw, 30px);
   --safe-other-tile-height: calc(var(--safe-other-tile-width) * 1.38);
   --safe-right-meld-gap: 0px;
-  --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 3);
+  --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
   --safe-river-side-gap: var(--center-river-margin);
   --right-river-left-pull: calc(clamp(24px, 3vw, 54px) + (var(--discard-tile-width) * 0.5));
 }
@@ -4690,7 +4690,7 @@ button:hover {
   grid-template-columns: minmax(0, var(--exposed-slot-width));
   grid-template-rows:
     minmax(0, var(--nuki-slot-height))
-    minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
+    minmax(calc(var(--right-meld-set-height) * 1.55), 1.5fr)
     minmax(0, var(--draw-slot-width))
     minmax(calc(var(--safe-other-tile-height) * 12 + 30px), 2fr);
   height: 100%;
@@ -4813,7 +4813,7 @@ button:hover {
     --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 2px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 1.5fr)
       minmax(0, var(--draw-slot-width))
       minmax(calc(var(--safe-other-tile-height) * 12 + 12px), 2fr);
   }
@@ -4991,7 +4991,7 @@ button:hover {
     --nuki-slot-width: calc(var(--discard-tile-width) * 2 + 1px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 1.5fr)
       minmax(0, var(--draw-slot-width))
       minmax(calc(var(--safe-other-tile-height) * 12 + 6px), 2fr);
   }
@@ -5122,7 +5122,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table {
     --safe-right-lane-width: clamp(92px, 15dvw, 124px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 3);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 12px) * 1.5);
   }
 
   body[data-pwa="standalone"] .mahjong-table.layout-tight-right,
@@ -5131,7 +5131,7 @@ button:hover {
   html[data-pwa="standalone"] .mahjong-table.layout-ultra-tight-right {
     --safe-right-lane-width: clamp(88px, 14dvw, 118px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 3);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 10px) * 1.5);
   }
 
   body[data-pwa="standalone"] .mahjong-table .seat-right .hand-row > .meld-area .exposed-tiles,
@@ -5211,7 +5211,7 @@ button:hover {
     --safe-center-y: 39%;
     --safe-right-lane-width: clamp(54px, 9.2dvw, 74px);
     --safe-right-meld-gap: 0px;
-    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 3);
+    --safe-right-meld-height: calc((var(--safe-other-tile-width) * 5 + 6px) * 1.5);
     --safe-other-tile-width: clamp(10px, 2.8dvh, 13px);
     --safe-river-side-gap: 1px;
   }
@@ -5359,7 +5359,7 @@ button:hover {
     --exposed-slot-width: calc(var(--layout-other-tile-width) * 4 + 4px);
     grid-template-rows:
       minmax(0, var(--nuki-slot-height))
-      minmax(calc(var(--right-meld-set-height) * 1.55), 3fr)
+      minmax(calc(var(--right-meld-set-height) * 1.55), 1.5fr)
       minmax(0, var(--draw-slot-width))
       minmax(calc(var(--layout-other-tile-height) * 12 + 18px), 2fr) !important;
     height: 100% !important;
