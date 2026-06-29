@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260629-ensurearray-crash-fix-a";
+const CACHE_NAME = "anmika-pwa-20260630-endroom-lasthan-fix-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260629-ensurearray-crash-fix-a",
-  "/runtime/app.js?v=20260629-ensurearray-crash-fix-a",
-  "/runtime/online-debug.js?v=20260629-ensurearray-crash-fix-a",
-  "/runtime/pwa.js?v=20260629-ensurearray-crash-fix-a",
+  "/styles.css?v=20260630-endroom-lasthan-fix-a",
+  "/runtime/app.js?v=20260630-endroom-lasthan-fix-a",
+  "/runtime/online-debug.js?v=20260630-endroom-lasthan-fix-a",
+  "/runtime/pwa.js?v=20260630-endroom-lasthan-fix-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

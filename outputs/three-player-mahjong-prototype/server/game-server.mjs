@@ -467,7 +467,7 @@ const markDisconnectedPlayersAsLastHand = (room) => {
   return ids;
 };
 const scheduleDisconnectedLastHandTimeout = (room) => {
-  if (!room?.state) return;
+  if (!room?.state || room.stopped) return;
   if (room.disconnectedLastHandTimer) {
     clearTimeout(room.disconnectedLastHandTimer);
     room.disconnectedLastHandTimer = null;
@@ -483,6 +483,7 @@ const scheduleDisconnectedLastHandTimeout = (room) => {
   room.disconnectedLastHandTimer = setTimeout(() => {
     try {
       room.disconnectedLastHandTimer = null;
+      if (room.stopped) return;
       const ids = markDisconnectedPlayersAsLastHand(room);
       if (ids.length) {
         room.version = Number(room.version || 0) + 1;
@@ -506,7 +507,7 @@ const scheduleDisconnectedLastHandTimeout = (room) => {
   }, delay);
 };
 const scheduleDisconnectedProgressTimeout = (room) => {
-  if (!room?.state) return;
+  if (!room?.state || room.stopped) return;
   if (room.disconnectedProgressTimer) {
     clearTimeout(room.disconnectedProgressTimer);
     room.disconnectedProgressTimer = null;
@@ -531,6 +532,7 @@ const scheduleDisconnectedProgressTimeout = (room) => {
   room.disconnectedProgressTimer = setTimeout(() => {
     try {
       room.disconnectedProgressTimer = null;
+      if (room.stopped) return;
       const ids = disconnectedHumanPlayerIds(room)
         .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
         .filter((id) => registry.get(id)?.disconnectedAutoPlay || Number(registry.get(id)?.disconnectedProgressWaitStartedAt || 0) + DISCONNECTED_DISCARD_GRACE_MS <= now())
@@ -570,6 +572,7 @@ const scheduleDisconnectedProgressTimeout = (room) => {
   }, delay);
 };
 const scheduleDisconnectedTimeouts = (room) => {
+  if (!room || room.stopped) return;
   scheduleDisconnectedProgressTimeout(room);
   scheduleDisconnectedLastHandTimeout(room);
 };
@@ -813,8 +816,30 @@ const syncRoomSeatsToDb = async (room) => {
   }
   return changed;
 };
+function stopAndForgetRoom(room, reason = "roomStopped") {
+  if (!room?.tableId) return false;
+  room.stopped = true;
+  for (const timerKey of ["resultTimer", "clockTimer", "effectTimer", "disconnectedLastHandTimer", "disconnectedProgressTimer"]) {
+    if (!room[timerKey]) continue;
+    clearTimeout(room[timerKey]);
+    room[timerKey] = null;
+  }
+  if (room.localPersistTimer) {
+    clearTimeout(room.localPersistTimer);
+    room.localPersistTimer = null;
+  }
+  room.pendingLocalPersistPayload = null;
+  room.pendingServerEffect = null;
+  room.actionInFlight = null;
+  room.sockets?.clear?.();
+  room.players?.clear?.();
+  gameRooms.delete(room.tableId);
+  deletePersistedRoom(room.tableId, reason);
+  return true;
+}
 const clearRoomSeatsAndPlayersAfterUnfilledContinuation = async (room, reason = "continuationSeatUnfilled") => {
   if (!room?.state) return false;
+  const tableId = room.tableId;
   room.state.seats = normalizeServerSeats(room.state.seats).map((seat) => ({
     ...seat,
     playerId: null,
@@ -837,8 +862,8 @@ const clearRoomSeatsAndPlayersAfterUnfilledContinuation = async (room, reason = 
   room.disconnectedLeaveSyncedUserIds = new Set();
   room.pendingDisconnectedStatePlayerLeaveUserIds = new Set();
   appendHandEvent(room.state, { type: "tableClosedAfterUnfilledContinuation", reason, turnIndex: room.state.turnIndex ?? 0 });
-  if (hasSupabaseServerWriter() && isUuid(room.tableId)) {
-    await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+  if (hasSupabaseServerWriter() && isUuid(tableId)) {
+    await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(tableId)}`, {
       method: "PATCH",
       prefer: "return=minimal",
       body: {
@@ -847,19 +872,19 @@ const clearRoomSeatsAndPlayersAfterUnfilledContinuation = async (room, reason = 
         display_name: null,
         is_last_hand_declared: false,
       },
-    }).catch((error) => console.warn("[Seats] clear all failed", { tableId: room.tableId, reason, error: error?.message || String(error) }));
-    await supabaseRest(`/table_waiting_list?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+    }).catch((error) => console.warn("[Seats] clear all failed", { tableId, reason, error: error?.message || String(error) }));
+    await supabaseRest(`/table_waiting_list?table_id=eq.${encodeURIComponent(tableId)}`, {
       method: "DELETE",
       prefer: "return=minimal",
-    }).catch((error) => console.warn("[WaitingQueue] clear after unfilled continuation failed", { tableId: room.tableId, reason, error: error?.message || String(error) }));
-    await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(room.tableId)}`, {
+    }).catch((error) => console.warn("[WaitingQueue] clear after unfilled continuation failed", { tableId, reason, error: error?.message || String(error) }));
+    await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(tableId)}`, {
       method: "PATCH",
       prefer: "return=minimal",
       body: { status: "waiting" },
-    }).catch((error) => console.warn("[Tables] mark waiting after clear failed", { tableId: room.tableId, reason, error: error?.message || String(error) }));
+    }).catch((error) => console.warn("[Tables] mark waiting after clear failed", { tableId, reason, error: error?.message || String(error) }));
   }
   room.updatedAt = now();
-  persistRoom(room);
+  stopAndForgetRoom(room, reason);
   return true;
 };
 const nextHanchanPlayersFromSeats = (state) => {
@@ -1254,7 +1279,7 @@ const loadPersistedRoomFromDb = async (tableId, expectedGameId = "") => {
 };
 
 const persistRoom = (room) => {
-  if (!room?.tableId || !room.state) return;
+  if (!room?.tableId || !room.state || room.stopped) return;
   appendServerReplaySnapshot(room.state);
   const payload = buildRoomPersistPayload(room);
   room.pendingLocalPersistPayload = payload;
@@ -5748,6 +5773,7 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
 };
 
 const broadcastState = (room) => {
+  if (!room || room.stopped) return;
   for (const [socketId, meta] of room.sockets.entries()) {
     try {
       io.to(socketId).emit("game:state", publicRoomState(room, meta?.userId || null));
@@ -5861,7 +5887,7 @@ const applyAutoResultOk = (state) => {
   return true;
 };
 const scheduleRoomResultTimeout = (room) => {
-  if (!room?.state) return;
+  if (!room?.state || room.stopped) return;
   if (room.resultTimer) {
     clearTimeout(room.resultTimer);
     room.resultTimer = null;
@@ -5881,6 +5907,7 @@ const scheduleRoomResultTimeout = (room) => {
   room.resultTimer = setTimeout(async () => {
     room.resultTimer = null;
     try {
+      if (room.stopped) return;
       if (!isWaitingForResultOk(room.state) || getCurrentResultId(room.state) !== timerResultId || Number(room.state.resultCountdownStartedAt || 0) !== timerStartedAt) {
         scheduleRoomResultTimeout(room);
         return;
@@ -5903,15 +5930,7 @@ const scheduleRoomResultTimeout = (room) => {
       };
       room.updatedAt = now();
       persistRoom(room);
-      const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
-      if (shouldContinueSeats) {
-        await syncDeclaredLastHandLeaves(room);
-        await syncDisconnectedLastHandLeaves(room);
-      }
-      const continued = shouldContinueSeats
-        ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOkAuto" })
-        : false;
-      if (!continued) await syncInterruptedRoomStatusToDb(room);
+      await continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOkAuto");
       broadcastState(room);
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
@@ -5931,8 +5950,30 @@ const shouldAttemptSeatContinuationAfterGameEnd = (room) => {
   if (room.pendingDisconnectedStatePlayerLeaveUserIds instanceof Set && room.pendingDisconnectedStatePlayerLeaveUserIds.size > 0) return true;
   return disconnectedHumanPlayerIds(room).length > 0;
 };
+const continueEndedRoomFromSeatsSafely = async (room, reason, { force = false, requireTsumoLossless = false } = {}) => {
+  if (!room?.state || room.state.phase !== "gameEnded") return false;
+  try {
+    const shouldContinueSeats = force || shouldAttemptSeatContinuationAfterGameEnd(room);
+    const continued = shouldContinueSeats
+      ? await startNextRoomGameFromSeatsIfReady(room, { reason, requireTsumoLossless })
+      : false;
+    if (!continued) await syncInterruptedRoomStatusToDb(room);
+    return continued;
+  } catch (error) {
+    logServerException("game:endContinuation", error, {
+      tableId: room?.tableId,
+      gameId: room?.gameId,
+      version: room?.version,
+      phase: room?.state?.phase,
+      reason,
+      force,
+      requireTsumoLossless,
+    });
+    return false;
+  }
+};
 const applyPendingRoomServerEffect = (room) => {
-  if (!room?.state?.pendingServerEffect) return false;
+  if (!room?.state?.pendingServerEffect || room.stopped) return false;
   if (room.state.pendingServerEffect.type === "flower") applyServerFlowerEffect(room.state);
   else if (room.state.pendingServerEffect.type === "ponReveal") applyServerPonRevealEffect(room.state);
   else if (room.state.pendingServerEffect.type === "cpuDiscard") applyServerCpuDiscardEffect(room.state);
@@ -5955,12 +5996,12 @@ const applyPendingRoomServerEffect = (room) => {
   return true;
 };
 const applyDueRoomServerEffect = (room) => {
-  if (!room?.state?.pendingServerEffect) return false;
+  if (!room?.state?.pendingServerEffect || room.stopped) return false;
   if (Number(room.state.pendingServerEffect.resumeAt || 0) > Date.now()) return false;
   return applyPendingRoomServerEffect(room);
 };
 const scheduleRoomServerEffect = (room) => {
-  if (!room?.state?.pendingServerEffect) return;
+  if (!room?.state?.pendingServerEffect || room.stopped) return;
   if (room.effectTimer) {
     clearTimeout(room.effectTimer);
     room.effectTimer = null;
@@ -5985,7 +6026,7 @@ const scheduleRoomServerEffect = (room) => {
 };
 
 const scheduleRoomClockTimeout = (room) => {
-  if (!room?.state) return;
+  if (!room?.state || room.stopped) return;
   if (room.clockTimer) {
     clearTimeout(room.clockTimer);
     room.clockTimer = null;
@@ -6268,27 +6309,7 @@ io.on("connection", (socket) => {
         if (room.state?.phase === "gameEnded") {
           const endedResultId = getCurrentResultId(room.state) || room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || "gameEnded";
           queueResultSideEffectsOnce(room, endedResultId, "resultOkAlreadyGameEnded");
-          const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
-          const changed = shouldContinueSeats
-            ? ((await syncDeclaredLastHandLeaves(room)) || (await syncDisconnectedLastHandLeaves(room)))
-            : false;
-          const continued = shouldContinueSeats
-            ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOk" })
-            : false;
-          if (!continued) await syncInterruptedRoomStatusToDb(room);
-          if (changed) {
-            room.version = Number(room.version || 0) + 1;
-            room.state.version = room.version;
-            room.state.onlineMeta = {
-              ...(room.state.onlineMeta || {}),
-              transport: "socket.io",
-              reason: "resultOkAlreadyGameEndedLeaveSync",
-              publishedBy: playerId,
-              publishedAt: now(),
-            };
-            persistRoom(room);
-            broadcastState(room);
-          }
+          await continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk");
           ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
           return;
         }
@@ -6354,15 +6375,7 @@ io.on("connection", (socket) => {
           room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || getCurrentResultId(room.state) || "final",
         ].join(":");
         queueResultSideEffectsOnce(room, finalSyncId, "resultOkGameEnded");
-        const shouldContinueSeats = shouldAttemptSeatContinuationAfterGameEnd(room);
-        if (shouldContinueSeats) {
-          await syncDeclaredLastHandLeaves(room);
-          await syncDisconnectedLastHandLeaves(room);
-        }
-        const continued = shouldContinueSeats
-          ? await startNextRoomGameFromSeatsIfReady(room, { reason: "lastHandContinuationAfterResultOk" })
-          : false;
-        if (!continued) await syncInterruptedRoomStatusToDb(room);
+        await continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk");
       }
       persistRoom(room);
       if (requestId) {
@@ -6450,7 +6463,7 @@ io.on("connection", (socket) => {
       ].join(":");
       queueResultSideEffectsOnce(room, finalSyncId, "finalResultOk");
       const hasDeclaredLeaver = asArray(room.state.lastHandDeclaredBy).filter(Boolean).length > 0;
-      const advanced = await startNextTsumoLosslessHanchanIfReady(room);
+      const advanced = await continueEndedRoomFromSeatsSafely(room, "nextHanchanAutoStart", { force: true, requireTsumoLossless: true });
       ack?.({ ok: true, advanced, hasDeclaredLeaver, ...publicRoomState(room, viewerId) });
     } catch (error) {
       const exceptionId = logServerException("game:finalResultOk", error, {

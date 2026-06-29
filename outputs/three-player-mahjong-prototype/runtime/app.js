@@ -9495,6 +9495,7 @@ class GameView {
     const localLastHandChecked = localSeat
       ? Boolean(localSeat.isLastHandDeclared ?? localSeat.is_last_hand_declared)
       : Boolean(localPlayer && declaredBy.includes(localPlayer.id));
+    const showLastHandSetting = !state.isReplayView && localPlayer;
     const currentUser = state.currentUser || authRepository.getCurrentUser?.();
     const selectedTableBackgroundColor = normalizeTableBackgroundColor(currentUser?.tableBackgroundColor);
     const tableBackgroundOptions = TABLE_BACKGROUND_COLOR_OPTIONS.map((option) =>
@@ -9502,7 +9503,7 @@ class GameView {
     ).join("");
     return `<aside class="settings-panel">
       <h2>設定</h2>
-      ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
+      ${showLastHandSetting ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
       <label class="settings-sound-volume">音量 <span data-sound-volume-value>${Math.round(gameSoundVolume() * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(gameSoundVolume() * 100)}" data-sound-volume /></label>
       <section class="settings-info-block settings-account-block">
         <h3>アカウント設定</h3>
