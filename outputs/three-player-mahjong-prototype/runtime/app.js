@@ -7291,9 +7291,15 @@ class GameView {
       const volume = setGameSoundVolume(Number(input.value || 0) / 100);
       this.root.querySelectorAll("[data-sound-volume-value]").forEach((item) => { item.textContent = `${Math.round(volume * 100)}%`; });
     }));
+    this.root.querySelectorAll("[data-table-background-color]").forEach((select) => select.addEventListener("change", () => {
+      this.handlers.onUpdateAccount?.({ tableBackgroundColor: select.value || DEFAULT_TABLE_BACKGROUND_COLOR });
+    }));
     this.root.querySelectorAll("[data-assist-auto-win]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { autoWin: input.checked })));
     this.root.querySelectorAll("[data-assist-no-call]").forEach((input) => input.addEventListener("change", () => this.handlers.onAssistSettings(input.dataset.playerId, { noCall: input.checked })));
-    if (!this.isResultConfirmationState(state) || this.layoutAdjustmentSession) {
+    if (this.isResultConfirmationState(state) && !this.layoutAdjustmentSession) {
+      const table = this.root.querySelector(".mahjong-table");
+      if (table) this.applyTableLayoutForCurrentViewport(table);
+    } else {
       this.scheduleTableRelayout({ force: true });
       this.restoreLayoutAdjustmentMode();
       window.setTimeout?.(() => this.restoreLayoutAdjustmentMode(), 90);
@@ -9405,10 +9411,19 @@ class GameView {
     const localPlayer = state.players?.find((player) => player.type === "human") ?? state.players?.[0];
     const declaredBy = Array.isArray(state.lastHandDeclaredBy) ? state.lastHandDeclaredBy : [];
     const localLastHandChecked = Boolean(localPlayer && declaredBy.includes(localPlayer.id));
+    const currentUser = state.currentUser || authRepository.getCurrentUser?.();
+    const selectedTableBackgroundColor = normalizeTableBackgroundColor(currentUser?.tableBackgroundColor);
+    const tableBackgroundOptions = TABLE_BACKGROUND_COLOR_OPTIONS.map((option) =>
+      `<option value="${option.value}" ${option.value === selectedTableBackgroundColor ? "selected" : ""}>${option.label} ${option.value}</option>`
+    ).join("");
     return `<aside class="settings-panel">
       <h2>設定</h2>
       ${!state.isReplayView && localPlayer ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
       <label class="settings-sound-volume">音量 <span data-sound-volume-value>${Math.round(gameSoundVolume() * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(gameSoundVolume() * 100)}" data-sound-volume /></label>
+      <section class="settings-info-block settings-account-block">
+        <h3>アカウント設定</h3>
+        <label class="setting-row"><span>卓の背景色</span><select data-table-background-color>${tableBackgroundOptions}</select></label>
+      </section>
       <button type="button" class="secondary" data-layout-adjust-open>表示位置調整</button>
       ${showDebugLeave ? `<button type="button" class="danger debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
     </aside>`;
