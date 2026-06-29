@@ -2516,7 +2516,7 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
   Boolean(sync?.tableId && gameState?.phase === "gameEnded" && !isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync));
 const shouldShowForceLeaveButton = (gameState) =>
-  Boolean(isTsumoLossless3maState(gameState) && isSocketAuthoritativeGame());
+  Boolean(gameState?.screen === "game" && isSocketAuthoritativeGame() && !gameState?.isReplayView);
 const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
 const roundToTenth = (value) => {
   const numeric = Number(value || 0);
@@ -7308,7 +7308,7 @@ class GameView {
     this.root.querySelectorAll("[data-force-table-leave]").forEach((b) => b.addEventListener("click", () => this.handlers.onForceTableLeave?.()));
     this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
     this.root.querySelectorAll("[data-start-game]").forEach((b) => b.addEventListener("click", () => this.handlers.onStart()));
-    this.root.querySelectorAll("[data-settings-toggle]").forEach((b) => b.addEventListener("click", () => this.handlers.onToggleSettings()));
+    bindFastButton("[data-settings-toggle]", () => this.handlers.onToggleSettings());
     this.root.querySelectorAll("[data-layout-adjust-open]").forEach((b) => b.addEventListener("click", () => this.openLayoutAdjustmentMode({ defaultProfile: b.dataset.layoutAdjustScope === "default" })));
     this.root.querySelectorAll("[data-last-hand]").forEach((input) => input.addEventListener("change", () => this.handlers.onUpdateSettings({ isLastHand: input.checked })));
     this.root.querySelectorAll("[data-sound-volume]").forEach((input) => input.addEventListener("input", () => {

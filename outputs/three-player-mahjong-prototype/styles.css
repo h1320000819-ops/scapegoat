@@ -97,7 +97,7 @@ body {
   left: 0;
   line-height: 1;
   padding: 4px 7px;
-  position: absolute;
+  position: fixed;
   top: -24px;
   white-space: nowrap;
 }
@@ -1113,10 +1113,11 @@ button:hover {
 }
 
 .settings-toggle {
-  position: absolute;
+  position: fixed;
   right: 16px;
   top: 14px;
-  z-index: 22;
+  touch-action: manipulation;
+  z-index: 80;
 }
 
 .settings-panel {
@@ -1126,11 +1127,11 @@ button:hover {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
   color: #17202a;
   padding: 14px;
-  position: absolute;
+  position: fixed;
   right: 16px;
   top: 58px;
   width: 260px;
-  z-index: 23;
+  z-index: 81;
 }
 
 .settings-panel h2 {
