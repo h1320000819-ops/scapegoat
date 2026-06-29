@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260629-safe-api-auth-a";
+const CACHE_NAME = "anmika-pwa-20260629-mobile-right-meld-gap-4tiles-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v12";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260629-safe-api-auth-a",
-  "/runtime/app.js?v=20260629-safe-api-auth-a",
-  "/runtime/online-debug.js?v=20260629-safe-api-auth-a",
-  "/runtime/pwa.js?v=20260629-safe-api-auth-a",
+  "/styles.css?v=20260629-mobile-right-meld-gap-4tiles-a",
+  "/runtime/app.js?v=20260629-mobile-right-meld-gap-4tiles-a",
+  "/runtime/online-debug.js?v=20260629-mobile-right-meld-gap-4tiles-a",
+  "/runtime/pwa.js?v=20260629-mobile-right-meld-gap-4tiles-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
