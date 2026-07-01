@@ -1192,6 +1192,57 @@
     const base = `socket-game-${tableId}`;
     return fresh ? `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` : base;
   };
+  const socketEmitWithAck = (socket, eventName, payload, timeoutMs = 12000) =>
+    new Promise((resolve, reject) => {
+      if (!socket?.emit) return reject(new Error("ゲームサーバーに接続できません"));
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("ゲームサーバーの応答がありません"));
+      }, timeoutMs);
+      socket.emit(eventName, payload, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (!response?.ok) return reject(new Error(response?.error || "ゲームサーバー操作に失敗しました"));
+        resolve(response);
+      });
+    });
+  const connectLobbyGameSocket = async () => {
+    if (typeof io !== "function") throw new Error("Socket.IOクライアントを読み込めませんでした。ページを更新してください。");
+    const socket = io(location.origin, { transports: ["websocket", "polling"], reconnection: true });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("ゲームサーバーに接続できません")), 8000);
+      socket.once("connect", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.once("connect_error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    return socket;
+  };
+  const respondWaitingInvite = async (tableId, response) => {
+    const user = requireUser();
+    tableId = requireTableId(normalizeRemoteTableId(tableId), "ウェイティング応答");
+    await waitForGameServerReady();
+    const socket = await connectLobbyGameSocket();
+    try {
+      await socketEmitWithAck(socket, "game:waitingInviteResponse", {
+        tableId,
+        gameId: newSocketGameId(tableId),
+        userId: user.id,
+        response: response === "ok" ? "ok" : "skip",
+      });
+    } finally {
+      socket.disconnect?.();
+    }
+    await loadTables();
+    render();
+  };
   const deactivateTableActiveGameState = async (tableId, reason = "新規対局開始") => {
     tableId = normalizeRemoteTableId(tableId);
     if (!tableId || !state.accessToken) return;
@@ -2743,6 +2794,7 @@
       }
     }
     await loadTables();
+    render();
   };
   const loadSeats = async () => {
     const tableId = selectedTableId();
@@ -4392,6 +4444,12 @@
     .map((player) => player.name || player.displayName || player.id)
     .filter(Boolean)
     .join(" / ") || "対局者不明";
+  const replaySummaryIncludesCurrentUser = (summary = {}) => {
+    const userId = state.user?.id || "";
+    if (!userId) return false;
+    return asArray(summary.players).some((player) => String(player?.playerId || player?.userId || player?.id || "") === String(userId));
+  };
+  const canCurrentUserReadReplaySummary = (row = {}) => isSuperClubCreator() || replaySummaryIncludesCurrentUser(row.summary || {});
   const replayOpenUrl = (replayId) => {
     const encoded = encodeURIComponent(replayId);
     if (window.location.protocol === "file:") return `../replay.html#/replay/${encoded}`;
@@ -4480,6 +4538,7 @@
   const cacheReplayForViewer = async (replayId) => {
     if (!replayId) throw new Error("牌譜IDがありません。");
     let rows;
+    let accessGranted = false;
     try {
       const serverResponse = await fetch(`${window.location.origin}/api/replay/${encodeURIComponent(replayId)}`, {
         headers: buildOptionalServerApiAuthHeaders(),
@@ -4488,8 +4547,10 @@
       if (serverResponse?.ok) {
         const data = await serverResponse.json();
         rows = data?.replay ? [data.replay] : [];
+        accessGranted = Boolean(rows.length);
       } else {
         rows = await rest("/rpc/get_my_replay", { method: "POST", body: JSON.stringify({ p_replay_id: replayId }) });
+        accessGranted = Boolean(asArray(rows).length);
       }
     } catch (error) {
       const raw = rawErrorText(error);
@@ -4498,12 +4559,15 @@
     }
     const row = asArray(rows)[0];
     if (!row?.replay_id && !row?.id) throw new Error("牌譜本体を取得できませんでした。");
+    if (!accessGranted && !canCurrentUserReadReplaySummary(row)) throw new Error("この牌譜を再生する権限がありません。");
     const id = row.replay_id || row.id;
     const replay = {
       replayId: id,
+      accessGranted: true,
       summary: {
         ...(row.summary || {}),
         replayId: id,
+        accessGranted: true,
         replayUrl: replayOpenUrl(id),
         clubId: row.club_id || row.summary?.clubId,
         tableId: row.table_id || row.summary?.tableId,
@@ -4532,7 +4596,7 @@
         if (!raw.includes("get_my_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
         rows = await rest("/replays?select=replay_id,club_id,table_id,game_id,summary,created_at&order=created_at.desc&limit=300");
       }
-      rows = asArray(rows).slice(0, 300);
+      rows = asArray(rows).filter((row) => canCurrentUserReadReplaySummary(row)).slice(0, 300);
       if (!rows.length) {
         body.innerHTML = `
           <p class="muted">牌譜はまだありません。</p>
@@ -5377,6 +5441,8 @@
         const waitingRows = visibleTableWaiting(table);
         const isOwnWaiting = isCurrentUserWaitingForTable(table);
         const isOwnSeatInTable = isCurrentUserSeatedAt(seats);
+        const isWaitingConfirmation = table.status === "waiting_confirmation";
+        const canRespondWaitingInvite = isWaitingConfirmation && isOwnSeatInTable;
         const card = document.createElement("div");
         card.className = "card table-card";
         const ruleLabel = RULE_LABELS[table.rule_id || "anmika-rocket"] || table.rule_id || "アンミカロケット";
@@ -5384,11 +5450,12 @@
           <strong>${table.name || "アンミカロケット卓"}</strong>${hasCpu ? ' <span class="warn">デバッグ卓</span>' : ""}
           <span class="muted">ルール: ${ruleLabel}</span>
           <div>${formatRuleSummary({ ...table, is_debug: hasCpu })}</div>
-          <div>状態: ${table.status || "waiting"} / 参加人数: ${filled}/3</div>
+          <div>状態: ${isWaitingConfirmation ? "ウェイティング補充確認中" : (table.status || "waiting")} / 参加人数: ${filled}/3</div>
           <div class="table-seats"></div>
           <div class="table-waiting-list"></div>
           <div class="table-card-actions">
             ${table.status === "playing" ? '<button type="button" data-action="enterGame" class="primary">対局へ入る</button>' : ""}
+            ${canRespondWaitingInvite ? '<button type="button" data-action="waitingOk" class="primary">座る OK</button><button type="button" data-action="waitingSkip" class="secondary">スキップ</button>' : ""}
             <button type="button" data-action="toggleWaiting" class="secondary"></button>
             ${table.rule_id === TSUMO_LOSSLESS_3MA_RULE_ID ? `<button type="button" data-action="forceLeave" class="danger">強制退席</button>` : ""}
             <button type="button" data-action="addCpu" class="super-only">CPU追加</button>
@@ -5459,6 +5526,16 @@
           uiLog("waiting toggled", { tableId: table.table_id });
           clearError();
           toggleWaiting(table.table_id).catch((error) => showError("ウェイティング切替に失敗しました", error));
+        });
+        card.querySelector('[data-action="waitingOk"]')?.addEventListener("click", () => {
+          uiLog("waiting invite ok", { tableId: table.table_id });
+          clearError();
+          respondWaitingInvite(table.table_id, "ok").catch((error) => showError("ウェイティングOKに失敗しました", error));
+        });
+        card.querySelector('[data-action="waitingSkip"]')?.addEventListener("click", () => {
+          uiLog("waiting invite skip", { tableId: table.table_id });
+          clearError();
+          respondWaitingInvite(table.table_id, "skip").catch((error) => showError("ウェイティングスキップに失敗しました", error));
         });
         card.querySelector('[data-action="enterGame"]')?.addEventListener("click", () => {
           uiLog("enter game clicked", { tableId: table.table_id });

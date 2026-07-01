@@ -146,6 +146,19 @@ const normalizeRuleConfigForRule = (ruleId = "anmika-rocket", config = {}) =>
   ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
 const isTsumoLossless3maState = (state) =>
   state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+const resultWinnerIds = (result) => result?.type === "win"
+  ? [
+    ...(Array.isArray(result.winners) ? result.winners.map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "") : []),
+    result.winnerId,
+  ].filter(Boolean)
+  : [];
+const getAnmikaNextDealerId = (state, result) => {
+  const playerIds = new Set((state?.players ?? []).map((player) => player.id));
+  const winnerId = resultWinnerIds(result).find((id) => playerIds.has(id));
+  if (winnerId) return winnerId;
+  const currentDealerId = state?.round?.dealerPlayerId || "";
+  return playerIds.has(currentDealerId) ? currentDealerId : state?.players?.[0]?.id || "";
+};
 const isNorthNukiTile = (state, tile) =>
   isTsumoLossless3maState(state) && Boolean(state?.settings?.ruleConfig?.northNukiDoraEnabled) && tile?.suit === "honor" && tile?.kind === "north";
 const isNukiDoraTileForState = (state, tile) => isFlowerTile(tile) || isNorthNukiTile(state, tile);
@@ -1209,6 +1222,7 @@ const replayRepository = {
       players: replay.summary?.players ?? replay.initialState?.players?.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })) ?? [],
       resultLabel: replay.summary?.resultLabel ?? replay.initialState?.handLog?.result?.type ?? "牌譜",
       resultSummary: replay.summary?.resultSummary ?? replayResultSummaryFromState(replay.initialState, replay.initialState?.handLog?.result),
+      accessGranted: Boolean(replay.accessGranted || replay.summary?.accessGranted),
     }))
     .filter((summary) => summary.replayId),
   getReplay: (id) => loadReplays().find((replay) => replay.replayId === id || replay.summary?.replayId === id),
@@ -1227,6 +1241,30 @@ const replayRepository = {
     }
     return replay;
   },
+};
+const replaySummaryIncludesUser = (summary, userId) => {
+  if (!userId) return false;
+  const players = Array.isArray(summary?.players) ? summary.players : [];
+  return players.some((player) => String(player?.playerId || player?.userId || "") === String(userId));
+};
+const replayIncludesUser = (replay, userId) => {
+  if (!userId) return false;
+  if (replaySummaryIncludesUser(replay?.summary, userId)) return true;
+  const players = Array.isArray(replay?.initialState?.players) ? replay.initialState.players : [];
+  return players.some((player) => String(player?.id || player?.playerId || player?.userId || "") === String(userId));
+};
+const canCurrentUserReadReplay = (replay, user = authRepository.getCurrentUser()) => {
+  if (!replay) return false;
+  if (isPrivilegedLayoutUser(user)) return true;
+  if (replay.accessGranted || replay.summary?.accessGranted) return true;
+  return replayIncludesUser(replay, user?.id || "");
+};
+const canCurrentUserReadReplaySummary = (row, user = authRepository.getCurrentUser()) => {
+  if (!row) return false;
+  if (isPrivilegedLayoutUser(user)) return true;
+  if (row.accessGranted || row.summary?.accessGranted) return true;
+  const userId = user?.id || "";
+  return replaySummaryIncludesUser(row.summary, userId);
 };
 const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const sync = loadOnlineSync();
@@ -1271,15 +1309,17 @@ const fetchSupabaseReplayRows = async ({ clubId = "", replayId = "" } = {}) => {
   const text = await response.text();
   const data = text ? JSON.parse(text) : [];
   if (!response.ok) throw new Error(data?.message || response.statusText || "牌譜の取得に失敗しました");
-  return Array.isArray(data) ? data : [];
+  return Array.isArray(data) ? data.filter((row) => canCurrentUserReadReplaySummary(row)) : [];
 };
 const replayFromSupabaseRow = (row) => {
   const replayId = row.replay_id || row.summary?.replayId;
   return {
     replayId,
+    accessGranted: true,
     summary: {
       ...(row.summary || {}),
       replayId,
+      accessGranted: true,
       replayUrl: replayUrlFor(replayId),
       clubId: row.club_id || row.summary?.clubId,
       tableId: row.table_id || row.summary?.tableId,
@@ -2643,6 +2683,20 @@ const calculateRake = (winnerGain, rakePercent) => {
   return roundClubPointCreditInClubFavor(gain * (percent / 100));
 };
 const createPlayerClocks = (players, initialMs = INITIAL_TIME_MS) => Object.fromEntries(players.map((player) => [player.id, { playerId: player.id, remainingMs: initialMs, isInByoyomi: false }]));
+const normalizeInitialClockMs = (settings = {}) => {
+  const initialClockMs = Math.max(INITIAL_TIME_MS, Number(settings.initialClockMs || INITIAL_TIME_MS));
+  settings.initialClockMs = initialClockMs;
+  return initialClockMs;
+};
+const resetPlayerClocksForHand = (state) => {
+  state.settings ??= {};
+  const initialClockMs = normalizeInitialClockMs(state.settings);
+  state.playerClocks = createPlayerClocks(state.players ?? [], initialClockMs);
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.lastClockRenderTick = null;
+  return state.playerClocks;
+};
 const getClockRemainingMs = (state, playerId) => {
   const clock = state.playerClocks?.[playerId];
   if (!clock) return state.settings?.initialClockMs ?? INITIAL_TIME_MS;
@@ -4511,6 +4565,7 @@ class GameController {
     const sync = loadOnlineSync();
     const currentUserId = snapshot.onlineMeta?.viewForPlayerId || sync?.userId || this.currentUserId();
     const next = JSON.parse(JSON.stringify(snapshot));
+    const previousHandId = this.state.handLog?.handId || "";
     if (this.state.optimisticDiscardRequestId) {
       const meta = next.onlineMeta || {};
       const incomingVersion = Number(next.version || 0);
@@ -4538,6 +4593,15 @@ class GameController {
       type: isCpuPlayerId(player.id) || player.type === "cpu" ? "cpu" : player.id === currentUserId ? "human" : "remote",
       iconUrl: (player.id === currentUserId ? this.state.currentUser?.iconUrl : "") || authRepository.getUser(player.id)?.iconUrl || player.iconUrl || seatIconByPlayerId.get(player.id) || this.state.players?.find((item) => item.id === player.id)?.iconUrl || "",
     }));
+    const incomingHandId = next.handLog?.handId || "";
+    const startedNewHand = incomingHandId && incomingHandId !== previousHandId && !next.handLog?.result &&
+      ["playing", "waitingForHumanDiscard", "waitingForRiichiDiscard", "waitingForAction"].includes(next.phase);
+    if (startedNewHand) {
+      next.settings ??= {};
+      const initialClockMs = normalizeInitialClockMs(next.settings);
+      next.playerClocks = createPlayerClocks(next.players ?? [], initialClockMs);
+      next.lastClockRenderTick = null;
+    }
     const previousResultKey = this.state.handLog?.result
       ? JSON.stringify({
         resultId: this.state.handLog.result.resultId,
@@ -4716,6 +4780,17 @@ class GameController {
         if (this.state.phase !== "showingWinAnnouncement") return;
         const currentEffectId = `${this.state.pendingServerEffect?.type || ""}:${this.state.turnIndex || 0}:${this.state.handLog?.result?.resultId || ""}`;
         if (currentEffectId !== effectId) return;
+        const resultId = getCurrentResultId(this.state);
+        if (this.state.handLog?.result && resultId) {
+          this.state.pendingServerEffect = null;
+          this.state.winAnnouncement = null;
+          this.state.serverAnnouncement = null;
+          this.state.phase = this.state.handLog.result?.type === "exhaustiveDraw" ? "exhaustiveDraw" : "handEnded";
+          this.state.resultCountdownStartedAt = Date.now();
+          this.state.resultCountdownResultId = resultId;
+          this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
+          this.onStateChanged(this.state);
+        }
         this.resyncSocketGameState("winAnnouncementWatchdog").catch(() => {});
       }, 2600);
     } else if (this.winAnnouncementWatchdog) {
@@ -5283,6 +5358,15 @@ class GameController {
       });
       return;
     }
+    if (!canCurrentUserReadReplay(replay, this.state.currentUser || authRepository.getCurrentUser())) {
+      this.state.selectedReplayId = replayId;
+      this.state.replayIndex = 0;
+      this.state.replayLoading = false;
+      this.state.replayLoadError = "この牌譜を再生する権限がありません。";
+      this.state.screen = "replayViewer";
+      this.emit();
+      return;
+    }
     const firstSnapshot = getCurrentReplaySnapshot(replay, 0);
     this.clearReplayAnnouncement();
     this.state.selectedReplayId = replayId;
@@ -5582,8 +5666,7 @@ class GameController {
     Object.assign(this.state, splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8), { kanCount: 0, turnIndex: 0, phase: "playing", pendingAction: null, lastDrawnTile: null, rinshanKaihou: null, pendingRinshanKaihouFromKan: false, lastScoreResult: null, winAnnouncement: null, flowerAnnouncement: null, resultCountdownStartedAt: null, resultCountdownResultId: "", resultCountdownSeconds: null, resultAutoCloseHandled: false, resultAutoCloseHandledResultId: "", resultOkSubmitted: false, resultOkSubmittedAt: null, resultOkSubmittedResultId: "", resultOkPlayerIds: [], log: [] });
     if (!preserveScores) this.state.rakePool = 0;
     if (!preserveScores) this.state.riichiStickCount = 0;
-    if (!preserveScores) this.state.playerClocks = createPlayerClocks(this.state.players, this.state.settings?.initialClockMs ?? INITIAL_TIME_MS);
-    this.stopAllClocks();
+    resetPlayerClocksForHand(this.state);
     if (!preserveScores) {
       this.state.round.roundWind = "east";
       this.state.round.handNumber = 1;
@@ -5635,14 +5718,9 @@ class GameController {
       this.startGame({ preserveScores: true });
       return;
     }
-    const winnerIds = result?.type === "win"
-      ? [
-        ...(Array.isArray(result.winners) ? result.winners.map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "") : []),
-        result.winnerId,
-      ].filter(Boolean)
-      : [];
+    const winnerIds = resultWinnerIds(result);
     const dealerWon = winnerIds.includes(this.state.round.dealerPlayerId);
-    const nextDealerId = winnerIds[0] || this.state.round.dealerPlayerId;
+    const nextDealerId = getAnmikaNextDealerId(this.state, result);
     this.state.round.honba = dealerWon || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
     this.state.round.dealerPlayerId = nextDealerId;
     this.state.round.handNumber++;
@@ -5681,6 +5759,8 @@ class GameController {
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultOkSubmittedResultId = currentResultId;
       this.state.resultAutoCloseHandled = true;
+      this.state.resultOkPlayerIds = [...new Set([...(this.state.resultOkPlayerIds ?? []), localPlayerId])];
+      this.state.handLog.result.resultOkPlayerIds = [...new Set([...(this.state.handLog.result.resultOkPlayerIds ?? []), localPlayerId])];
       this.onStateChanged(this.state);
       submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 12000 }).then(async (response) => {
         if (response?.state) {
@@ -5718,6 +5798,10 @@ class GameController {
         this.state.resultAutoCloseHandled = false;
         this.emit();
       }).catch((error) => {
+        this.state.resultOkPlayerIds = (this.state.resultOkPlayerIds ?? []).filter((id) => id !== localPlayerId);
+        if (this.state.handLog?.result?.resultOkPlayerIds) {
+          this.state.handLog.result.resultOkPlayerIds = this.state.handLog.result.resultOkPlayerIds.filter((id) => id !== localPlayerId);
+        }
         this.state.resultOkSubmitted = false;
         this.state.resultOkSubmittedResultId = "";
         this.state.resultAutoCloseHandled = false;
@@ -5783,6 +5867,10 @@ class GameController {
     if (isSocketAuthoritativeGame() && isTsumoLossless3maState(this.state)) {
       try {
         const response = await submitOnlineFinalResultOk({ timeoutMs: 15000 });
+        if (response?.state) {
+          saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? sync?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
+          this.applyOnlineStateSnapshot(response.state);
+        }
         if (response?.advanced && response?.state) {
           this.onlineGameEndedReturnScheduled = false;
           this.state.screen = "game";
@@ -5822,6 +5910,29 @@ class GameController {
       return;
     }
     this.emit();
+  }
+  async handleWaitingInviteResponse(response = "skip") {
+    const sync = loadOnlineSync();
+    if (!sync?.tableId || !sync?.gameId || !sync?.userId) return;
+    try {
+      const socket = await this.connectSocketGameServer();
+      const ack = await socketEmitWithAck(socket, "game:waitingInviteResponse", {
+        tableId: sync.tableId,
+        gameId: sync.gameId,
+        userId: sync.userId,
+        response: response === "ok" ? "ok" : "skip",
+      }, { timeoutMs: 12000 });
+      if (ack?.state) {
+        saveOnlineSync({ ...loadOnlineSync(), version: ack.version ?? ack.state.version ?? sync.version ?? 0, lastServerState: ack.state, lastSyncedAt: Date.now() });
+        this.applyOnlineStateSnapshot(ack.state);
+      } else {
+        await this.resyncSocketGameState("waitingInviteResponse").catch(() => {});
+      }
+    } catch (error) {
+      console.warn("[WaitingInvite] response failed", error);
+      this.state.log.unshift(`ウェイティング応答に失敗: ${error.message}`);
+      this.emit();
+    }
   }
   async handleAgariYame(options = {}) {
     const result = this.state.handLog?.result;
@@ -7292,14 +7403,7 @@ class GameView {
     bindFastButton("[data-confirm-action]", (b) => this.handlers.onConfirmAction(b.dataset.confirmAction));
     bindFastButton("[data-skip-action]", () => this.handlers.onSkipAction());
     bindFastButton("[data-force-discard-resync]", () => this.handlers.onForceDiscardResync?.());
-    const handleResultOkPointer = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.handlers.onResultOk(event.currentTarget?.dataset?.resultId || "");
-    };
-    this.root.querySelectorAll("[data-result-ok]").forEach((b) => {
-      b.addEventListener("click", handleResultOkPointer);
-    });
+    bindFastButton("[data-result-ok]", (b) => this.handlers.onResultOk(b.dataset.resultId || ""));
     this.root.querySelectorAll("[data-agari-yame]").forEach((b) => {
       b.addEventListener("click", (event) => {
         event.preventDefault();
@@ -7309,6 +7413,7 @@ class GameView {
     });
     this.root.onpointerdown = null;
     this.root.querySelectorAll("[data-final-result-ok]").forEach((b) => b.addEventListener("click", () => this.handlers.onFinalResultOk()));
+    this.root.querySelectorAll("[data-waiting-invite-response]").forEach((b) => b.addEventListener("click", () => this.handlers.onWaitingInviteResponse?.(b.dataset.waitingInviteResponse)));
     this.root.querySelectorAll("[data-leave-online-loading]").forEach((b) => b.addEventListener("click", () => this.handlers.onLeaveOnlineLoading?.()));
     this.root.querySelectorAll("[data-force-table-leave]").forEach((b) => b.addEventListener("click", () => this.handlers.onForceTableLeave?.()));
     this.root.querySelectorAll("[data-page-reload]").forEach((b) => b.addEventListener("click", () => window.location.reload()));
@@ -9260,7 +9365,9 @@ class GameView {
     </section>`;
   }
   replayListScreen(state) {
-    state.replaySummaries = replayRepository.listReplays().slice(0, 300);
+    state.replaySummaries = replayRepository.listReplays()
+      .filter((summary) => canCurrentUserReadReplaySummary(summary, state.currentUser || authRepository.getCurrentUser()))
+      .slice(0, 300);
     const emptyMessage = `<div class="empty-replay-note">
       <p>保存された牌譜はまだありません。</p>
       <p>この画面では、クラブに関係なくログイン中アカウントで取得できる直近300本を表示します。</p>
@@ -9546,10 +9653,22 @@ class GameView {
       lowerTotal += pointDelta;
     });
     if (ranked[0]) settlementPoints[ranked[0].id] = roundPoint(-lowerTotal);
+    const sync = loadOnlineSync();
+    const invite = state.waitingInvite;
+    const invitedUserId = invite?.userId || "";
+    const isInvitedUser = invitedUserId && invitedUserId === (sync?.userId || state.onlineMeta?.viewForPlayerId || state.currentUser?.id || "");
+    const inviteSeconds = invite?.expiresAt ? Math.max(0, Math.ceil((Number(invite.expiresAt) - Date.now()) / 1000)) : 30;
+    const waitingInviteBlock = invite
+      ? `<div class="waiting-invite-panel">
+          <p>${isInvitedUser ? "この卓に座りますか？" : `${escapeHtml(invite.displayName || "ウェイティングのプレイヤー")}を待っています`}</p>
+          <p class="muted">残り ${inviteSeconds} 秒</p>
+          ${isInvitedUser ? `<div class="result-actions"><button type="button" class="primary-action" data-waiting-invite-response="ok">OK</button><button type="button" class="secondary" data-waiting-invite-response="skip">スキップ</button></div>` : ""}
+        </div>`
+      : "";
     return `<section class="score-result result-modal"><h2>最終結果</h2>
       ${shouldShowForceLeaveButton(state) ? `<button type="button" class="result-debug-force-leave" data-force-table-leave>強制退席</button>` : ""}
       <ul>${state.players.map((player) => `<li>${escapeHtml(player.name)}　${formatPointDisplay(player.score || 0)}点（${formatPoint(settlementPoints[player.id] || 0)}）</li>`).join("")}</ul>
-      <button type="button" class="primary-action" data-final-result-ok>OK</button>
+      ${waitingInviteBlock || `<button type="button" class="primary-action" data-final-result-ok>OK</button>`}
     </section>`;
   }
   seatPlayersClean(state) {
@@ -9961,6 +10080,7 @@ view = new GameView(document.querySelector("#game-root"), {
   onSkipAction: () => controller.skipPendingAction(),
   onResultOk: (resultId = "") => controller.handleResultOk({ resultId }),
   onFinalResultOk: () => controller.handleFinalResultOk(),
+  onWaitingInviteResponse: (response) => controller.handleWaitingInviteResponse(response),
   onLeaveOnlineLoading: () => controller.leaveOnlineGameToLobby(),
   onForceTableLeave: () => controller.leaveOnlineGameToLobby({ force: true }),
   onToggleSettings: () => controller.toggleSettings(),

@@ -12,6 +12,8 @@ const host = process.env.HOST ?? "0.0.0.0";
 const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+const SUPER_CLUB_CREATOR_USER_ID = "3cda7884-9464-4b26-b7a2-bd79cc5ab65f";
+const SUPER_CLUB_CREATOR_EMAIL = "h1320000819@gamil.com";
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -99,14 +101,18 @@ const playerSummaryIncludesUser = (summary, userId) => {
   return players.some((player) => String(player?.playerId || player?.userId || "") === String(userId));
 };
 
-const canUserReadReplay = async (replay, userId) => {
+const isPrivilegedReplayUser = (user) =>
+  user?.id === SUPER_CLUB_CREATOR_USER_ID ||
+  String(user?.email || "").toLowerCase() === SUPER_CLUB_CREATOR_EMAIL;
+
+const canUserReadReplay = async (replay, user) => {
+  const userId = user?.id || "";
   if (!replay?.replay_id || !userId) return false;
+  if (isPrivilegedReplayUser(user)) return true;
   if (playerSummaryIncludesUser(replay.summary, userId)) return true;
-  const stats = await supabaseServerRest(`/player_replay_stats?select=replay_id&replay_id=eq.${encodeURIComponent(replay.replay_id)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`).catch(() => []);
+  const stats = await supabaseServerRest(`/player_replay_stats?select=replay_id&replay_id=eq.${encodeURIComponent(replay.replay_id)}&user_id=eq.${encodeURIComponent(userId)}&is_cpu=eq.false&limit=1`).catch(() => []);
   if (Array.isArray(stats) && stats.length) return true;
-  if (!replay.club_id) return false;
-  const members = await supabaseServerRest(`/club_members?select=club_id&club_id=eq.${encodeURIComponent(replay.club_id)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`).catch(() => []);
-  return Array.isArray(members) && members.length > 0;
+  return false;
 };
 
 const getClubMember = async (clubId, userId) => {
@@ -128,7 +134,7 @@ const handleReplayApi = async (request, response, replayId) => {
       sendJson(response, 404, { ok: false, error: "牌譜が見つかりません。" });
       return;
     }
-    if (!await canUserReadReplay(replay, user.id)) {
+    if (!await canUserReadReplay(replay, user)) {
       sendJson(response, 403, { ok: false, error: "この牌譜を再生する権限がありません。" });
       return;
     }

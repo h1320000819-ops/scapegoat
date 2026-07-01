@@ -1,5 +1,6 @@
 -- Detail fetch for replay playback.
--- The list RPC intentionally returns only summary data; playback needs snapshots.
+-- Normal accounts can fetch only replays they participated in.
+-- The privileged account can fetch every replay.
 
 drop function if exists public.get_my_replay(uuid);
 
@@ -33,17 +34,20 @@ as '
   where r.replay_id = p_replay_id
     and auth.uid() is not null
     and (
+      auth.uid() = ''3cda7884-9464-4b26-b7a2-bd79cc5ab65f''::uuid
+      or exists (
+        select 1
+        from public.users u
+        where u.user_id = auth.uid()
+          and lower(coalesce(u.auth_email, '''')) = ''h1320000819@gamil.com''
+      )
+      or
       exists (
         select 1
         from public.player_replay_stats prs
         where prs.replay_id = r.replay_id
           and prs.user_id = auth.uid()
-      )
-      or exists (
-        select 1
-        from public.club_members cm
-        where cm.club_id = r.club_id
-          and cm.user_id = auth.uid()
+          and coalesce(prs.is_cpu, false) = false
       )
       or r.summary->''players'' @> jsonb_build_array(jsonb_build_object(''playerId'', auth.uid()::text))
     )

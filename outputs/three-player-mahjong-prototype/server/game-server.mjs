@@ -212,6 +212,14 @@ const normalizeServerInitialClockMs = (state) => {
   state.settings.initialClockMs = initialClockMs;
   return initialClockMs;
 };
+const resetServerPlayerClocksForHand = (state) => {
+  const initialClockMs = normalizeServerInitialClockMs(state);
+  state.playerClocks = createServerPlayerClocks(asArray(state.players), initialClockMs);
+  state.activeClockPlayerId = null;
+  state.clockStartedAt = null;
+  state.lastClockRenderTick = null;
+  return state.playerClocks;
+};
 const ensureServerClocks = (state) => {
   if (!state) return {};
   const initialClockMs = normalizeServerInitialClockMs(state);
@@ -424,7 +432,13 @@ const isDisconnectedPlayerProgressTarget = (room, playerId) => {
   return active?.id === playerId && ["playing", "waitingForHumanDiscard", "waitingForRiichiDiscard"].includes(room.state.phase);
 };
 const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
-  .filter((record) => !record.connected && record.userId && isUuid(record.userId) && !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId))
+  .filter((record) =>
+    !record.connected &&
+    Number(record.disconnectedAt || 0) > 0 &&
+    record.userId &&
+    isUuid(record.userId) &&
+    !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId)
+  )
   .map((record) => record.userId);
 const connectedHumanPlayerIds = (room) => new Set(roomPlayerConnectionList(room)
   .filter((record) => record.connected && record.userId)
@@ -749,6 +763,125 @@ const syncInterruptedRoomStatusToDb = async (room) => {
 };
 const waitingDisplayName = (row) =>
   row?.users?.display_name || row?.users?.login_id || row?.display_name || `Player ${String(row?.user_id || "").slice(0, 8)}`;
+const WAITING_INVITE_RESPONSE_MS = 30000;
+const patchTableStatus = async (tableId, status) => {
+  if (!hasSupabaseServerWriter() || !isUuid(tableId)) return false;
+  await supabaseRest(`/tables?table_id=eq.${encodeURIComponent(tableId)}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: { status },
+  }).catch((error) => console.warn("[WaitingInvite] table status patch failed", { tableId, status, error: error?.message || String(error) }));
+  return true;
+};
+const clearWaitingInviteSeatInDb = async (room, invite = room?.state?.waitingInvite) => {
+  if (!room?.tableId || !invite || !hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
+  await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}&seat_index=eq.${encodeURIComponent(String(invite.seatIndex))}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: {
+      user_id: null,
+      player_type: "empty",
+      display_name: null,
+      is_last_hand_declared: false,
+    },
+  }).catch((error) => console.warn("[WaitingInvite] clear invited seat failed", { tableId: room.tableId, invite, error: error?.message || String(error) }));
+  return true;
+};
+const removeWaitingQueueUser = async (tableId, userId) => {
+  if (!hasSupabaseServerWriter() || !isUuid(tableId) || !isUuid(userId)) return false;
+  await supabaseRest(`/table_waiting_list?table_id=eq.${encodeURIComponent(tableId)}&user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+    prefer: "return=minimal",
+  }).catch((error) => console.warn("[WaitingInvite] waiting delete failed", { tableId, userId, error: error?.message || String(error) }));
+  return true;
+};
+const loadWaitingQueueRows = async (tableId) => {
+  if (!hasSupabaseServerWriter() || !isUuid(tableId)) return [];
+  return supabaseRest(
+    `/table_waiting_list?select=user_id,created_at,users(display_name,login_id,icon_url)&table_id=eq.${encodeURIComponent(tableId)}&order=created_at.asc`
+  ).catch((error) => {
+    console.warn("[WaitingQueue] load failed", { tableId, error: error?.message || String(error) });
+    return [];
+  });
+};
+const scheduleWaitingInviteTimeout = (room) => {
+  if (!room?.state?.waitingInvite || room.stopped) return;
+  if (room.waitingInviteTimer) {
+    clearTimeout(room.waitingInviteTimer);
+    room.waitingInviteTimer = null;
+  }
+  const invite = room.state.waitingInvite;
+  const delay = Math.max(0, Number(invite.expiresAt || now()) - now());
+  room.waitingInviteTimer = setTimeout(() => {
+    room.waitingInviteTimer = null;
+    handleWaitingInviteResponse(room, invite.userId, "skip", "timeout").catch((error) => {
+      logServerException("timer:waitingInvite", error, { tableId: room?.tableId, gameId: room?.gameId, userId: invite?.userId });
+    });
+  }, delay);
+};
+const beginNextWaitingInvite = async (room, reason = "waitingInvite") => {
+  if (!room?.state || !hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
+  room.state.seats = normalizeServerSeats(room.state.seats);
+  const occupied = new Set(room.state.seats.map((seat) => seat.playerId).filter(Boolean));
+  const excluded = new Set([
+    ...asArray(room.state.lastHandDeclaredBy),
+    ...asArray(room.state.lastHandLeaveSyncedBy),
+    ...asArray(room.lastHandLeaveSyncedUserIds),
+    ...asArray(room.disconnectedLeaveSyncedUserIds),
+  ].filter(Boolean));
+  const emptySeat = room.state.seats.find((seat) => !seat.playerId || seat.playerType === "empty");
+  if (!emptySeat) return false;
+  const rows = await loadWaitingQueueRows(room.tableId);
+  const next = asArray(rows).find((row) => row?.user_id && !occupied.has(row.user_id) && !excluded.has(row.user_id));
+  if (!next) return false;
+  const invitedAt = now();
+  const name = waitingDisplayName(next);
+  const iconUrl = tableSeatIconUrl(next);
+  emptySeat.playerId = next.user_id;
+  emptySeat.playerType = "human";
+  emptySeat.displayName = name;
+  emptySeat.iconUrl = iconUrl;
+  emptySeat.isLastHandDeclared = false;
+  room.state.waitingInvite = {
+    tableId: room.tableId,
+    userId: next.user_id,
+    displayName: name,
+    seatIndex: emptySeat.seatIndex,
+    invitedAt,
+    expiresAt: invitedAt + WAITING_INVITE_RESPONSE_MS,
+    reason,
+  };
+  room.state.phase = "gameEnded";
+  room.state.pendingAction = null;
+  room.state.isWaitingForHumanAction = false;
+  room.state.activeClockPlayerId = null;
+  room.state.clockStartedAt = null;
+  await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(room.tableId)}&seat_index=eq.${encodeURIComponent(String(emptySeat.seatIndex))}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: {
+      user_id: next.user_id,
+      player_type: "human",
+      display_name: name,
+      is_last_hand_declared: false,
+    },
+  }).catch((error) => console.warn("[WaitingInvite] seat patch failed", { tableId: room.tableId, userId: next.user_id, error: error?.message || String(error) }));
+  await patchTableStatus(room.tableId, "waiting_confirmation");
+  room.version = Number(room.version || 0) + 1;
+  room.state.version = room.version;
+  room.state.onlineMeta = {
+    ...(room.state.onlineMeta || {}),
+    transport: "socket.io",
+    reason: "waitingInvite",
+    publishedBy: null,
+    publishedAt: now(),
+  };
+  room.updatedAt = now();
+  persistRoom(room);
+  broadcastState(room);
+  scheduleWaitingInviteTimeout(room);
+  return true;
+};
 const fillRoomSeatsFromWaitingList = async (room) => {
   if (!room?.state || !hasSupabaseServerWriter() || !isUuid(room.tableId)) return false;
   room.state.seats = normalizeServerSeats(room.state.seats);
@@ -761,12 +894,7 @@ const fillRoomSeatsFromWaitingList = async (room) => {
   ].filter(Boolean));
   const emptySeats = room.state.seats.filter((seat) => !seat.playerId || seat.playerType === "empty");
   if (!emptySeats.length) return false;
-  const rows = await supabaseRest(
-    `/table_waiting_list?select=user_id,created_at,users(display_name,login_id,icon_url)&table_id=eq.${encodeURIComponent(room.tableId)}&order=created_at.asc`
-  ).catch((error) => {
-    console.warn("[WaitingQueue] load failed", { tableId: room.tableId, error: error?.message || String(error) });
-    return [];
-  });
+  const rows = await loadWaitingQueueRows(room.tableId);
   let changed = false;
   for (const seat of emptySeats) {
     const next = asArray(rows).find((row) => row?.user_id && !occupied.has(row.user_id) && !excluded.has(row.user_id));
@@ -819,7 +947,7 @@ const syncRoomSeatsToDb = async (room) => {
 function stopAndForgetRoom(room, reason = "roomStopped") {
   if (!room?.tableId) return false;
   room.stopped = true;
-  for (const timerKey of ["resultTimer", "clockTimer", "effectTimer", "disconnectedLastHandTimer", "disconnectedProgressTimer"]) {
+  for (const timerKey of ["resultTimer", "clockTimer", "effectTimer", "disconnectedLastHandTimer", "disconnectedProgressTimer", "waitingInviteTimer"]) {
     if (!room[timerKey]) continue;
     clearTimeout(room[timerKey]);
     room[timerKey] = null;
@@ -948,7 +1076,13 @@ const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoS
   }
   await syncDeclaredLastHandLeaves(room);
   await syncDisconnectedLastHandLeaves(room);
-  await fillRoomSeatsFromWaitingList(room);
+  if (room.state.waitingInvite) {
+    scheduleWaitingInviteTimeout(room);
+    return false;
+  }
+  const seatsAfterLeaves = normalizeServerSeats(room.state.seats);
+  const hasOpenSeat = seatsAfterLeaves.some((seat) => !seat.playerId || seat.playerType === "empty");
+  if (hasOpenSeat && await beginNextWaitingInvite(room, reason)) return false;
   const players = nextHanchanPlayersFromSeats(room.state);
   if (players.length < 3) {
     await clearRoomSeatsAndPlayersAfterUnfilledContinuation(room, reason);
@@ -1002,6 +1136,37 @@ const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoS
 };
 const startNextTsumoLosslessHanchanIfReady = async (room) =>
   startNextRoomGameFromSeatsIfReady(room, { reason: "nextHanchanAutoStart", requireTsumoLossless: true });
+const handleWaitingInviteResponse = async (room, userId, response = "skip", reason = "user") => {
+  if (!room?.state?.waitingInvite || room.stopped) return false;
+  const invite = room.state.waitingInvite;
+  if (!userId || invite.userId !== userId) return false;
+  if (room.waitingInviteTimer) {
+    clearTimeout(room.waitingInviteTimer);
+    room.waitingInviteTimer = null;
+  }
+  if (response === "ok") {
+    await removeWaitingQueueUser(room.tableId, userId);
+    room.state.waitingInvite = null;
+    await patchTableStatus(room.tableId, "playing");
+    const continued = await startNextRoomGameFromSeatsIfReady(room, { reason: "waitingInviteAccepted" });
+    if (!continued) {
+      await beginNextWaitingInvite(room, "waitingInviteAcceptedRetry");
+    }
+    return continued;
+  }
+  await removeWaitingQueueUser(room.tableId, userId);
+  room.state.seats = normalizeServerSeats(room.state.seats).map((seat) =>
+    Number(seat.seatIndex) === Number(invite.seatIndex)
+      ? { ...seat, playerId: null, playerType: "empty", displayName: null, iconUrl: "", isLastHandDeclared: false }
+      : seat
+  );
+  await clearWaitingInviteSeatInDb(room, invite);
+  room.state.waitingInvite = null;
+  appendHandEvent(room.state, { type: "waitingInviteSkipped", playerId: userId, reason, turnIndex: room.state.turnIndex ?? 0 });
+  if (await beginNextWaitingInvite(room, "waitingInviteSkipped")) return true;
+  await clearRoomSeatsAndPlayersAfterUnfilledContinuation(room, "waitingInviteNoCandidate");
+  return true;
+};
 const syncDeclaredLastHandLeaves = async (room) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
   if (!(room.lastHandLeaveSyncedUserIds instanceof Set)) {
@@ -2895,6 +3060,19 @@ const applyAnmikaRoundAdvance = (state, result) => {
   const isDraw = result?.type === "exhaustiveDraw";
   state.round.honba = dealerWon || isDraw ? Number(state.round.honba || 0) + 1 : 0;
   if (winnerIds[0]) state.round.dealerPlayerId = winnerIds[0];
+};
+const getAnmikaNextDealerId = (state, result) => {
+  const playerIds = new Set(ensureArray(state?.players).map((player) => player.id));
+  if (result?.type === "win") {
+    const winnerIds = [
+      ...ensureArray(result.winners).map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "").filter(Boolean),
+      result.winnerId,
+    ].filter(Boolean);
+    const winnerId = winnerIds.find((id) => playerIds.has(id));
+    if (winnerId) return winnerId;
+  }
+  const currentDealerId = state?.round?.dealerPlayerId || "";
+  return playerIds.has(currentDealerId) ? currentDealerId : ensureArray(state?.players)[0]?.id || "";
 };
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
   const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
@@ -5420,7 +5598,7 @@ const startNextServerHand = (state) => {
   const nextRoundIndex = isTsumoLossless ? getTsumoLosslessRoundIndex(state) : 0;
   const nextDealerId = isTsumoLossless
     ? getTsumoLosslessDealerIdForRound(state, nextRoundIndex)
-    : (result?.type === "win" ? result.winnerId : state.round?.dealerPlayerId || state.players?.[0]?.id || "");
+    : getAnmikaNextDealerId(state, result);
   const handNumber = isTsumoLossless ? nextRoundIndex + 1 : Number(state.round?.handNumber || 1) + 1;
   const ruleConfig = normalizeRuleConfigForRule(ruleId, state.settings?.ruleConfig);
   const walls = splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8);
@@ -5439,11 +5617,8 @@ const startNextServerHand = (state) => {
     lastScoreResult: null,
     winAnnouncement: null,
     flowerAnnouncement: null,
-    playerClocks: createServerPlayerClocks(state.players, state.settings?.initialClockMs || 30000),
-    activeClockPlayerId: null,
-    clockStartedAt: null,
-    lastClockRenderTick: null,
   });
+  resetServerPlayerClocksForHand(state);
   resetResultCountdownState(state);
   state.round ??= {};
   state.round.initialSeatOrder = ensureArray(state.round.initialSeatOrder).length ? state.round.initialSeatOrder : ensureArray(state.players).map((player) => player.id);
@@ -5768,6 +5943,7 @@ const hydrateRoomFromDbIfNeeded = async (room) => {
   room.players = existingPlayers.size ? existingPlayers : persisted.players;
   ensureRoomPlayerRegistry(room);
   gameRooms.set(room.tableId, room);
+  if (room.state?.waitingInvite) scheduleWaitingInviteTimeout(room);
   console.log("[AnmikaGameServer] hydrated room from DB", { tableId: room.tableId, gameId: room.gameId, version: room.version });
   return room;
 };
@@ -5816,6 +5992,31 @@ const scheduleStartupStateBurst = (room, reason = "startupBurst") => {
         broadcastState(current);
       } catch (error) {
         logServerException("game:startupBurst", error, { tableId, gameId, version });
+      }
+    }, delay);
+  });
+};
+const scheduleStateBroadcastBurst = (room, reason = "stateBurst") => {
+  if (!room?.state || room.stopped) return;
+  const tableId = room.tableId;
+  const gameId = room.gameId;
+  const version = Number(room.version || room.state.version || 0);
+  [200, 700, 1400].forEach((delay) => {
+    setTimeout(() => {
+      const current = gameRooms.get(makeRoomKey(tableId));
+      if (!current?.state || current.stopped || current.gameId !== gameId) return;
+      if (Number(current.version || current.state.version || 0) !== version) return;
+      try {
+        current.state.onlineMeta = {
+          ...(current.state.onlineMeta || {}),
+          transport: "socket.io",
+          reason,
+          publishedBy: null,
+          publishedAt: now(),
+        };
+        broadcastState(current);
+      } catch (error) {
+        logServerException("game:stateBurst", error, { tableId, gameId, version, reason });
       }
     }, delay);
   });
@@ -6013,6 +6214,7 @@ const scheduleRoomServerEffect = (room) => {
       if (!room.state?.pendingServerEffect) return;
       applyPendingRoomServerEffect(room);
       broadcastState(room);
+      scheduleStateBroadcastBurst(room, "pendingServerEffectBurst");
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
@@ -6474,6 +6676,34 @@ io.on("connection", (socket) => {
         version: room?.version,
       });
       ack?.({ ok: false, error: `${error?.message || String(error)} (exceptionId: ${exceptionId})`, exceptionId, ...(room?.state ? publicRoomState(room, payload?.userId || socket.data.userId) : {}) });
+    }
+  });
+
+  socket.on("game:waitingInviteResponse", async (payload = {}, ack) => {
+    let room = null;
+    try {
+      const { tableId, gameId, userId, response } = payload || {};
+      room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom: false }));
+      const viewerId = userId || socket.data.userId || null;
+      if (!room?.state) throw new Error("対局が初期化されていません");
+      const invite = room.state.waitingInvite;
+      if (!invite || invite.userId !== viewerId) {
+        ack?.({ ok: false, error: "現在このユーザーへのウェイティング招待はありません。", ...(room?.state ? publicRoomState(room, viewerId) : {}) });
+        return;
+      }
+      const accepted = response === "ok";
+      await handleWaitingInviteResponse(room, viewerId, accepted ? "ok" : "skip", accepted ? "userOk" : "userSkip");
+      ack?.({ ok: true, accepted, ...(room?.state && !room.stopped ? publicRoomState(room, viewerId) : {}) });
+    } catch (error) {
+      const exceptionId = logServerException("game:waitingInviteResponse", error, {
+        socketId: socket.id,
+        tableId: payload?.tableId,
+        gameId: payload?.gameId,
+        userId: payload?.userId || socket.data.userId || "",
+        response: payload?.response || "",
+        version: room?.version,
+      });
+      ack?.({ ok: false, error: `${error?.message || String(error)} (exceptionId: ${exceptionId})`, exceptionId, ...(room?.state && !room.stopped ? publicRoomState(room, payload?.userId || socket.data.userId) : {}) });
     }
   });
 
