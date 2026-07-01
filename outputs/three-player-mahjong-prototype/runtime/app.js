@@ -1080,11 +1080,37 @@ const loadTables = () => safeReadJson(APP_STORAGE_KEYS.tables, createDefaultTabl
 const saveTables = (tables) => safeWriteJson(APP_STORAGE_KEYS.tables, tables);
 const loadClubs = () => safeReadJson(APP_STORAGE_KEYS.clubs, createDefaultClubs()).map(normalizeClub);
 const saveClubs = (clubs) => safeWriteJson(APP_STORAGE_KEYS.clubs, clubs.map(normalizeClub));
-const loadReplays = () => safeReadJson(APP_STORAGE_KEYS.replays, []);
+let replayStorageCacheRaw = null;
+let replayStorageCacheValue = null;
+const loadReplays = () => {
+  try {
+    const raw = localStorage.getItem(APP_STORAGE_KEYS.replays) || "[]";
+    if (raw === replayStorageCacheRaw && replayStorageCacheValue) return replayStorageCacheValue;
+    const value = JSON.parse(raw) || [];
+    replayStorageCacheRaw = raw;
+    replayStorageCacheValue = Array.isArray(value) ? value : [];
+    return replayStorageCacheValue;
+  } catch {
+    replayStorageCacheRaw = null;
+    replayStorageCacheValue = [];
+    return [];
+  }
+};
+const rememberReplayStorageCache = (replays) => {
+  replayStorageCacheValue = Array.isArray(replays) ? replays : [];
+  try { replayStorageCacheRaw = localStorage.getItem(APP_STORAGE_KEYS.replays) || "[]"; } catch { replayStorageCacheRaw = null; }
+};
 const saveReplays = (replays) => {
-  if (safeWriteJson(APP_STORAGE_KEYS.replays, replays)) return true;
+  if (safeWriteJson(APP_STORAGE_KEYS.replays, replays)) {
+    rememberReplayStorageCache(replays);
+    return true;
+  }
   for (const limit of [300, 200, 100, 50, 20, 10, 5, 1]) {
-    if (safeWriteJson(APP_STORAGE_KEYS.replays, replays.slice(0, limit))) return true;
+    const limited = replays.slice(0, limit);
+    if (safeWriteJson(APP_STORAGE_KEYS.replays, limited)) {
+      rememberReplayStorageCache(limited);
+      return true;
+    }
   }
   return false;
 };
@@ -1496,26 +1522,44 @@ const normalizeReplayPresentationEvents = (events = []) => {
   }
   return result;
 };
+const replayRuntimeCache = new WeakMap();
+const replayCacheFor = (replay) => {
+  if (!replay || typeof replay !== "object") return {};
+  let cache = replayRuntimeCache.get(replay);
+  if (!cache) {
+    cache = {};
+    replayRuntimeCache.set(replay, cache);
+  }
+  return cache;
+};
 const getSimpleReplayPayload = (replay) => {
+  const cache = replayCacheFor(replay);
+  if (cache.simplePayload !== undefined) return cache.simplePayload;
   const payload = replay?.simpleReplay || replay?.summary?.simpleReplay;
-  if (payload?.format === "anmika-simple-replay-v1") return { ...payload, events: normalizeReplayPresentationEvents(payload.events) };
+  if (payload?.format === "anmika-simple-replay-v1") {
+    cache.simplePayload = { ...payload, events: normalizeReplayPresentationEvents(payload.events) };
+    return cache.simplePayload;
+  }
   if ((replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) && replay?.initialState && Array.isArray(replay?.events)) {
-    return {
+    cache.simplePayload = {
       format: "event-log-v1",
       initialState: replay.initialState,
       events: normalizeReplayPresentationEvents(replay.events),
       result: replay.summary?.finalResult || replay.initialState?.handLog?.result || null,
     };
+    return cache.simplePayload;
   }
   if (!replay?.snapshots?.length && replay?.initialState && Array.isArray(replay?.events)) {
-    return {
+    cache.simplePayload = {
       format: "anmika-simple-replay-v1",
       initialState: replay.initialState,
       events: normalizeReplayPresentationEvents(replay.events),
       result: replay.initialState?.handLog?.result || null,
     };
+    return cache.simplePayload;
   }
-  return null;
+  cache.simplePayload = null;
+  return cache.simplePayload;
 };
 const cloneReplayState = (state) => JSON.parse(JSON.stringify(state || {}));
 const findReplayPlayer = (state, playerId) => state?.players?.find((player) => player.id === playerId);
@@ -1765,6 +1809,8 @@ const applySimpleReplayEvent = (state, event) => {
   return state;
 };
 const buildSimpleReplaySnapshots = (replay) => {
+  const cache = replayCacheFor(replay);
+  if (cache.simpleSnapshots) return cache.simpleSnapshots;
   const simple = getSimpleReplayPayload(replay);
   if (!simple?.initialState) return [];
   let state = cloneReplayState(simple.initialState);
@@ -1781,25 +1827,46 @@ const buildSimpleReplaySnapshots = (replay) => {
     state.handLog.result = simple.result;
     snapshots.push(cloneReplayState(state));
   }
+  cache.simpleSnapshots = snapshots;
   return snapshots;
 };
 const getReplaySnapshots = (replay) => {
+  const cache = replayCacheFor(replay);
+  if (cache.snapshots) return cache.snapshots;
   const preferStoredSnapshots = Boolean(replay?.snapshots?.length) && (
     replay?.summary?.scope === "hanchan" ||
     replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
     replay?.summary?.replayFormat === "snapshot-v1"
   );
-  if (preferStoredSnapshots) return replay.snapshots;
+  if (preferStoredSnapshots) {
+    cache.snapshots = replay.snapshots;
+    return cache.snapshots;
+  }
   const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
-  if (simpleSnapshots.length) return simpleSnapshots;
+  if (simpleSnapshots.length) {
+    cache.snapshots = simpleSnapshots;
+    return cache.snapshots;
+  }
   const isHanchanReplay = replay?.summary?.scope === "hanchan"
     || (replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && (replay?.summary?.handMarkers?.length ?? 0) > 1);
-  if (isHanchanReplay && replay?.snapshots?.length) return replay.snapshots;
-  if (replay?.snapshots?.length) return replay.snapshots;
-  if (!replay?.initialState) return [];
+  if (isHanchanReplay && replay?.snapshots?.length) {
+    cache.snapshots = replay.snapshots;
+    return cache.snapshots;
+  }
+  if (replay?.snapshots?.length) {
+    cache.snapshots = replay.snapshots;
+    return cache.snapshots;
+  }
+  if (!replay?.initialState) {
+    cache.snapshots = [];
+    return cache.snapshots;
+  }
   const events = replay.events ?? [];
-  if (!events.length) return [replay.initialState];
-  return [
+  if (!events.length) {
+    cache.snapshots = [replay.initialState];
+    return cache.snapshots;
+  }
+  cache.snapshots = [
     replay.initialState,
     ...events.map((_, index) => ({
       ...replay.initialState,
@@ -1809,6 +1876,7 @@ const getReplaySnapshots = (replay) => {
       },
     })),
   ];
+  return cache.snapshots;
 };
 const replayUsesSnapshotSteps = (replay) => Boolean(replay?.snapshots?.length) && (
   replay?.summary?.scope === "hanchan"
@@ -1835,10 +1903,19 @@ const deriveReplayEventsFromSnapshots = (snapshots = []) => {
   return derived.filter(Boolean);
 };
 const getReplayEvents = (replay) => {
+  const cache = replayCacheFor(replay);
+  if (cache.events) return cache.events;
   const simpleEvents = getSimpleReplayPayload(replay)?.events;
-  if (simpleEvents) return simpleEvents;
-  if (replayUsesSnapshotSteps(replay)) return normalizeReplayPresentationEvents(deriveReplayEventsFromSnapshots(replay.snapshots));
-  return normalizeReplayPresentationEvents(replay?.events || []);
+  if (simpleEvents) {
+    cache.events = simpleEvents;
+    return cache.events;
+  }
+  if (replayUsesSnapshotSteps(replay)) {
+    cache.events = normalizeReplayPresentationEvents(deriveReplayEventsFromSnapshots(replay.snapshots));
+    return cache.events;
+  }
+  cache.events = normalizeReplayPresentationEvents(replay?.events || []);
+  return cache.events;
 };
 const isSkippedReplayStepEvent = (event) => {
   if (!event?.type) return false;
@@ -1847,13 +1924,22 @@ const isSkippedReplayStepEvent = (event) => {
   return false;
 };
 const getReplayVisibleSnapshotIndexes = (replay) => {
+  const cache = replayCacheFor(replay);
+  if (cache.visibleSnapshotIndexes) return cache.visibleSnapshotIndexes;
   const snapshots = getReplaySnapshots(replay);
-  if (snapshots.length <= 1) return snapshots.map((_, index) => index);
+  if (snapshots.length <= 1) {
+    cache.visibleSnapshotIndexes = snapshots.map((_, index) => index);
+    return cache.visibleSnapshotIndexes;
+  }
   if (replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID) {
-    return snapshots.map((_, index) => index);
+    cache.visibleSnapshotIndexes = snapshots.map((_, index) => index);
+    return cache.visibleSnapshotIndexes;
   }
   const events = getReplayEvents(replay);
-  if (!events.length) return snapshots.map((_, index) => index);
+  if (!events.length) {
+    cache.visibleSnapshotIndexes = snapshots.map((_, index) => index);
+    return cache.visibleSnapshotIndexes;
+  }
   const indexes = [0];
   events.forEach((event, eventIndex) => {
     const snapshotIndex = eventIndex + 1;
@@ -1863,7 +1949,8 @@ const getReplayVisibleSnapshotIndexes = (replay) => {
     const last = snapshots.at(-1);
     if (last?.handLog?.result || ["handEnded", "exhaustiveDraw", "gameEnded", "finalResult"].includes(last?.phase)) indexes.push(snapshots.length - 1);
   }
-  return [...new Set(indexes)].sort((a, b) => a - b);
+  cache.visibleSnapshotIndexes = [...new Set(indexes)].sort((a, b) => a - b);
+  return cache.visibleSnapshotIndexes;
 };
 const getReplayVisiblePosition = (replay, snapshotIndex) => {
   const visible = getReplayVisibleSnapshotIndexes(replay);
@@ -2379,6 +2466,11 @@ const collectTileImagePathsFromSnapshot = (snapshot) => {
   return paths;
 };
 const warmReplayTileImages = (replay, index, radius = 2) => {
+  const cache = replayCacheFor(replay);
+  const warmKey = `${index}:${radius}`;
+  cache.warmedTileRanges ??= new Set();
+  if (cache.warmedTileRanges.has(warmKey)) return;
+  cache.warmedTileRanges.add(warmKey);
   const snapshots = getReplaySnapshots(replay);
   const paths = new Set();
   for (let offset = -1; offset <= radius; offset++) {
@@ -2443,6 +2535,8 @@ const formatReplayHandLabel = (snapshot, fallbackLabel = "", fallbackIndex = 0) 
   return `${base}${honba > 0 && !/本場/.test(base) ? `${honba}本場` : ""}`;
 };
 const buildReplayHandMarkers = (replay, snapshots = []) => {
+  const cache = replayCacheFor(replay);
+  if (cache.handMarkers) return cache.handMarkers;
   const summaryMarkers = replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? (replay.summary?.handMarkers ?? []) : [];
   const seen = new Set();
   const markers = [];
@@ -2471,7 +2565,8 @@ const buildReplayHandMarkers = (replay, snapshots = []) => {
       if (snapshot?.handLog?.handId) pushMarker({ index, handId: snapshot.handLog.handId, label: snapshot.handLog.roundLabel || "" }, index);
     });
   }
-  return markers.sort((a, b) => a.index - b.index);
+  cache.handMarkers = markers.sort((a, b) => a.index - b.index);
+  return cache.handMarkers;
 };
 const isTsumoLosslessDealerContinuation = (state, result) => {
   if (!isTsumoLossless3maState(state)) return false;
@@ -5377,7 +5472,7 @@ class GameController {
     this.state.replayViewerId = getValidReplayViewerId(firstSnapshot, this.state.replayViewerId ?? CURRENT_USER_ID, replay);
     this.state.replayRevealHands = false;
     this.state.screen = "replayViewer";
-    warmReplayTileImages(replay, 0, 4);
+    warmReplayTileImages(replay, 0, 2);
     if (updateHash && globalThis.location) {
       const encoded = encodeURIComponent(replayId);
       if (globalThis.location.protocol === "file:") {
@@ -5401,7 +5496,7 @@ class GameController {
     } else {
       this.state.replayIndex = Math.max(0, Math.min(max, this.state.replayIndex + delta));
     }
-    warmReplayTileImages(replay, this.state.replayIndex, delta >= 0 ? 5 : 2);
+    warmReplayTileImages(replay, this.state.replayIndex, delta >= 0 ? 2 : 1);
     if (this.state.replayIndex !== previousIndex) this.playReplayEffectsBetween(replay, previousIndex, this.state.replayIndex);
     this.emit();
   }
@@ -5410,7 +5505,7 @@ class GameController {
     const max = Math.max(0, getReplaySnapshots(replay).length - 1);
     const previousIndex = this.state.replayIndex;
     this.state.replayIndex = Math.max(0, Math.min(max, Number(index || 0)));
-    warmReplayTileImages(replay, this.state.replayIndex, 5);
+    warmReplayTileImages(replay, this.state.replayIndex, 2);
     if (this.state.replayIndex !== previousIndex) this.playReplayEffectsAtIndex(replay, this.state.replayIndex);
     this.emit();
   }
