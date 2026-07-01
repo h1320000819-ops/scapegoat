@@ -1,5 +1,6 @@
 ﻿const MAX_AUTO_TURNS = 200;
 const INITIAL_TIME_MS = 30000;
+const RIICHI_AUTO_DISCARD_DELAY_MS = 1350;
 const RESULT_COUNTDOWN_SECONDS = 15;
 const ONLINE_LOADING_DISPLAY_DELAY_MS = 5000;
 const SOCKET_STARTUP_RESYNC_DELAYS_MS = [600, 1400, 2600, 4200, 6500];
@@ -6647,7 +6648,7 @@ class GameController {
         const tsumogiriTileId = player.drawnTile.id;
         setTimeout(() => {
           if (this.state.phase === "playing" && player.drawnTile?.id === tsumogiriTileId) this.discardTile(tsumogiriTileId);
-        }, 600);
+        }, RIICHI_AUTO_DISCARD_DELAY_MS);
       }
       return;
     }
@@ -6695,7 +6696,7 @@ class GameController {
         if (this.state.phase === "playing" && player.drawnTile?.id === tsumogiriTileId) {
           this.discardTile(tsumogiriTileId);
         }
-      }, 600);
+      }, RIICHI_AUTO_DISCARD_DELAY_MS);
       return;
     }
     this.waitForHumanDiscard(playerId);
@@ -6871,7 +6872,7 @@ class GameController {
         if (this.state.phase === "playing" && getCurrentPlayer(this.state).id === player.id && player.drawnTile?.id === tsumogiriTileId) {
           this.discardTile(tsumogiriTileId, { isCpuAction: player.type === "cpu" });
         }
-      }, 800);
+      }, RIICHI_AUTO_DISCARD_DELAY_MS);
       return;
     }
     this.autoNukiDoraForCurrentTurn();

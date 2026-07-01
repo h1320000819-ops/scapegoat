@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260701-replay-visibility-a";
+const CACHE_NAME = "anmika-pwa-20260701-riichi-discard-pause-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260701-replay-visibility-a",
-  "/runtime/app.js?v=20260701-replay-visibility-a",
-  "/runtime/online-debug.js?v=20260701-replay-visibility-a",
-  "/runtime/pwa.js?v=20260701-replay-visibility-a",
+  "/styles.css?v=20260701-riichi-discard-pause-a",
+  "/runtime/app.js?v=20260701-riichi-discard-pause-a",
+  "/runtime/online-debug.js?v=20260701-riichi-discard-pause-a",
+  "/runtime/pwa.js?v=20260701-riichi-discard-pause-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

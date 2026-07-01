@@ -13,6 +13,7 @@ const ROOM_DB_PERSIST_INTERVAL_MS = Number(process.env.GAME_ROOM_DB_PERSIST_INTE
 const ROOM_DB_PERSIST_ENABLED = String(process.env.GAME_ROOM_DB_PERSIST_ENABLED || "true").toLowerCase() !== "false";
 const ROOM_LOCAL_PERSIST_DEBOUNCE_MS = Number(process.env.GAME_ROOM_LOCAL_PERSIST_DEBOUNCE_MS || 500);
 const ACTION_DEBUG_LOGS = String(process.env.GAME_ACTION_DEBUG_LOGS || "false").toLowerCase() === "true";
+const RIICHI_AUTO_DISCARD_DELAY_MS = 1350;
 const DISCONNECTED_DISCARD_GRACE_MS = 30 * 1000;
 const DISCONNECTED_LAST_HAND_GRACE_MS = 5 * 60 * 1000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -4218,7 +4219,7 @@ const beginServerRiichiAutoDiscard = (state, player) => {
   state.pendingServerEffect = {
     type: "riichiAutoDiscard",
     playerId: player.id,
-    resumeAt: Date.now() + 850,
+    resumeAt: Date.now() + RIICHI_AUTO_DISCARD_DELAY_MS,
   };
   appendHandEvent(state, { type: "riichiAutoDiscardWait", playerId: player.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
   return true;
@@ -4307,7 +4308,7 @@ const scheduleServerFeverForcedDiscard = (state, player, feverPlayer) => {
   state.pendingServerEffect = {
     type: "riichiAutoDiscard",
     playerId: player.id,
-    resumeAt: Date.now() + 850,
+    resumeAt: Date.now() + RIICHI_AUTO_DISCARD_DELAY_MS,
     reason: "feverRiichiForcedDiscard",
   };
   appendHandEvent(state, { type: "feverForcedDiscardWait", playerId: player.id, feverPlayerId: feverPlayer.id, tile: player.drawnTile, turnIndex: state.turnIndex ?? 0 });
