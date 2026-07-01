@@ -2387,6 +2387,14 @@ const getTileImagePath = (tile, faceDown = false) => {
   if (tile.kind === "white" && tile.pochiColor) return tileAssetPath(`haku_${tile.pochiColor}.png`);
   return tileAssetPath(`${{ east: "east", south: "south", west: "west", north: "north", white: "haku", green: "hatsu", red: "chun" }[tile.kind]}.png`);
 };
+const getTileImageFitClass = (tile, faceDown = false) => {
+  tile = normalizeTileForView(tile);
+  const useAllRedBlueAssets = getCurrentTileAssetRuleId() === TSUMO_LOSSLESS_3MA_RULE_ID;
+  if (!faceDown && useAllRedBlueAssets && tile?.rank === 5 && tile?.color === "blue" && tile?.suit === "souzu") {
+    return "tile-image-fit-frame";
+  }
+  return "";
+};
 const preloadedTileImagePaths = new Set();
 const decodedTileImagePaths = new Set();
 const tileImageMemoryCache = new Map();
@@ -2484,8 +2492,9 @@ const renderTileView = ({ tile, isDrawnTile = false, isTsumogiri = false, faceDo
   const classes = ["tile", isDrawnTile ? "drawn" : "", isTsumogiri ? "tsumogiri" : "", disabledForRiichi ? "disabled-for-riichi" : "", isSelectedForDiscard ? "selected-discard" : ""].filter(Boolean).join(" ");
   const label = faceDown ? "■" : formatTile(tile);
   const imagePath = getTileImagePath(tile, faceDown);
+  const imageClasses = ["tile-image", getTileImageFitClass(tile, faceDown)].filter(Boolean).join(" ");
   preloadTileImagePath(imagePath);
-  const content = `<img class="tile-image" src="${imagePath}" alt="${label}" decoding="async" loading="eager" fetchpriority="high" draggable="false" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
+  const content = `<img class="${imageClasses}" src="${imagePath}" alt="${label}" decoding="async" loading="eager" fetchpriority="high" draggable="false" onerror="this.hidden=true; this.nextElementSibling.hidden=false;" /><span class="tile-fallback" hidden>${label}</span>`;
   if (!buttonTileId) return `<span class="${classes}">${content}</span>`;
   const attr = buttonAction === "nuki" ? "data-nuki-tile-id" : "data-discard-tile-id";
   return `<button class="${classes} tile-button" type="button" ${attr}="${buttonTileId}" oncontextmenu="event.preventDefault(); event.stopPropagation(); window.__anmikaController && window.__anmikaController.handleContextMenuAction && window.__anmikaController.handleContextMenuAction(); return false;">${content}</button>`;

@@ -441,6 +441,13 @@ const disconnectedHumanPlayerIds = (room) => roomPlayerConnectionList(room)
     !room.disconnectedLeaveSyncedUserIds?.has?.(record.userId)
   )
   .map((record) => record.userId);
+const disconnectedHumanPlayerIdsPastLastHandGrace = (room) => {
+  const cutoff = now() - DISCONNECTED_LAST_HAND_GRACE_MS;
+  const registry = ensureRoomPlayerRegistry(room);
+  return disconnectedHumanPlayerIds(room)
+    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
+    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) <= cutoff);
+};
 const connectedHumanPlayerIds = (room) => new Set(roomPlayerConnectionList(room)
   .filter((record) => record.connected && record.userId)
   .map((record) => record.userId));
@@ -465,11 +472,7 @@ const autoOkPlayerIdsForResult = (room, actingPlayerId = "") => {
 const markDisconnectedPlayersAsLastHand = (room) => {
   if (!room?.state) return [];
   const alreadyDeclared = new Set(asArray(room.state.lastHandDeclaredBy));
-  const cutoff = now() - DISCONNECTED_LAST_HAND_GRACE_MS;
-  const registry = ensureRoomPlayerRegistry(room);
-  const ids = disconnectedHumanPlayerIds(room)
-    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) > 0)
-    .filter((id) => Number(registry.get(id)?.disconnectedAt || 0) <= cutoff)
+  const ids = disconnectedHumanPlayerIdsPastLastHandGrace(room)
     .filter((id) => !alreadyDeclared.has(id));
   if (!ids.length) return [];
   room.state.lastHandDeclaredBy = [...new Set([...(room.state.lastHandDeclaredBy || []), ...ids])];
@@ -1069,6 +1072,9 @@ const mergeJoinedPlayerProfile = (room, userId, profile = {}) => {
 const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoStart", requireTsumoLossless = false } = {}) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
   if (requireTsumoLossless && !isTsumoLossless3maState(room.state)) return false;
+  const previousHumanPlayerIds = asArray(room.state.players)
+    .filter((player) => player?.id && player.type !== "cpu" && isUuid(player.id))
+    .map((player) => player.id);
   if (isTsumoLossless3maState(room.state)) {
     await Promise.race([
       enforceContinuationPointLimit(room, { timing: "nextHanchanStart" }),
@@ -1085,6 +1091,21 @@ const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoS
   const hasOpenSeat = seatsAfterLeaves.some((seat) => !seat.playerId || seat.playerType === "empty");
   if (hasOpenSeat && await beginNextWaitingInvite(room, reason)) return false;
   const players = nextHanchanPlayersFromSeats(room.state);
+  const nextHumanPlayerIds = players
+    .filter((player) => player?.id && player.type !== "cpu" && isUuid(player.id))
+    .map((player) => player.id);
+  if (previousHumanPlayerIds.length > 0 && nextHumanPlayerIds.length === 0) {
+    console.warn("[Hanchan] blocked all-cpu continuation", {
+      tableId: room.tableId,
+      gameId: room.gameId,
+      reason,
+      previousHumanPlayerIds,
+      seatPlayers: players.map((player) => ({ id: player.id, type: player.type })),
+    });
+    await clearRoomSeatsAndPlayersAfterUnfilledContinuation(room, `${reason}:blockedAllCpuContinuation`);
+    broadcastState(room);
+    return false;
+  }
   if (players.length < 3) {
     await clearRoomSeatsAndPlayersAfterUnfilledContinuation(room, reason);
     broadcastState(room);
@@ -1189,7 +1210,7 @@ const syncDeclaredLastHandLeaves = async (room) => {
   }
   return changed;
 };
-const syncDisconnectedLastHandLeaves = async (room, { removeStatePlayers = true } = {}) => {
+const syncDisconnectedLastHandLeaves = async (room, { removeStatePlayers = true, requireGrace = true } = {}) => {
   if (!room?.state) return false;
   const canLeaveNow = room.state.phase === "gameEnded" ||
     Boolean(room.state.handLog?.result && ["handEnded", "exhaustiveDraw"].includes(room.state.phase));
@@ -1197,9 +1218,12 @@ const syncDisconnectedLastHandLeaves = async (room, { removeStatePlayers = true 
   if (!(room.disconnectedLeaveSyncedUserIds instanceof Set)) {
     room.disconnectedLeaveSyncedUserIds = new Set(asArray(room.disconnectedLeaveSyncedUserIds));
   }
+  const disconnectedIds = requireGrace
+    ? disconnectedHumanPlayerIdsPastLastHandGrace(room)
+    : disconnectedHumanPlayerIds(room);
   const ids = [...new Set([
-    ...disconnectedHumanPlayerIds(room),
-    ...(removeStatePlayers && room.pendingDisconnectedStatePlayerLeaveUserIds instanceof Set ? [...room.pendingDisconnectedStatePlayerLeaveUserIds] : []),
+    ...disconnectedIds,
+    ...(!requireGrace && removeStatePlayers && room.pendingDisconnectedStatePlayerLeaveUserIds instanceof Set ? [...room.pendingDisconnectedStatePlayerLeaveUserIds] : []),
   ])];
   if (!ids.length) return false;
   let changed = false;
@@ -6149,8 +6173,7 @@ const scheduleRoomResultTimeout = (room) => {
 const shouldAttemptSeatContinuationAfterGameEnd = (room) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
   if (asArray(room.state.lastHandDeclaredBy).filter(Boolean).length > 0) return true;
-  if (room.pendingDisconnectedStatePlayerLeaveUserIds instanceof Set && room.pendingDisconnectedStatePlayerLeaveUserIds.size > 0) return true;
-  return disconnectedHumanPlayerIds(room).length > 0;
+  return disconnectedHumanPlayerIdsPastLastHandGrace(room).length > 0;
 };
 const continueEndedRoomFromSeatsSafely = async (room, reason, { force = false, requireTsumoLossless = false } = {}) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
