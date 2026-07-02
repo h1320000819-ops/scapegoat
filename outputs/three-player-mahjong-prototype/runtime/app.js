@@ -9507,14 +9507,14 @@ class GameView {
           <label class="setting-row"><span>華牌の構成</span><select data-rule-config-key="flowerComposition">
             ${[["red3blue1", "赤赤赤青"], ["red4", "赤赤赤赤"], ["red2blue2", "赤赤青青"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.flowerComposition === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt（各プレイヤーから半荘開始時に回収）</span><input type="range" min="${MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS}" max="10" step="0.1" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
+          <label class="setting-row"><span>開始時レーキ: ${Number(threeMaConfig.entryRakePoints).toFixed(1)}pt</span><input type="range" min="${MIN_TSUMO_LOSSLESS_ENTRY_RAKE_POINTS}" max="10" step="0.1" value="${threeMaConfig.entryRakePoints}" data-rule-config-number="entryRakePoints" /></label>
           <label class="setting-row"><span>ウマ</span><select data-rule-config-key="umaType">
             ${[["20-0--20", "20-0-▲20"], ["30-0--30", "30-0-▲30"], ["20-10--30", "20-10-▲30"]].map(([value, label]) => `<option value="${value}" ${threeMaConfig.umaType === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label class="setting-row"><span>祝儀価値（1枚を点数換算）</span><select data-rule-config-number="chipValuePoints">
+          <label class="setting-row"><span>祝儀価値</span><select data-rule-config-number="chipValuePoints">
             ${[2000, 5000, 10000].map((value) => `<option value="${value}" ${threeMaConfig.chipValuePoints === value ? "selected" : ""}>${value.toLocaleString()}点</option>`).join("")}
           </select></label>
-          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="northNukiDoraEnabled" ${threeMaConfig.northNukiDoraEnabled ? "checked" : ""} /> 北を抜きドラにする（初期値はオフ）</label>
+          <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="northNukiDoraEnabled" ${threeMaConfig.northNukiDoraEnabled ? "checked" : ""} /> 北を抜きドラにする</label>
         ` : `
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="rocket19Enabled" ${anmikaConfig.rocket19Enabled ? "checked" : ""} /> 1・9牌ロケット</label>
           <label class="setting-row checkbox-row"><input type="checkbox" data-rule-config-key="baibaEnabled" ${anmikaConfig.baibaEnabled ? "checked" : ""} /> 倍場</label>
@@ -9646,11 +9646,11 @@ class GameView {
     }
     const ruleConfig = normalizeAnmikaRocketRuleConfig(config);
     return [
-      check("1・9牌ロケット", ruleConfig.rocket19Enabled, "1m・9m・1p・9p・1s・9sに一枚ずつロケット牌を追加するかどうか"),
-      check("倍場", ruleConfig.baibaEnabled, "表ドラ表示牌または裏ドラ表示牌に特殊牌（ロケット牌、金牌、ターコイズ牌、白ぽっち）がめくれたときに発動する。その局の和了の点数が倍になる。表ドラや裏ドラに二枚以上特殊牌がめくれても効果は重複せず、表ドラと裏ドラで一回ずつ。表ドラ、裏ドラ、倍ぽっちでの効果は掛け算ではなく足し算で増え、2倍、3倍、4倍となる"),
+      check("1・9牌ロケット", ruleConfig.rocket19Enabled, "1m9m1p9p1s9sに一枚ずつロケット牌を追加するかどうか"),
+      check("倍場", ruleConfig.baibaEnabled, "表ドラ表示牌または裏ドラ表示牌に特殊牌（ロケット牌、金牌、ターコイズ牌、白ぽっち）がめくれたときに発動する。その局の和了の点数が倍になる。表ドラや裏ドラに二枚以上特殊牌がめくれても効果は重複せず、表ドラと裏ドラで一回ずつ。表ドラ、裏ドラ、倍ぽっちでの効果は掛け算ではなく足し算で増え、2倍→3倍→4倍となる"),
       check("フィーバーリーチ", ruleConfig.feverRiichiEnabled, "7pまたは7sが完全暗刻（孤立した暗刻の時。待ちに複合して、取り方によっては対子＋1枚みたいになるやつはだめ）の時にテンパイすると打てる特殊なリーチ。フィーバーリーチが発動すると他家は強制ツモ切りになり、和了や副露ができない。また、フィーバーリーチ者は二回あがれる"),
       check("漢気ルール", ruleConfig.otokogiEnabled, "門前でのダマでの和了ができない。門前時にあがるにはリーチを打つ必要がある。副露時は関係ない"),
-      `<span class="rule-text-item"><span>ターコイズ5p</span>${detailButton("ターコイズ5pを手牌で使用時には副露リーチが打てる。ポンした瞬間にテンパイの時もリーチが打てる。副露リーチも役扱いとなる。また、ツモった時にツモの1翻がつく")}<span>${ruleConfig.turquoise5pCount}枚</span></span>`,
+      `<span class="rule-text-item"><span>ターコイズ5p</span>${ruleConfig.turquoise5pCount > 0 ? detailButton("ターコイズ5pを手牌で使用時には副露リーチが打てる。ポンした瞬間にテンパイの時もリーチが打てる。副露リーチも役扱いとなる。また、ツモった時にツモの1翻がつく") : ""}<span>${ruleConfig.turquoise5pCount}枚</span></span>`,
     ].filter(Boolean).join(" / ");
   }
   tableRoomScreen(state) {

@@ -1130,10 +1130,16 @@ button:hover {
   border-radius: 10px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
   color: #17202a;
+  max-height: calc(var(--anmika-viewport-height, 100dvh) - 74px - env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 14px;
   position: fixed;
   right: 16px;
   top: 58px;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   width: 260px;
   z-index: 81;
 }
@@ -3725,6 +3731,12 @@ button:hover {
   .settings-toggle {
     transform: scale(0.82);
     transform-origin: bottom right;
+  }
+
+  .settings-panel {
+    max-height: calc(var(--anmika-viewport-height, 100dvh) - 52px - env(safe-area-inset-bottom));
+    right: max(8px, env(safe-area-inset-right));
+    top: max(42px, calc(env(safe-area-inset-top) + 42px));
   }
 
   .exposed-row {
