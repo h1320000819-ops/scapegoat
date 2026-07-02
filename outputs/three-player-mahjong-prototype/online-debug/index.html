@@ -233,13 +233,14 @@
         align-items: center;
         display: grid;
         gap: 6px;
-        grid-template-columns: 18px minmax(0, 1fr);
+        grid-template-columns: 18px minmax(0, 1fr) auto;
         min-width: 0;
         padding: 4px 6px;
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 8px;
         background: rgba(255, 255, 255, 0.06);
         font-size: 13px;
+        position: relative;
       }
       .rule-check-item input {
         accent-color: var(--accent);
@@ -251,7 +252,7 @@
       }
       .rule-check-item.off { opacity: 0.62; }
       .rule-value-item {
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto;
       }
       .rule-value-item strong {
         color: #fff2b8;
@@ -266,6 +267,41 @@
         display: block;
         font-size: 11px;
         line-height: 1.2;
+      }
+      .rule-detail-button {
+        align-items: center;
+        background: #fff;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        color: #128646;
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 950;
+        height: 22px;
+        justify-content: center;
+        line-height: 1;
+        padding: 0;
+        width: 22px;
+      }
+      .rule-detail-popover {
+        background: rgba(5, 16, 22, 0.97);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 8px;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+        color: #f6fffb;
+        font-size: 12px;
+        grid-column: 1 / -1;
+        line-height: 1.45;
+        max-width: min(360px, calc(100vw - 42px));
+        min-width: 240px;
+        padding: 9px 10px;
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        z-index: 100;
+      }
+      .rule-detail-popover[hidden] {
+        display: none;
       }
       .table-seat-line, .seat-row, .point-user-row, .online-player-row {
         display: grid;
@@ -534,6 +570,6 @@
     <script src="../runtime/supabase-public-config.js?v=20260614-online-sync-a"></script>
     <script src="../runtime/pwa.js?v=20260624-anmika-rule-format-a"></script>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="../runtime/online-debug.js?v=20260703-rule-detail-visible-a"></script>
+    <script src="../runtime/online-debug.js?v=20260703-online-rule-detail-visible-a"></script>
   </body>
 </html>
