@@ -32,6 +32,7 @@
   const DEBUG_AUTO_START_FAILED_TABLES_KEY = "anmikaOnlineDebug.autoStartFailedTables";
   const DEBUG_RECENTLY_LEFT_TABLE_KEY = "anmikaOnlineDebug.recentlyLeftTable";
   const DEBUG_AUTO_START_BLOCK_KEY = "anmikaOnlineDebug.autoStartBlockedUntil";
+  const ACTIVE_GAME_LOCK_KEY = "anmikaRocket.activeGameLock";
   const DEBUG_LAUNCHING_SUPPRESS_MS = 90000;
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
@@ -179,6 +180,42 @@
     } catch {
       return fallback;
     }
+  };
+  const normalizeGameIdentity = ({ tableId = "", localTableId = "", gameId = "", userId = "" } = {}) => ({
+    tableId: String(tableId || "").replace(/^online-debug-/, ""),
+    localTableId: String(localTableId || ""),
+    gameId: String(gameId || ""),
+    userId: String(userId || ""),
+  });
+  const isSameGameIdentity = (a = {}, b = {}) => {
+    const left = normalizeGameIdentity(a);
+    const right = normalizeGameIdentity(b);
+    if (left.userId && right.userId && left.userId !== right.userId) return false;
+    if (left.tableId && right.tableId && left.tableId !== right.tableId) return false;
+    if (left.gameId && right.gameId && left.gameId !== right.gameId) return false;
+    return true;
+  };
+  const loadActiveGameLock = () => readJsonStorage(ACTIVE_GAME_LOCK_KEY, null);
+  const canReplaceActiveGameLock = (current = {}, next = {}) => {
+    if (!current?.tableId && !current?.gameId) return true;
+    if (current.releasedAt || current.phase === "ended" || current.phase === "left" || current.phase === "onlineSyncCleared") return true;
+    if (Number(current.updatedAt || current.claimedAt || 0) && Date.now() - Number(current.updatedAt || current.claimedAt || 0) > 12 * 60 * 60 * 1000) return true;
+    return isSameGameIdentity(current, next);
+  };
+  const claimActiveGameLock = (identity = {}, reason = "online-debug") => {
+    const next = { ...normalizeGameIdentity(identity), phase: "playing", reason, claimedAt: Date.now(), updatedAt: Date.now() };
+    const current = loadActiveGameLock();
+    if (!canReplaceActiveGameLock(current, next)) {
+      log("この端末では別の対局が進行中です。二重起動を防ぐため開きません。", { current, next });
+      return false;
+    }
+    localStorage.setItem(ACTIVE_GAME_LOCK_KEY, JSON.stringify({ ...(current && isSameGameIdentity(current, next) ? current : {}), ...next }));
+    return true;
+  };
+  const releaseActiveGameLock = (identity = {}, reason = "left") => {
+    const current = loadActiveGameLock();
+    if (!current || !isSameGameIdentity(current, identity)) return;
+    localStorage.setItem(ACTIVE_GAME_LOCK_KEY, JSON.stringify({ ...current, phase: reason, releasedAt: Date.now(), updatedAt: Date.now() }));
   };
   const loadSocketDebugStatus = () => readJsonStorage("anmikaRocket.socketDebug", {});
   const loadClubIconCache = () => {
@@ -332,6 +369,7 @@
   const markRecentlyLeftTable = (tableId, leftAt = Date.now()) => {
     tableId = normalizeRemoteTableId(tableId);
     if (!tableId) return;
+    releaseActiveGameLock({ tableId, userId: state.user?.id || "" }, "left");
     state.recentlyLeftTableId = tableId;
     state.recentlyLeftAt = Number(leftAt || Date.now());
     try {
@@ -3362,6 +3400,12 @@
     const localTableId = `online-debug-${tableId}`;
     const gameId = onlineGameState?.game_id || `socket-game-${tableId}`;
     const currentUser = requireUser();
+    if (!claimActiveGameLock({ tableId, localTableId, gameId, userId: currentUser.id }, "startLocalDebugMahjong")) {
+      state.onlineGameOpened = false;
+      state.autoStartingTableIds.delete(tableId);
+      clearLaunchingTable();
+      return;
+    }
     const localUsers = JSON.parse(localStorage.getItem("anmikaRocket.users") || "[]");
     const humanUser = {
       id: currentUser.id,
@@ -3446,6 +3490,7 @@
       launchReloadKey: launchOptions.launchReloadKey || `${tableId}:${gameId}:launch`,
     };
     localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
+    claimActiveGameLock(onlineSync, "writeOnlineSync");
     window.name = JSON.stringify({
       type: "anmika-debug-table-launch",
       table: localTable,

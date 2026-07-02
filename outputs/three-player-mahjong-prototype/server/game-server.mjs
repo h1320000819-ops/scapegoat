@@ -632,6 +632,14 @@ const applyDisconnectedGraceActions = (room, playerIds = []) => {
     }
     const active = currentPlayer(room.state);
     if (active?.id !== playerId) continue;
+    if (room.state.phase === "waitingForRiichiDiscard") {
+      const tileId = pickServerRiichiTimeoutDiscardTileId(player);
+      if (!tileId) continue;
+      applyServerRiichiDiscard(room.state, player, tileId);
+      appendHandEvent(room.state, { type: "disconnectedGraceRiichiDiscard", playerId, tile: player.discardedTiles?.at(-1)?.tile || null, turnIndex: room.state.turnIndex ?? 0 });
+      changed = true;
+      continue;
+    }
     if (!player.drawnTile && !drawFromWall(room.state, player, "liveWall")) {
       room.state.phase = "exhaustiveDraw";
       room.state.activeClockPlayerId = null;
@@ -2244,7 +2252,9 @@ const hydrateRoomReplayJson = (room) => {
       const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
       if (String(payload?.tableId || "") !== String(room.tableId)) continue;
       if (payload?.gameId && room.gameId && String(payload.gameId) !== String(room.gameId)) continue;
-      if (payload?.handId && state.handLog?.handId && String(payload.handId) !== String(state.handLog.handId)) continue;
+      const hasHanchanReplayPayload = asArray(payload?.hanchanReplaySnapshots).length > 0;
+      const canCarryHanchanReplayAcrossHands = isTsumoLossless3maState(state) && hasHanchanReplayPayload;
+      if (!canCarryHanchanReplayAcrossHands && payload?.handId && state.handLog?.handId && String(payload.handId) !== String(state.handLog.handId)) continue;
       state.replayInitialState = payload.replayInitialState || state.replayInitialState || null;
       state.replaySnapshots = asArray(payload.replaySnapshots);
       state.hanchanReplayInitialState = payload.hanchanReplayInitialState || state.hanchanReplayInitialState || null;
@@ -2548,7 +2558,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       game_id: isUuid(room.gameId) ? room.gameId : null,
       summary: replaySummary,
       initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || snapshotList[0] || room.state),
-      events: replayEvents,
+      events: isHanchanReplay ? [] : replayEvents,
       snapshots: snapshotList,
     };
   };
@@ -2990,10 +3000,13 @@ const countTsumoLosslessBlueChipTiles = (winner, scoreResult) => {
   });
   return count;
 };
-const getTsumoLosslessTobiPayers = (state) => {
+const getTsumoLosslessTobiPayers = (state, scoreResult = null) => {
   const busted = [];
   for (const player of ensureArray(state?.players)) {
-    if (Number(player.score || 0) <= 0) busted.push(player);
+    const currentScore = Number(player.score || 0);
+    const payment = Number(scoreResult?.payments?.[player.id] || 0);
+    const previousScore = scoreResult ? currentScore - payment : currentScore;
+    if (previousScore > 0 && currentScore <= 0) busted.push(player);
   }
   return busted;
 };
@@ -3022,7 +3035,7 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
   }
   return { type: "chipSettlement", chipPoint, chipsPerPayer, blueChips, ippatsuChips, uraChips, yakumanChips, pointPerPayer, payments };
 };
-const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
+const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId, scoreResult = null) => {
   if (!isTsumoLossless3maState(state)) return null;
   if (!winnerId) return null;
   const chipPoint = getChipPointValue(state);
@@ -3030,13 +3043,33 @@ const calculateTsumoLosslessTobiPrize = (state, winnerId, winType, loserId) => {
   if (prize <= 0) return null;
   const payments = Object.fromEntries(ensureArray(state.players).map((player) => [player.id, 0]));
   const entries = [];
-  for (const player of getTsumoLosslessTobiPayers(state)) {
+  for (const player of getTsumoLosslessTobiPayers(state, scoreResult)) {
     const recipient = winnerId;
     if (recipient === player.id) continue;
     payments[player.id] -= prize;
     payments[recipient] += prize;
     entries.push({ payerId: player.id, recipientId: recipient, points: prize });
   }
+  return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
+};
+const calculateTsumoLosslessDrawTobiPrize = (state, paymentMap = {}) => {
+  if (!isTsumoLossless3maState(state)) return null;
+  const players = ensureArray(state.players);
+  const chipPoint = getChipPointValue(state);
+  const prize = roundToTenth(chipPoint * 2);
+  if (prize <= 0) return null;
+  const payments = Object.fromEntries(players.map((player) => [player.id, 0]));
+  const entries = [];
+  players.forEach((player, index) => {
+    const currentScore = Number(player.score || 0);
+    const previousScore = currentScore - Number(paymentMap[player.id] || 0);
+    if (previousScore <= 0 || currentScore > 0) return;
+    const recipient = players[(index + 1) % players.length]?.id;
+    if (!recipient || recipient === player.id) return;
+    payments[player.id] -= prize;
+    payments[recipient] += prize;
+    entries.push({ payerId: player.id, recipientId: recipient, points: prize });
+  });
   return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
 };
 const accumulateTsumoLosslessClubPointPayments = (state, payments = {}) => {
@@ -3074,30 +3107,55 @@ const applyTsumoLosslessRoundAdvance = (state, result) => {
 const applyAnmikaRoundAdvance = (state, result) => {
   if (!state || isTsumoLossless3maState(state)) return;
   state.round ??= {};
-  const dealerId = state.round.dealerPlayerId || ensureArray(state.players)[0]?.id || "";
-  const winnerIds = result?.type === "win"
-    ? [
-      ...ensureArray(result.winners).map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "").filter(Boolean),
-      result.winnerId,
-    ].filter(Boolean)
-    : [];
-  const dealerWon = winnerIds.includes(dealerId);
-  const isDraw = result?.type === "exhaustiveDraw";
-  state.round.honba = dealerWon || isDraw ? Number(state.round.honba || 0) + 1 : 0;
-  if (winnerIds[0]) state.round.dealerPlayerId = winnerIds[0];
+  state.round.honba = shouldAnmikaIncrementHonba(state, result) ? Number(state.round.honba || 0) + 1 : 0;
+  state.round.dealerPlayerId = getAnmikaNextDealerId(state, result);
+};
+const anmikaWinnerIds = (result) => result?.type === "win"
+  ? [
+    ...ensureArray(result.winners).map((winner) => typeof winner === "string" ? winner : winner?.winnerId || winner?.playerId || winner?.id || "").filter(Boolean),
+    result.winnerId,
+  ].filter(Boolean)
+  : [];
+const anmikaPlayerIdsInSeatOrder = (state) => {
+  const currentIds = new Set(ensureArray(state?.players).map((player) => player.id));
+  const initialOrder = ensureArray(state?.round?.initialSeatOrder).filter((id) => currentIds.has(id));
+  const remaining = ensureArray(state?.players).map((player) => player.id).filter((id) => !initialOrder.includes(id));
+  return [...initialOrder, ...remaining];
+};
+const anmikaSouthPlayerId = (state) => {
+  const order = anmikaPlayerIdsInSeatOrder(state);
+  const dealerId = state?.round?.dealerPlayerId || order[0] || "";
+  const dealerIndex = order.indexOf(dealerId);
+  return order[(dealerIndex >= 0 ? dealerIndex + 1 : 1) % Math.max(1, order.length)] || dealerId;
 };
 const getAnmikaNextDealerId = (state, result) => {
   const playerIds = new Set(ensureArray(state?.players).map((player) => player.id));
   if (result?.type === "win") {
-    const winnerIds = [
-      ...ensureArray(result.winners).map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "").filter(Boolean),
-      result.winnerId,
-    ].filter(Boolean);
-    const winnerId = winnerIds.find((id) => playerIds.has(id));
+    const winnerId = anmikaWinnerIds(result).find((id) => playerIds.has(id));
     if (winnerId) return winnerId;
   }
   const currentDealerId = state?.round?.dealerPlayerId || "";
+  if (result?.type === "exhaustiveDraw") {
+    const tenpaiIds = new Set(ensureArray(result.tenpaiPlayerIds).filter(Boolean));
+    if (currentDealerId && tenpaiIds.has(currentDealerId) && playerIds.has(currentDealerId)) return currentDealerId;
+    if (tenpaiIds.size === 1) {
+      const tenpaiId = [...tenpaiIds].find((id) => playerIds.has(id));
+      if (tenpaiId) return tenpaiId;
+    }
+    if (tenpaiIds.size >= 2) {
+      const southId = anmikaSouthPlayerId(state);
+      if (playerIds.has(southId)) return southId;
+    }
+  }
   return playerIds.has(currentDealerId) ? currentDealerId : ensureArray(state?.players)[0]?.id || "";
+};
+const shouldAnmikaIncrementHonba = (state, result) => {
+  const dealerId = state?.round?.dealerPlayerId || "";
+  if (result?.type === "win") return anmikaWinnerIds(result)[0] === dealerId;
+  if (result?.type === "exhaustiveDraw") {
+    return Boolean(dealerId && ensureArray(result.tenpaiPlayerIds).includes(dealerId));
+  }
+  return false;
 };
 const prepareTsumoLosslessGameEnd = (state, reason = "hanchanEnd") => {
   const riichiStickWinnerId = topPlayerIdForTsumoLossless(state);
@@ -4142,6 +4200,19 @@ const getServerRiichiDiscardTileIds = (player) => {
   }
   return [...new Set(candidateIds)];
 };
+const pickRandomServerTileId = (tileIds = []) => {
+  const ids = ensureArray(tileIds).filter(Boolean);
+  if (!ids.length) return "";
+  return ids[Math.floor(Math.random() * ids.length)] || "";
+};
+const getServerRiichiTimeoutDiscardTileIds = (player) => {
+  const recalculatedTileIds = getServerRiichiDiscardTileIds(player);
+  if (!recalculatedTileIds.length) return [];
+  const recalculatedSet = new Set(recalculatedTileIds);
+  const storedTileIds = ensureArray(player?.riichiDiscardTileIds).filter((tileId) => recalculatedSet.has(tileId));
+  return storedTileIds.length ? [...new Set(storedTileIds)] : recalculatedTileIds;
+};
+const pickServerRiichiTimeoutDiscardTileId = (player) => pickRandomServerTileId(getServerRiichiTimeoutDiscardTileIds(player));
 const queueServerDiscardTurnOptions = (state, player, source = { type: "discardTurn" }) => {
   if (!player || player.type === "cpu" || player.isRiichi) return false;
   const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
@@ -4419,13 +4490,15 @@ const finalizeServerRonWins = (state, winEntries, loserId, sourceTile) => {
       ? (entry.scoreResult.chipSettlement || calculateTsumoLosslessChipSettlement(state, winner, "ron", loserId, entry.scoreResult))
       : null;
     const tobiPrize = isTsumoLossless3maState(state)
-      ? calculateTsumoLosslessTobiPrize(state, winner.id, "ron", loserId)
+      ? (winner.id === primary.winnerId ? calculateTsumoLosslessTobiPrize(state, winner.id, "ron", loserId, { payments: combinedPayments }) : null)
       : null;
     applyServerPaoToExtraSettlement(state, winner, chipSettlement, entry.scoreResult?.pao);
     if (chipSettlement?.payments) accumulateTsumoLosslessClubPointPayments(state, chipSettlement.payments);
     if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
     entry.chipSettlement = chipSettlement;
     entry.tobiPrize = tobiPrize;
+    if (chipSettlement) entry.scoreResult.chipSettlement = chipSettlement;
+    if (tobiPrize) entry.scoreResult.tobiPrize = tobiPrize;
     if (chipSettlement) chipSettlements.push({ winnerId: winner.id, ...chipSettlement });
     if (tobiPrize) tobiPrizes.push({ winnerId: winner.id, ...tobiPrize });
   }
@@ -4853,6 +4926,7 @@ const applyServerAction = (state, event) => {
     const resultId = getCurrentResultId(state);
     const startedAt = Number(state.resultCountdownStartedAt || 0);
     const isTimedOut = Boolean(resultId && state.resultCountdownResultId === resultId && startedAt && now() - startedAt >= RESULT_AUTO_OK_DELAY_MS);
+    if (ensureArray(state.resultOkPlayerIds).includes(player.id) && !payload.autoAllResultOk) return state;
     const timedOutAutoOkPlayerIds = payload.autoAllResultOk && isTimedOut && !(agariYameOpportunity && player.id !== dealerId)
       ? requiredOkPlayerIds
       : [];
@@ -5204,11 +5278,13 @@ const applyServerAction = (state, event) => {
       ? (scoreResult.chipSettlement || calculateTsumoLosslessChipSettlement(state, player, action, loserId, scoreResult))
       : null;
     const tobiPrize = isTsumoLossless3maState(state)
-      ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId)
+      ? calculateTsumoLosslessTobiPrize(state, player.id, action, loserId, scoreResult)
       : null;
     applyServerPaoToExtraSettlement(state, player, chipSettlement, pao);
     if (chipSettlement?.payments) accumulateTsumoLosslessClubPointPayments(state, chipSettlement.payments);
     if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
+    if (chipSettlement) scoreResult.chipSettlement = chipSettlement;
+    if (tobiPrize) scoreResult.tobiPrize = tobiPrize;
     let isFeverContinuation = false;
     if (player.feverRiichiActive) {
       player.feverWinCount = Number(player.feverWinCount || 0) + 1;
@@ -5349,10 +5425,9 @@ const applyServerClockTimeout = (state) => {
   const active = currentPlayer(state);
   if (active?.id !== playerId) return false;
   if (state.phase === "waitingForRiichiDiscard") {
-    const riichiDiscardTileIds = ensureArray(player.riichiDiscardTileIds);
+    const riichiDiscardTileIds = getServerRiichiTimeoutDiscardTileIds(player);
     const selectedTileId = riichiDiscardTileIds.includes(player.selectedRiichiDiscardTileId) ? player.selectedRiichiDiscardTileId : "";
-    const fallbackTileId = riichiDiscardTileIds.includes(player.drawnTile?.id) ? player.drawnTile.id : riichiDiscardTileIds[0];
-    const tileId = selectedTileId || fallbackTileId;
+    const tileId = selectedTileId || pickRandomServerTileId(riichiDiscardTileIds);
     if (!tileId) return false;
     applyServerRiichiDiscard(state, player, tileId);
     return true;
@@ -5563,6 +5638,11 @@ const calculateServerExhaustiveDraw = (state) => {
     for (const player of ensureArray(state.players)) {
       player.score = Number(player.score || 0) + Number(scoreResult.payments?.[player.id] || 0);
     }
+    const tobiPrize = isTsumoLossless3maState(state)
+      ? calculateTsumoLosslessTobiPrize(state, nagashiWinner.id, "tsumo", null, scoreResult)
+      : null;
+    if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
+    if (tobiPrize) scoreResult.tobiPrize = tobiPrize;
     return {
       resultId: randomUUID(),
       createdAt: now(),
@@ -5573,6 +5653,7 @@ const calculateServerExhaustiveDraw = (state) => {
       winningTile: lastDiscard,
       scoreResult,
       chipSettlement,
+      tobiPrize,
       payments: scoreResult.paymentDeltas,
       reason: "nagashiYakuman",
       finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
@@ -5603,6 +5684,8 @@ const calculateServerExhaustiveDraw = (state) => {
     for (const player of ensureArray(state.players)) if (!tenpaiPlayerIds.includes(player.id)) paymentMap[player.id] = -30;
   }
   for (const player of ensureArray(state.players)) player.score = Number(player.score || 0) + (paymentMap[player.id] || 0);
+  const tobiPrize = calculateTsumoLosslessDrawTobiPrize(state, paymentMap);
+  if (tobiPrize?.payments) accumulateTsumoLosslessClubPointPayments(state, tobiPrize.payments);
   return {
     resultId: randomUUID(),
     createdAt: now(),
@@ -5612,6 +5695,7 @@ const calculateServerExhaustiveDraw = (state) => {
     tenpaiPlayerIds,
     notenPlayerIds: ensureArray(state.players).filter((player) => !tenpaiPlayerIds.includes(player.id)).map((player) => player.id),
     payments: Object.entries(paymentMap).map(([playerId, delta]) => ({ playerId, delta })),
+    tobiPrize,
     finalScores: Object.fromEntries(ensureArray(state.players).map((player) => [player.id, player.score])),
   };
 };
@@ -5623,7 +5707,7 @@ const startNextServerHand = (state) => {
   const nextRoundIndex = isTsumoLossless ? getTsumoLosslessRoundIndex(state) : 0;
   const nextDealerId = isTsumoLossless
     ? getTsumoLosslessDealerIdForRound(state, nextRoundIndex)
-    : getAnmikaNextDealerId(state, result);
+    : (state.round?.dealerPlayerId || getAnmikaNextDealerId(state, result));
   const handNumber = isTsumoLossless ? nextRoundIndex + 1 : Number(state.round?.handNumber || 1) + 1;
   const ruleConfig = normalizeRuleConfigForRule(ruleId, state.settings?.ruleConfig);
   const walls = splitStartingWalls(shuffle(createWallTiles(ruleConfig, ruleId)), ruleId === TSUMO_LOSSLESS_3MA_RULE_ID && ruleConfig.northNukiDoraEnabled ? 12 : 8);
@@ -6501,6 +6585,7 @@ io.on("connection", (socket) => {
     try {
       const { tableId, gameId, playerId, actionType, turnVersion, payload: rawActionPayload } = payload;
       let actionPayload = rawActionPayload;
+      let afterAckTask = null;
       playerIdForAck = playerId || playerIdForAck;
       room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId }));
       if (!room.state) throw new Error("対局が初期化されていません");
@@ -6524,6 +6609,12 @@ io.on("connection", (socket) => {
         ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
         return;
       }
+      room.processingRequestIds ??= new Set();
+      if (requestId && room.processingRequestIds.has(requestId)) {
+        ack?.({ ok: true, duplicate: true, inFlight: true, ...publicRoomState(room, playerId) });
+        return;
+      }
+      if (requestId) room.processingRequestIds.add(requestId);
       let clientVersion = Number(turnVersion ?? room.version);
       if (actionType === "resultOk") clientVersion = room.version;
       if (clientVersion !== room.version) {
@@ -6535,15 +6626,36 @@ io.on("connection", (socket) => {
         if (room.state?.phase === "gameEnded") {
           const endedResultId = getCurrentResultId(room.state) || room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || "gameEnded";
           queueResultSideEffectsOnce(room, endedResultId, "resultOkAlreadyGameEnded");
-          await continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk");
+          if (requestId) {
+            room.processedRequestIds.add(requestId);
+            room.processingRequestIds?.delete?.(requestId);
+          }
           ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
+          setTimeout(() => {
+            continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk").catch((error) =>
+              console.error("[ResultOk] deferred ended continuation failed", { tableId: room?.tableId, gameId: room?.gameId, error })
+            );
+          }, 0);
           return;
         }
       }
       if (actionType === "resultOk" && room.state?.handLog?.result) {
+        const alreadyOk = ensureArray(room.state.resultOkPlayerIds).includes(playerId);
+        if (alreadyOk && !actionPayload?.autoAllResultOk) {
+          if (requestId) {
+            room.processedRequestIds.add(requestId);
+            room.processingRequestIds?.delete?.(requestId);
+          }
+          ack?.({ ok: true, duplicate: true, ...publicRoomState(room, playerId) });
+          return;
+        }
         const resultSyncId = getCurrentResultId(room.state);
         queueResultSideEffectsOnce(room, resultSyncId, "resultOk");
-        await syncDisconnectedLastHandLeaves(room, { removeStatePlayers: false });
+        setTimeout(() => {
+          syncDisconnectedLastHandLeaves(room, { removeStatePlayers: false }).catch((error) =>
+            console.error("[ResultOk] deferred disconnected leave sync failed", { tableId: room?.tableId, gameId: room?.gameId, error })
+          );
+        }, 0);
         const serverAutoOkPlayerIds = autoOkPlayerIdsForResult(room, playerId);
         if (serverAutoOkPlayerIds.length) {
           actionPayload = { ...(actionPayload || {}), serverAutoOkPlayerIds };
@@ -6601,11 +6713,12 @@ io.on("connection", (socket) => {
           room.state?.finalResult?.createdAt || room.state?.finalResult?.reason || getCurrentResultId(room.state) || "final",
         ].join(":");
         queueResultSideEffectsOnce(room, finalSyncId, "resultOkGameEnded");
-        await continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk");
+        afterAckTask = () => continueEndedRoomFromSeatsSafely(room, "lastHandContinuationAfterResultOk");
       }
       persistRoom(room);
       if (requestId) {
         room.processedRequestIds.add(requestId);
+        room.processingRequestIds?.delete?.(requestId);
         if (room.processedRequestIds.size > 500) {
           room.processedRequestIds = new Set([...room.processedRequestIds].slice(-300));
         }
@@ -6620,9 +6733,18 @@ io.on("connection", (socket) => {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }
       ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
+      if (afterAckTask) {
+        setTimeout(() => {
+          afterAckTask().catch((error) =>
+            console.error("[ResultOk] deferred post-ack task failed", { tableId: room?.tableId, gameId: room?.gameId, error })
+          );
+        }, 0);
+      }
       if (actionType !== "resultOk" && shouldSyncRoomDbEffects(room.state)) safeSyncClubPointEffects(room, `gameAction:${actionType}`);
     } catch (error) {
       if (room?.actionInFlight) room.actionInFlight = null;
+      const failedRequestId = payload?.payload?.discardRequestId || payload?.payload?.requestId || payload?.requestId || "";
+      if (failedRequestId) room?.processingRequestIds?.delete?.(failedRequestId);
       if (room?.state && ["discard", "riichi", "skip", "pon", "kan", "flower", "nukiDora", "ron", "tsumo"].includes(payload?.actionType)) {
         const retryPlayerId = playerIdForAck;
         const retryPlayer = findPlayer(room.state, retryPlayerId);

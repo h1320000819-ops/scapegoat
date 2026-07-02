@@ -149,16 +149,53 @@ const isTsumoLossless3maState = (state) =>
   state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
 const resultWinnerIds = (result) => result?.type === "win"
   ? [
-    ...(Array.isArray(result.winners) ? result.winners.map((winner) => winner?.winnerId || winner?.playerId || winner?.id || "") : []),
+    ...(Array.isArray(result.winners) ? result.winners.map((winner) => typeof winner === "string" ? winner : winner?.winnerId || winner?.playerId || winner?.id || "") : []),
     result.winnerId,
   ].filter(Boolean)
   : [];
+const anmikaPlayerIdsInSeatOrder = (state) => {
+  const currentIds = new Set((state?.players ?? []).map((player) => player.id));
+  const initialOrder = Array.isArray(state?.round?.initialSeatOrder) ? state.round.initialSeatOrder.filter((id) => currentIds.has(id)) : [];
+  const remaining = (state?.players ?? []).map((player) => player.id).filter((id) => !initialOrder.includes(id));
+  return [...initialOrder, ...remaining];
+};
+const anmikaSouthPlayerId = (state) => {
+  const order = anmikaPlayerIdsInSeatOrder(state);
+  const dealerId = state?.round?.dealerPlayerId || order[0] || "";
+  const dealerIndex = order.indexOf(dealerId);
+  return order[(dealerIndex >= 0 ? dealerIndex + 1 : 1) % Math.max(1, order.length)] || dealerId;
+};
+const anmikaDealerTenpaiState = (state, result) => {
+  const dealerId = state?.round?.dealerPlayerId || "";
+  const tenpaiIds = new Set((result?.tenpaiPlayerIds ?? []).filter(Boolean));
+  return { dealerId, tenpaiIds, dealerTenpai: Boolean(dealerId && tenpaiIds.has(dealerId)) };
+};
 const getAnmikaNextDealerId = (state, result) => {
   const playerIds = new Set((state?.players ?? []).map((player) => player.id));
-  const winnerId = resultWinnerIds(result).find((id) => playerIds.has(id));
-  if (winnerId) return winnerId;
   const currentDealerId = state?.round?.dealerPlayerId || "";
+  if (result?.type === "win") {
+    const winnerId = resultWinnerIds(result).find((id) => playerIds.has(id));
+    if (winnerId) return winnerId;
+  }
+  if (result?.type === "exhaustiveDraw") {
+    const { dealerTenpai, tenpaiIds } = anmikaDealerTenpaiState(state, result);
+    if (dealerTenpai && playerIds.has(currentDealerId)) return currentDealerId;
+    if (tenpaiIds.size === 1) {
+      const tenpaiId = [...tenpaiIds].find((id) => playerIds.has(id));
+      if (tenpaiId) return tenpaiId;
+    }
+    if (tenpaiIds.size >= 2) {
+      const southId = anmikaSouthPlayerId(state);
+      if (playerIds.has(southId)) return southId;
+    }
+  }
   return playerIds.has(currentDealerId) ? currentDealerId : state?.players?.[0]?.id || "";
+};
+const shouldAnmikaIncrementHonba = (state, result) => {
+  const dealerId = state?.round?.dealerPlayerId || "";
+  if (result?.type === "win") return resultWinnerIds(result)[0] === dealerId;
+  if (result?.type === "exhaustiveDraw") return anmikaDealerTenpaiState(state, result).dealerTenpai;
+  return false;
 };
 const isNorthNukiTile = (state, tile) =>
   isTsumoLossless3maState(state) && Boolean(state?.settings?.ruleConfig?.northNukiDoraEnabled) && tile?.suit === "honor" && tile?.kind === "north";
@@ -180,6 +217,8 @@ const APP_STORAGE_KEYS = {
   clubMemberPoints: "anmikaRocket.clubMemberPoints",
   onlineSync: "anmikaRocket.onlineSync",
   socketDebug: "anmikaRocket.socketDebug",
+  activeGameLock: "anmikaRocket.activeGameLock",
+  doubleTapTsumogiri: "anmikaRocket.doubleTapTsumogiri",
 };
 const now = () => Date.now();
 const createId = (prefix) => `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -256,11 +295,65 @@ const safeWriteJson = (key, value) => {
 const safeRemoveStorage = (key) => {
   try { localStorage.removeItem(key); } catch {}
 };
+const isDoubleTapTsumogiriEnabled = () => safeReadJson(APP_STORAGE_KEYS.doubleTapTsumogiri, false) === true;
+const setDoubleTapTsumogiriEnabled = (enabled) => safeWriteJson(APP_STORAGE_KEYS.doubleTapTsumogiri, Boolean(enabled));
+const normalizeGameIdentity = ({ tableId = "", localTableId = "", gameId = "", userId = "" } = {}) => ({
+  tableId: String(tableId || "").replace(/^online-debug-/, ""),
+  localTableId: String(localTableId || ""),
+  gameId: String(gameId || ""),
+  userId: String(userId || ""),
+});
+const loadActiveGameLock = () => safeReadJson(APP_STORAGE_KEYS.activeGameLock, null);
+const clearActiveGameLock = () => safeRemoveStorage(APP_STORAGE_KEYS.activeGameLock);
+const isSameGameIdentity = (a = {}, b = {}) => {
+  const left = normalizeGameIdentity(a);
+  const right = normalizeGameIdentity(b);
+  if (left.userId && right.userId && left.userId !== right.userId) return false;
+  if (left.tableId && right.tableId && left.tableId !== right.tableId) return false;
+  if (left.gameId && right.gameId && left.gameId !== right.gameId) return false;
+  return true;
+};
+const canReplaceActiveGameLock = (current = {}, next = {}) => {
+  if (!current?.tableId && !current?.gameId) return true;
+  if (current.releasedAt || current.phase === "ended" || current.phase === "left") return true;
+  if (Number(current.updatedAt || current.claimedAt || 0) && Date.now() - Number(current.updatedAt || current.claimedAt || 0) > 12 * 60 * 60 * 1000) return true;
+  return isSameGameIdentity(current, next);
+};
+const claimActiveGameLock = (identity = {}, { force = false, reason = "" } = {}) => {
+  const next = {
+    ...normalizeGameIdentity(identity),
+    phase: "playing",
+    reason,
+    claimedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  const current = loadActiveGameLock();
+  if (!force && !canReplaceActiveGameLock(current, next)) {
+    console.warn("[ActiveGameLock] blocked another game on this device", { current, next });
+    return { ok: false, current, next };
+  }
+  safeWriteJson(APP_STORAGE_KEYS.activeGameLock, { ...(current && isSameGameIdentity(current, next) ? current : {}), ...next });
+  return { ok: true, current, next };
+};
+const releaseActiveGameLock = (identity = {}, reason = "released") => {
+  const current = loadActiveGameLock();
+  if (!current) return;
+  if (identity?.tableId || identity?.localTableId || identity?.gameId) {
+    if (!isSameGameIdentity(current, identity)) return;
+  }
+  safeWriteJson(APP_STORAGE_KEYS.activeGameLock, { ...current, phase: reason, releasedAt: Date.now(), updatedAt: Date.now() });
+};
 const hydrateDebugLaunchFromWindowName = () => {
   try {
     if (!window.name) return;
     const payload = JSON.parse(window.name);
     if (payload?.type !== "anmika-debug-table-launch" || !payload.table) return;
+    const lock = payload.onlineSync ? claimActiveGameLock(payload.onlineSync, { reason: "windowNameHydrate" }) : { ok: true };
+    if (!lock.ok) {
+      console.warn("[DebugLaunch] 別の対局が進行中のため起動情報を破棄しました", lock);
+      window.name = "";
+      return;
+    }
     const tables = safeReadJson(APP_STORAGE_KEYS.tables, []);
     const users = safeReadJson(APP_STORAGE_KEYS.users, []);
     safeWriteJson(APP_STORAGE_KEYS.tables, [payload.table, ...tables.filter((table) => table.id !== payload.table.id)]);
@@ -360,7 +453,20 @@ const copyTextToClipboard = async (text) => {
     return false;
   }
 };
-const saveOnlineSync = (sync) => sync ? safeWriteJson(APP_STORAGE_KEYS.onlineSync, sync) : safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+const saveOnlineSync = (sync) => {
+  if (!sync) {
+    const current = safeReadJson(APP_STORAGE_KEYS.onlineSync, null);
+    if (current) releaseActiveGameLock(current, "onlineSyncCleared");
+    safeRemoveStorage(APP_STORAGE_KEYS.onlineSync);
+    return;
+  }
+  const lock = claimActiveGameLock(sync, { reason: "saveOnlineSync" });
+  if (!lock.ok) {
+    console.warn("[OnlineSync] blocked conflicting online sync", lock);
+    return false;
+  }
+  return safeWriteJson(APP_STORAGE_KEYS.onlineSync, sync);
+};
 const isByteStringHeaderValue = (value) => /^[\u0000-\u00ff]*$/.test(String(value ?? ""));
 const isLikelyJwtToken = (value) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(value || ""));
 const clearBrokenSupabaseSession = (reason = "broken auth header") => {
@@ -1452,8 +1558,14 @@ const buildTableState = (state) => ({
 });
 const appendReplaySnapshot = (state) => {
   if (state.screen !== "game" || state.phase === "idle" || !Array.isArray(state.replaySnapshots)) return;
-  state.replaySnapshots.push(cloneSnapshot(state));
+  const snapshot = cloneSnapshot(state);
+  state.replaySnapshots.push(snapshot);
   if (state.replaySnapshots.length > 300) state.replaySnapshots.shift();
+  if (isTsumoLossless3maState(state)) {
+    state.hanchanReplayInitialState ??= cloneSnapshot(state.replayInitialState || state);
+    state.hanchanReplaySnapshots ??= [];
+    state.hanchanReplaySnapshots.push(snapshot);
+  }
 };
 const getCurrentReplaySnapshot = (replay, index) => {
   const snapshots = getReplaySnapshots(replay);
@@ -1833,6 +1945,19 @@ const buildSimpleReplaySnapshots = (replay) => {
 const getReplaySnapshots = (replay) => {
   const cache = replayCacheFor(replay);
   if (cache.snapshots) return cache.snapshots;
+  const eventLogCanRebuildReplay = Boolean(
+    (replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) &&
+    replay?.initialState &&
+    Array.isArray(replay?.events) &&
+    replay.events.length
+  );
+  if (eventLogCanRebuildReplay) {
+    const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
+    if (simpleSnapshots.length > Math.max(1, replay?.snapshots?.length || 0)) {
+      cache.snapshots = simpleSnapshots;
+      return cache.snapshots;
+    }
+  }
   const preferStoredSnapshots = Boolean(replay?.snapshots?.length) && (
     replay?.summary?.scope === "hanchan" ||
     replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
@@ -2766,7 +2891,7 @@ const calculateTsumoLosslessChipSettlement = (state, winner, winType, loserId, s
   }
   return { type: "chipSettlement", chipPoint, chipsPerPayer, blueChips, ippatsuChips, uraChips, yakumanChips, pointPerPayer, payments };
 };
-const calculateTsumoLosslessTobiPrize = (state, winnerId) => {
+const calculateTsumoLosslessTobiPrize = (state, winnerId, scoreResult = null) => {
   if (!isTsumoLossless3maState(state) || !winnerId) return null;
   const chipPoint = getTsumoLosslessChipPointValue(state);
   const prize = roundToTenth(chipPoint * 2);
@@ -2774,11 +2899,34 @@ const calculateTsumoLosslessTobiPrize = (state, winnerId) => {
   const payments = Object.fromEntries((state.players || []).map((player) => [player.id, 0]));
   const entries = [];
   for (const player of state.players || []) {
-    if (player.id === winnerId || Number(player.score || 0) > 0) continue;
+    const currentScore = Number(player.score || 0);
+    const payment = Number(scoreResult?.payments?.[player.id] || 0);
+    const previousScore = scoreResult ? currentScore - payment : currentScore;
+    if (player.id === winnerId || previousScore <= 0 || currentScore > 0) continue;
     payments[player.id] -= prize;
     payments[winnerId] += prize;
     entries.push({ payerId: player.id, recipientId: winnerId, points: prize });
   }
+  return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
+};
+const calculateTsumoLosslessDrawTobiPrize = (state, paymentMap = {}) => {
+  if (!isTsumoLossless3maState(state)) return null;
+  const chipPoint = getTsumoLosslessChipPointValue(state);
+  const prize = roundToTenth(chipPoint * 2);
+  if (prize <= 0) return null;
+  const players = state.players || [];
+  const payments = Object.fromEntries(players.map((player) => [player.id, 0]));
+  const entries = [];
+  players.forEach((player, index) => {
+    const currentScore = Number(player.score || 0);
+    const previousScore = currentScore - Number(paymentMap[player.id] || 0);
+    if (previousScore <= 0 || currentScore > 0) return;
+    const recipient = players[(index + 1) % players.length]?.id;
+    if (!recipient || recipient === player.id) return;
+    payments[player.id] -= prize;
+    payments[recipient] += prize;
+    entries.push({ payerId: player.id, recipientId: recipient, points: prize });
+  });
   return entries.length ? { type: "tobiPrize", chipPoint, prizeChips: 2, payments, entries } : null;
 };
 const calculateRake = (winnerGain, rakePercent) => {
@@ -4104,6 +4252,11 @@ class GameController {
       this.resolvePendingActionTimeout();
       return;
     }
+    if (this.state.phase === "waitingForRiichiDiscard") {
+      const tileId = this.pickRiichiTimeoutDiscardTileId(player.id);
+      if (tileId) this.handleDiscardTileClick(tileId);
+      return;
+    }
     const tile = player.drawnTile ?? player.hand.at(-1);
     if (tile) this.handleDiscardTileClick(tile.id);
   }
@@ -4521,6 +4674,21 @@ class GameController {
         return;
       }
       const currentUserId = this.currentUserId();
+      const existingSync = loadOnlineSync();
+      const requestedIdentity = {
+        tableId: table.sourceTableId || table.remoteTableId || sourceTableIdFromLocalDebugId(tableId) || tableId,
+        localTableId: tableId,
+        gameId: existingSync?.gameId || "",
+        userId: currentUserId,
+      };
+      const existingLock = loadActiveGameLock();
+      if (existingLock && !canReplaceActiveGameLock(existingLock, requestedIdentity)) {
+        this.state.screen = "game";
+        this.state.phase = "onlineLoading";
+        this.setOnlineLoadingMessage("この端末では別の対局が進行中です。二重起動を防ぐため、この対局画面は開きません。");
+        this.onStateChanged(this.state);
+        return;
+      }
       const rawSeats = Array.isArray(table.seats) ? table.seats : [];
       const normalizedSeats = [0, 1, 2].map((index) => {
         const source = rawSeats[index] ?? {};
@@ -4576,7 +4744,12 @@ class GameController {
           socketUrl: defaultGameServerUrl(),
           returnUrl: onlineDebugLobbyUrl(this.state.activeClubId || this.state.selectedClubId || ""),
         };
-        saveOnlineSync(sync);
+        if (saveOnlineSync(sync) === false) {
+          this.state.phase = "onlineLoading";
+          this.setOnlineLoadingMessage("この端末では別の対局が進行中です。二重起動を防ぐため、この対局には接続しません。");
+          this.onStateChanged(this.state);
+          return;
+        }
       }
       if (isOnlineDebugLocalTableId(tableId) && (!sync?.enabled || sync.transport !== "socketio" || !sync.tableId || !sync.gameId)) {
         this.state.phase = "onlineLoading";
@@ -4668,6 +4841,18 @@ class GameController {
   applyOnlineStateSnapshot(snapshot) {
     if (!snapshot || this.isApplyingOnlineState) return false;
     const sync = loadOnlineSync();
+    const incomingIdentity = {
+      tableId: snapshot.activeTableId || snapshot.tableId || sync?.tableId || "",
+      localTableId: sync?.localTableId || "",
+      gameId: snapshot.gameId || sync?.gameId || "",
+      userId: snapshot.onlineMeta?.viewForPlayerId || sync?.userId || this.currentUserId(),
+    };
+    if (!isSameGameIdentity(sync || {}, incomingIdentity)) {
+      console.warn("[OnlineSync] ignored snapshot for another game", { sync, incomingIdentity });
+      return false;
+    }
+    const lock = claimActiveGameLock({ ...sync, ...incomingIdentity }, { reason: "applyOnlineStateSnapshot" });
+    if (!lock.ok) return false;
     const currentUserId = snapshot.onlineMeta?.viewForPlayerId || sync?.userId || this.currentUserId();
     const next = JSON.parse(JSON.stringify(snapshot));
     const previousHandId = this.state.handLog?.handId || "";
@@ -4974,6 +5159,10 @@ class GameController {
   async connectSocketGameServer() {
     const sync = loadOnlineSync();
     if (!sync?.enabled || sync.transport !== "socketio" || !sync.tableId || !sync.gameId) return;
+    const lock = claimActiveGameLock(sync, { reason: "connectSocketGameServer" });
+    if (!lock.ok) {
+      throw new Error("この端末では別の対局が進行中です。二重起動を防ぐため接続を中止しました。");
+    }
     const serverUrl = resolveGameServerUrl(sync.socketUrl);
     console.log("[SocketGame] connecting", { serverUrl, tableId: sync.tableId, gameId: sync.gameId, userId: sync.userId, version: sync.version });
     saveSocketDebugStatus({
@@ -5404,10 +5593,13 @@ class GameController {
     const endedAt = now();
     const replayId = createId("replay");
     const table = this.state.activeTableId ? tableRepository.listTables().find((item) => item.id === this.state.activeTableId) : null;
-    const rawSnapshots = [...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)];
-    const replaySnapshots = (table?.ruleId ?? this.state.settings?.ruleId ?? this.state.settings?.gameType) === TSUMO_LOSSLESS_3MA_RULE_ID
-      ? rawSnapshots
-      : pickReplaySnapshots(rawSnapshots, 40);
+    const ruleId = table?.ruleId ?? this.state.settings?.ruleId ?? this.state.settings?.gameType ?? "anmika-rocket";
+    const isTsumoLosslessReplay = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID;
+    if (isTsumoLosslessReplay && !["gameEnded", "finalResult"].includes(this.state.phase)) return;
+    const rawSnapshots = isTsumoLosslessReplay
+      ? [...(this.state.hanchanReplaySnapshots?.length ? this.state.hanchanReplaySnapshots : this.state.replaySnapshots ?? []), cloneSnapshot(this.state)]
+      : [...(this.state.replaySnapshots ?? []), cloneSnapshot(this.state)];
+    const replaySnapshots = isTsumoLosslessReplay ? rawSnapshots : pickReplaySnapshots(rawSnapshots, 40);
     const replay = {
       replayId,
       summary: {
@@ -5415,18 +5607,20 @@ class GameController {
         replayUrl: replayUrlFor(replayId),
         clubId: this.state.activeClubId ?? table?.clubId ?? undefined,
         tableId: this.state.activeTableId ?? undefined,
-        ruleId: table?.ruleId ?? "anmika-rocket",
-        ruleName: replayRuleName(table?.ruleId ?? "anmika-rocket"),
+        ruleId,
+        ruleName: replayRuleName(ruleId),
+        scope: isTsumoLosslessReplay ? "hanchan" : "hand",
         startedAt: Number(this.state.handLog.handId.split("-").at(-1)) || endedAt,
         endedAt,
         players: this.state.players.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })),
-        resultLabel: result.type === "win" ? `${getPlayerNameById(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}` : "流局",
+        resultLabel: isTsumoLosslessReplay ? "全赤三麻 半荘牌譜" : result.type === "win" ? `${getPlayerNameById(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}` : "流局",
         resultSummary: replayResultSummaryFromState(this.state, result),
         replayFormat: "event-log-v1",
         eventLogIsPrimary: true,
         eventCount: this.state.handLog.events.length,
+        handMarkers: isTsumoLosslessReplay ? buildReplayHandMarkers({ summary: { scope: "hanchan" }, snapshots: replaySnapshots }, replaySnapshots) : undefined,
       },
-      initialState: this.state.replayInitialState ?? cloneSnapshot(this.state),
+      initialState: (isTsumoLosslessReplay ? this.state.hanchanReplayInitialState : this.state.replayInitialState) ?? replaySnapshots[0] ?? cloneSnapshot(this.state),
       events: [...this.state.handLog.events],
       snapshots: replaySnapshots,
     };
@@ -5823,10 +6017,8 @@ class GameController {
       this.startGame({ preserveScores: true });
       return;
     }
-    const winnerIds = resultWinnerIds(result);
-    const dealerWon = winnerIds.includes(this.state.round.dealerPlayerId);
     const nextDealerId = getAnmikaNextDealerId(this.state, result);
-    this.state.round.honba = dealerWon || isDraw ? Number(this.state.round.honba || 0) + 1 : 0;
+    this.state.round.honba = shouldAnmikaIncrementHonba(this.state, result) ? Number(this.state.round.honba || 0) + 1 : 0;
     this.state.round.dealerPlayerId = nextDealerId;
     this.state.round.handNumber++;
     console.log("[NextHand]", nextDealerId);
@@ -5857,9 +6049,9 @@ class GameController {
       if (
         this.state.resultOkSubmitted &&
         this.state.resultOkSubmittedResultId === currentResultId &&
-        Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 700
+        Date.now() - Number(this.state.resultOkSubmittedAt || 0) < 5000
       ) return;
-      const requestId = `result-ok-${result.resultId || "result"}-${localPlayerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const requestId = `result-ok-${result.resultId || "result"}-${localPlayerId}`;
       this.state.resultOkSubmitted = true;
       this.state.resultOkSubmittedAt = Date.now();
       this.state.resultOkSubmittedResultId = currentResultId;
@@ -5872,10 +6064,7 @@ class GameController {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? loadOnlineSync()?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
           this.applyOnlineStateSnapshot(response.state);
         } else {
-          this.state.resultOkSubmitted = false;
-          this.state.resultOkSubmittedResultId = "";
-          this.state.resultAutoCloseHandled = false;
-          await this.resyncSocketGameState("resultOkAckWithoutState").catch(() => {});
+          setTimeout(() => this.resyncSocketGameState("resultOkAckWithoutState").catch(() => {}), 0);
           this.emit();
           return;
         }
@@ -6525,7 +6714,7 @@ class GameController {
       ? (score.chipSettlement || calculateTsumoLosslessChipSettlement(this.state, winner, input.winType, input.discarderId, allRedScoreForExtras))
       : null;
     const tobiPrize = isTsumoLossless3maState(this.state)
-      ? (score.tobiPrize || calculateTsumoLosslessTobiPrize(this.state, winner.id))
+      ? (score.tobiPrize || calculateTsumoLosslessTobiPrize(this.state, winner.id, score))
       : null;
     if (chipSettlement) score.chipSettlement = chipSettlement;
     if (tobiPrize) score.tobiPrize = tobiPrize;
@@ -6832,6 +7021,20 @@ class GameController {
     if (!explicitIsMenzen(player) && !hasTurquoise5pInHandOrMelds(player)) return false;
     return this.getRiichiDiscardIds(playerId).length > 0;
   }
+  getRiichiTimeoutDiscardIds(playerId) {
+    const player = this.getPlayer(playerId);
+    if (!player) return [];
+    const recalculatedIds = this.getRiichiDiscardIds(playerId);
+    if (!recalculatedIds.length) return [];
+    const recalculatedSet = new Set(recalculatedIds);
+    const storedIds = (Array.isArray(player.riichiDiscardTileIds) ? player.riichiDiscardTileIds : []).filter((tileId) => recalculatedSet.has(tileId));
+    return storedIds.length ? [...new Set(storedIds)] : recalculatedIds;
+  }
+  pickRiichiTimeoutDiscardTileId(playerId) {
+    const tileIds = this.getRiichiTimeoutDiscardIds(playerId);
+    if (!tileIds.length) return "";
+    return tileIds[Math.floor(Math.random() * tileIds.length)] || "";
+  }
   getRiichiDiscardIds(playerId) {
     const player = this.getPlayer(playerId);
     if (player.isRiichi) return [];
@@ -7091,13 +7294,16 @@ class GameController {
     const effectivePayments = debugNoPointSettlement ? this.state.players.map((player) => ({ playerId: player.id, delta: 0 })) : payments;
     const effectiveFinalScores = debugNoPointSettlement ? Object.fromEntries(this.state.players.map((player) => [player.id, player.score])) : finalScores;
     if (!debugNoPointSettlement) for (const player of this.state.players) player.score += paymentMap[player.id] ?? 0;
+    const tobiPrize = !debugNoPointSettlement && isTsumoLossless3maState(this.state)
+      ? calculateTsumoLosslessDrawTobiPrize(this.state, paymentMap)
+      : null;
     for (const player of this.state.players) player.status = "waiting";
     this.state.pendingAction = null; this.state.phase = "exhaustiveDraw"; this.state.isWaitingForHumanAction = false;
     this.stopAllClocks();
     this.state.cpuThinkingPlayerId = null;
     this.state.cpuThinkingMessage = "";
     appendHandLogEvent(this.state.handLog, { type: "exhaustiveDraw", turnIndex: this.state.turnIndex, reason: "liveWallEmpty" });
-    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "exhaustiveDraw", reason: "liveWallEmpty", tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments: effectivePayments, finalScores: effectiveFinalScores, debugNoPointSettlement };
+    this.state.handLog.result = { resultId: createId("result"), createdAt: now(), type: "exhaustiveDraw", reason: "liveWallEmpty", tenpaiResults, tenpaiPlayerIds, notenPlayerIds, payments: effectivePayments, finalScores: effectiveFinalScores, tobiPrize, debugNoPointSettlement };
     this.state.resultCountdownStartedAt = Date.now();
     this.state.resultCountdownSeconds = RESULT_COUNTDOWN_SECONDS;
     this.state.resultAutoCloseHandled = false;
@@ -7529,6 +7735,9 @@ class GameView {
     this.root.querySelectorAll("[data-sound-volume]").forEach((input) => input.addEventListener("input", () => {
       const volume = setGameSoundVolume(Number(input.value || 0) / 100);
       this.root.querySelectorAll("[data-sound-volume-value]").forEach((item) => { item.textContent = `${Math.round(volume * 100)}%`; });
+    }));
+    this.root.querySelectorAll("[data-double-tap-tsumogiri]").forEach((input) => input.addEventListener("change", () => {
+      setDoubleTapTsumogiriEnabled(input.checked);
     }));
     this.root.querySelectorAll("[data-table-background-color]").forEach((select) => select.addEventListener("change", () => {
       this.handlers.onUpdateAccount?.({ tableBackgroundColor: select.value || DEFAULT_TABLE_BACKGROUND_COLOR });
@@ -9717,6 +9926,7 @@ class GameView {
       <h2>設定</h2>
       ${showLastHandSetting ? `<label class="settings-check"><input type="checkbox" data-last-hand ${localLastHandChecked ? "checked" : ""} /> ラス半</label>` : ""}
       <label class="settings-sound-volume">音量 <span data-sound-volume-value>${Math.round(gameSoundVolume() * 100)}%</span><input type="range" min="0" max="100" step="1" value="${Math.round(gameSoundVolume() * 100)}" data-sound-volume /></label>
+      <label class="settings-check"><input type="checkbox" data-double-tap-tsumogiri ${isDoubleTapTsumogiriEnabled() ? "checked" : ""} /> 画面ダブルタップでツモ切り</label>
       <section class="settings-info-block settings-account-block">
         <h3>アカウント設定</h3>
         <label class="setting-row"><span>卓の背景色</span><select data-table-background-color>${tableBackgroundOptions}</select></label>
@@ -9972,6 +10182,22 @@ class GameView {
     const hasPayment = Array.isArray(result.payments)
       ? result.payments.some((payment) => Number(payment.delta || 0) !== 0)
       : Object.values(result.payments || {}).some((delta) => Number(delta || 0) !== 0);
+    const paymentMap = Array.isArray(result.payments)
+      ? Object.fromEntries(result.payments.map((payment) => [payment.playerId, Number(payment.delta || 0)]))
+      : Object.fromEntries(Object.entries(result.payments || {}).map(([playerId, delta]) => [playerId, Number(delta || 0)]));
+    const isAllRedDraw = isTsumoLossless3maState(state);
+    const chipPoint = Number(result.tobiPrize?.chipPoint || 0);
+    const chipPayments = Object.fromEntries(state.players.map((player) => [player.id, 0]));
+    Object.entries(result.tobiPrize?.payments || {}).forEach(([playerId, delta]) => {
+      chipPayments[playerId] = Number(chipPayments[playerId] || 0) + Number(delta || 0);
+    });
+    const pointToChips = (points) => chipPoint ? roundToTenth(Number(points || 0) / chipPoint) : 0;
+    const signedChips = (chips = 0) => `${Number(chips || 0) > 0 ? "+" : ""}${formatPointDisplay(chips)}枚`;
+    const allRedRows = state.players.map((player) => {
+      const scoreDelta = Number(paymentMap[player.id] || 0);
+      const chipDelta = pointToChips(chipPayments[player.id] || 0);
+      return `<div class="allred-player-settlement-row"><span>${escapeHtml(player.name)}</span><strong>${formatPointDisplay(result.finalScores?.[player.id] ?? player.score)}</strong><em>（${signedPointDisplay(scoreDelta)}）</em><em>（${signedChips(chipDelta)}）</em></div>`;
+    }).join("");
     return `<section class="score-result result-modal"><h2>流局</h2>
       <h3>テンパイ状況</h3>
       ${tenpaiCount === 0 ? `<p class="score-note">全員ノーテン</p>` : ""}
@@ -9987,7 +10213,7 @@ class GameView {
       <h3>点数移動</h3>
       ${hasPayment ? `<ul>${this.paymentRows(state, result.payments ?? {})}</ul>` : `<p>点数移動なし</p>`}
       <h3>現在点数</h3>
-      <ul>${state.players.map((player) => `<li>${player.name}: ${formatPointDisplay(result.finalScores?.[player.id] ?? player.score)}点</li>`).join("")}</ul>
+      ${isAllRedDraw ? `<div class="allred-player-settlement">${allRedRows}</div>` : `<ul>${state.players.map((player) => `<li>${player.name}: ${formatPointDisplay(result.finalScores?.[player.id] ?? player.score)}点</li>`).join("")}</ul>`}
       ${renderAgariYameButton(state)}${renderResultOkButton(state)}
     </section>`;
   }
@@ -10280,6 +10506,10 @@ window.addEventListener("contextmenu", (event) => {
 });
 let lastTableTapAt = 0;
 window.addEventListener("touchend", (event) => {
+  if (!isDoubleTapTsumogiriEnabled()) {
+    lastTableTapAt = 0;
+    return;
+  }
   if (event.target?.closest?.("button, a, input, textarea, select, label, [contenteditable='true'], .tile-button")) return;
   const nowMs = Date.now();
   if (nowMs - lastTableTapAt <= 360) {
