@@ -9472,7 +9472,7 @@ class GameView {
         const waiting = table.waitingList?.includes(currentUserId);
         const rule = GAME_RULE_DEFINITIONS.find((item) => item.id === table.ruleId)?.name ?? table.ruleId;
         return `<article class="lobby-card"><h3>${table.name}</h3><p>${rule} / 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ ${table.rakePercent ?? 0}% / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
-          <div class="table-rule-details">${this.ruleConfigSummary(table.ruleConfig)}</div>
+          <div class="table-rule-details">${this.ruleConfigSummary(table)}</div>
           <p>着席: ${table.seats.filter((seat) => seat.playerId).length} / 3</p>
           <div class="screen-actions"><button type="button" data-open-table="${table.id}">開く</button><button type="button" data-rule-help>ルール</button>
           ${seated ? `<button type="button" data-leave-seat="${table.id}">卓を抜ける</button>` : canSitAtTable(table) && emptySeat ? `<button type="button" data-table-id="${table.id}" data-join-seat="${emptySeat.seatIndex}">座る</button>` : ""}
@@ -9612,7 +9612,7 @@ class GameView {
         return `<article class="lobby-card">
           <h3>${table.name}</h3>
           <p>${table.clubId ? "クラブ卓" : "フリー卓"} / ${table.status}${isCpuDebugTable(table) ? " / CPUデバッグ" : ""}</p>
-          <div class="table-rule-details">${this.ruleConfigSummary(table.ruleConfig)}</div>
+          <div class="table-rule-details">${this.ruleConfigSummary(table)}</div>
           <p>着席: ${table.seats.filter((seat) => seat.playerId).length} / 3</p>
           <p>待機: ${table.waitingList?.map(getPlayerNameById).join("、") || "なし"}</p>
           <div class="screen-actions">
@@ -9626,10 +9626,11 @@ class GameView {
       }).join("") || "<p>卓がありません。</p>"}</div>
     </section>`;
   }
-  ruleConfigSummary(config) {
-    const detailButton = (detail) => `<button type="button" class="rule-detail-button" data-rule-detail-toggle aria-label="詳細ルール">?</button><span class="rule-detail-popover" hidden>${escapeHtml(detail)}</span>`;
+  ruleConfigSummary(tableOrConfig) {
+    const config = tableOrConfig?.ruleConfig || tableOrConfig?.rule_config || tableOrConfig?.settings?.ruleConfig || tableOrConfig || {};
+    const detailButton = (detail) => `<button type="button" class="rule-detail-button" data-rule-detail-toggle aria-label="詳細ルール" title="詳細ルール">？</button><span class="rule-detail-popover" hidden>${escapeHtml(detail)}</span>`;
     const check = (label, checked, detail = "") => `<span class="rule-check-item"><span class="rule-check-box ${checked ? "checked" : ""}" aria-hidden="true">${checked ? "✓" : ""}</span><span>${label}</span>${checked && detail ? detailButton(detail) : ""}</span>`;
-    const maybeRuleId = config?.ruleId || config?.gameType;
+    const maybeRuleId = tableOrConfig?.ruleId || tableOrConfig?.gameType || config?.ruleId || config?.gameType;
     if (maybeRuleId === TSUMO_LOSSLESS_3MA_RULE_ID || config?.fiveTileComposition || config?.flowerComposition) {
       const ruleConfig = normalizeTsumoLossless3maRuleConfig(config);
       const fiveLabel = { red3blue1: "赤赤赤青", red2blue2: "赤赤青青", blueRedBlackBlack: "青赤黒黒", blackBlackRedRed: "黒黒赤赤" }[ruleConfig.fiveTileComposition];
@@ -9664,7 +9665,7 @@ class GameView {
       <h3>${table.name}</h3>
       <p class="replay-url">${tableUrlFor(table.id)}</p>
       <p>クラブ: ${club?.name ?? "未設定"} / ルール: ${GAME_RULE_DEFINITIONS.find((rule) => rule.id === table.ruleId)?.name ?? table.ruleId ?? "アンミカロケット"} / レート: 1点=${Number(table.pointRate ?? 1).toFixed(1)}pt / レーキ: ${table.rakePercent ?? 0}%</p>
-      <p>設定: ${this.ruleConfigSummary(table.ruleConfig)}</p>
+      <p>設定: ${this.ruleConfigSummary(table)}</p>
       <p>${table.status === "waiting" ? "待機中..." : table.status === "ended" ? "終了済み" : "対局中"}</p>
       <div class="seat-list">${table.seats.map((seat) => `<article class="seat-card">
         <h4>席${seat.seatIndex + 1}</h4>
