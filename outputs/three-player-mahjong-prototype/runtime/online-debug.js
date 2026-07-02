@@ -84,6 +84,7 @@
     authNotice: "",
     authNoticeType: "info",
     previousScreenBeforeSettings: "",
+    openRuleDetailKey: "",
   };
 
   const $ = (id) => {
@@ -4002,24 +4003,29 @@
   const formatRuleSummary = (table) => {
     const ruleId = table.rule_id || "anmika-rocket";
     const configValue = parseRuleConfig(table.rule_config);
-    const detailButton = (detail) => `
-      <button type="button" class="rule-detail-button" data-rule-detail-toggle aria-label="詳細ルール" title="詳細ルール">？</button>
-      <span class="rule-detail-popover" hidden>${escapeHtml(detail)}</span>`;
+    const tableId = table.table_id || table.id || "table";
+    const detailButton = (detail, key) => {
+      const detailKey = `${tableId}:${key}`;
+      const isOpen = state.openRuleDetailKey === detailKey;
+      return `
+        <button type="button" class="rule-detail-button" data-rule-detail-toggle data-rule-detail-key="${escapeHtml(detailKey)}" aria-label="詳細ルール" title="詳細ルール">？</button>
+        <span class="rule-detail-popover" ${isOpen ? "" : "hidden"}>${escapeHtml(detail)}</span>`;
+    };
     const textItem = (label, value) => `
       <span class="rule-check-item rule-value-item">
         <span class="rule-value-label">${escapeHtml(label)}</span>
         <strong>${escapeHtml(value)}</strong>
       </span>`;
-    const checkItem = (label, checked, detail = "") => `
+    const checkItem = (label, checked, detail = "", key = label) => `
       <span class="rule-check-item ${checked ? "on" : "off"}">
         <input type="checkbox" ${checked ? "checked" : ""} disabled />
         <span>${escapeHtml(label)}</span>
-        ${checked && detail ? detailButton(detail) : ""}
+        ${checked && detail ? detailButton(detail, key) : ""}
       </span>`;
-    const textItemWithDetail = (label, value, enabled, detail = "") => `
+    const textItemWithDetail = (label, value, enabled, detail = "", key = label) => `
       <span class="rule-check-item rule-value-item">
         <span class="rule-value-label">${escapeHtml(label)}</span>
-        ${enabled && detail ? detailButton(detail) : ""}
+        ${enabled && detail ? detailButton(detail, key) : ""}
         <strong>${escapeHtml(value)}</strong>
       </span>`;
     if (ruleId !== TSUMO_LOSSLESS_3MA_RULE_ID) {
@@ -4032,11 +4038,11 @@
       const items = [
         textItem("レート", `${Number(table.point_rate || 1).toFixed(1)}pt/ 1点`),
         textItem("レーキ", `${Number(table.rake_percent ?? 0)}%`),
-        checkItem("1・9牌ロケット", Boolean(configValue.rocket19Enabled), "1m9m1p9p1s9sに一枚ずつロケット牌を追加するかどうか"),
-        checkItem("倍場", Boolean(configValue.baibaEnabled), "表ドラ表示牌または裏ドラ表示牌に特殊牌（ロケット牌、金牌、ターコイズ牌、白ぽっち）がめくれたときに発動する。その局の和了の点数が倍になる。表ドラや裏ドラに二枚以上特殊牌がめくれても効果は重複せず、表ドラと裏ドラで一回ずつ。表ドラ、裏ドラ、倍ぽっちでの効果は掛け算ではなく足し算で増え、2倍→3倍→4倍となる"),
-        checkItem("フィーバーリーチ", Boolean(configValue.feverRiichiEnabled), "7pまたは7sが完全暗刻（孤立した暗刻の時。待ちに複合して、取り方によっては対子＋1枚みたいになるやつはだめ）の時にテンパイすると打てる特殊なリーチ。フィーバーリーチが発動すると他家は強制ツモ切りになり、和了や副露ができない。また、フィーバーリーチ者は二回あがれる"),
-        checkItem("漢気ルール", configValue.otokogiEnabled !== false, "門前でのダマでの和了ができない。門前時にあがるにはリーチを打つ必要がある。副露時は関係ない"),
-        textItemWithDetail("ターコイズ5p", `${turquoiseCount}枚`, turquoiseCount > 0, "ターコイズ5pを手牌で使用時には副露リーチが打てる。ポンした瞬間にテンパイの時もリーチが打てる。副露リーチも役扱いとなる。また、ツモった時にツモの1翻がつく"),
+        checkItem("1・9牌ロケット", Boolean(configValue.rocket19Enabled), "1m9m1p9p1s9sに一枚ずつロケット牌を追加するかどうか", "rocket19"),
+        checkItem("倍場", Boolean(configValue.baibaEnabled), "表ドラ表示牌または裏ドラ表示牌に特殊牌（ロケット牌、金牌、ターコイズ牌、白ぽっち）がめくれたときに発動する。その局の和了の点数が倍になる。表ドラや裏ドラに二枚以上特殊牌がめくれても効果は重複せず、表ドラと裏ドラで一回ずつ。表ドラ、裏ドラ、倍ぽっちでの効果は掛け算ではなく足し算で増え、2倍→3倍→4倍となる", "baiba"),
+        checkItem("フィーバーリーチ", Boolean(configValue.feverRiichiEnabled), "7pまたは7sが完全暗刻（孤立した暗刻の時。待ちに複合して、取り方によっては対子＋1枚みたいになるやつはだめ）の時にテンパイすると打てる特殊なリーチ。フィーバーリーチが発動すると他家は強制ツモ切りになり、和了や副露ができない。また、フィーバーリーチ者は二回あがれる", "feverRiichi"),
+        checkItem("漢気ルール", configValue.otokogiEnabled !== false, "門前でのダマでの和了ができない。門前時にあがるにはリーチを打つ必要がある。副露時は関係ない", "otokogi"),
+        textItemWithDetail("ターコイズ5p", `${turquoiseCount}枚`, turquoiseCount > 0, "ターコイズ5pを手牌で使用時には副露リーチが打てる。ポンした瞬間にテンパイの時もリーチが打てる。副露リーチも役扱いとなる。また、ツモった時にツモの1翻がつく", "turquoise5p"),
         textItem("5pの内訳", fivePinLabel),
         textItem("5sの内訳", "赤赤金ロケ"),
       ];
@@ -5769,13 +5775,17 @@
         const item = detailButton.closest(".rule-check-item");
         const popover = item?.querySelector(".rule-detail-popover");
         if (!popover) return;
+        const detailKey = detailButton.dataset.ruleDetailKey || "";
+        const shouldOpen = state.openRuleDetailKey !== detailKey || popover.hidden;
+        state.openRuleDetailKey = shouldOpen ? detailKey : "";
         document.querySelectorAll(".rule-detail-popover").forEach((node) => {
           if (node !== popover) node.hidden = true;
         });
-        popover.hidden = !popover.hidden;
+        popover.hidden = !shouldOpen;
         return;
       }
       if (event.target?.closest?.(".rule-detail-popover")) return;
+      state.openRuleDetailKey = "";
       document.querySelectorAll(".rule-detail-popover").forEach((node) => { node.hidden = true; });
     });
     bind("loadClubHomeButton", async () => {
