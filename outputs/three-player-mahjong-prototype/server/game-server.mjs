@@ -2558,7 +2558,7 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
       game_id: isUuid(room.gameId) ? room.gameId : null,
       summary: replaySummary,
       initial_state: simpleReplay?.initialState || compactStateForReplay(initialState || snapshotList[0] || room.state),
-      events: isHanchanReplay ? [] : replayEvents,
+      events: replayEvents,
       snapshots: snapshotList,
     };
   };
@@ -2569,27 +2569,39 @@ const saveReplayToDb = async (room, key, scope, { initialState, snapshots, resul
   if (replayPayloadBytes > REPLAY_PAYLOAD_WARNING_BYTES) {
     console.warn("[Replay] warning: replay payload too large", { replayId, bytes: replayPayloadBytes, events: replayEvents.length, anchorSnapshots: compactSnapshots.length });
   }
+  const insertReplayBody = (body) => supabaseRest("/replays", {
+    method: "POST",
+    prefer: "return=minimal",
+    body,
+  });
   try {
-    await supabaseRest("/replays", {
-      method: "POST",
-      prefer: "return=minimal",
-      body: replayBody,
-    });
+    await insertReplayBody(replayBody);
   } catch (error) {
-    if (!isHanchanReplay || compactSnapshots.length <= 10) throw error;
-    console.warn("[ReplaySync] full hanchan replay save failed; retrying compact payload", {
-      tableId: room.tableId,
-      gameId: room.gameId,
-      snapshots: compactSnapshots.length,
-      error: error?.message || String(error),
-    });
-    compactSnapshots = compactReplaySnapshotList(compactSnapshots, 10);
-    replayBody = replayBodyForSnapshots(compactSnapshots, error?.message || "full payload failed");
-    await supabaseRest("/replays", {
-      method: "POST",
-      prefer: "return=minimal",
-      body: replayBody,
-    });
+    if (!isHanchanReplay) throw error;
+    const retryLimits = [40, 20, 10, 3, 1];
+    let lastError = error;
+    let saved = false;
+    for (const limit of retryLimits) {
+      if (compactSnapshots.length <= limit && limit !== 1) continue;
+      console.warn("[ReplaySync] hanchan replay save failed; retrying with fewer snapshots", {
+        tableId: room.tableId,
+        gameId: room.gameId,
+        snapshots: compactSnapshots.length,
+        nextSnapshotLimit: limit,
+        events: replayEvents.length,
+        error: lastError?.message || String(lastError),
+      });
+      compactSnapshots = compactReplaySnapshotList(sourceSnapshots, limit);
+      replayBody = replayBodyForSnapshots(compactSnapshots, lastError?.message || "full payload failed");
+      try {
+        await insertReplayBody(replayBody);
+        saved = true;
+        break;
+      } catch (retryError) {
+        lastError = retryError;
+      }
+    }
+    if (!saved) throw lastError;
   }
   await saveReplayEventsToDb(replayId, replayEvents);
   await saveReplayStatsToDb({ room, replayId, table, scope, result });
@@ -3781,9 +3793,23 @@ const serverDedupeYaku = (yaku) => {
   }
   return result;
 };
-const isServerFuritenForWaits = (player, waits) => {
+const serverDiscardedKindKeysForPlayer = (state, player) => {
+  const keys = new Set(ensureArray(player?.discardedTileKinds).filter(Boolean));
+  for (const discard of ensureArray(player?.discardedTiles)) {
+    const key = tileKindKey(discard?.tile || discard);
+    if (key) keys.add(key);
+  }
+  for (const event of ensureArray(state?.handLog?.events)) {
+    if (event?.type !== "discard" || event.playerId !== player?.id) continue;
+    const key = tileKindKey(event.tile || event.sourceTile);
+    if (key) keys.add(key);
+  }
+  return keys;
+};
+const isServerFuritenForWaits = (player, waits, state = null) => {
   const waitKeys = new Set(ensureArray(waits).map(tileKindKey));
-  return ensureArray(player?.discardedTiles).some((discard) => waitKeys.has(tileKindKey(discard?.tile || discard)));
+  const discardedKeys = serverDiscardedKindKeysForPlayer(state, player);
+  return [...waitKeys].some((key) => discardedKeys.has(key));
 };
 const COUNTED_YAKUMAN_BONUS_POINTS = 20;
 const REAL_YAKUMAN_BONUS_POINTS = 40;
@@ -4195,8 +4221,9 @@ const getServerRiichiDiscardTileIds = (player) => {
       hand: afterDiscard,
       drawnTile: null,
       discardedTiles: [...ensureArray(player.discardedTiles), { tile }],
+      discardedTileKinds: [...ensureArray(player.discardedTileKinds), tileKindKey(tile)],
     };
-    if (waits.length > 0 && !isServerFuritenForWaits(afterDiscardPlayer, waits)) candidateIds.push(tile.id);
+    if (waits.length > 0 && !isServerFuritenForWaits(afterDiscardPlayer, waits, state)) candidateIds.push(tile.id);
   }
   return [...new Set(candidateIds)];
 };
@@ -4250,7 +4277,7 @@ const canServerRon = (state, player, sourceTile) => {
   if (activeFever && activeFever.id !== player?.id) return false;
   const waits = getWinningTilesForServerTenpai(player);
   if (!waits.some((wait) => sameTileKind(wait, sourceTile))) return false;
-  if (isServerFuritenForWaits(player, waits)) return false;
+  if (isServerFuritenForWaits(player, waits, state)) return false;
   return evaluateServerWin(state, player, sourceTile, "ron").canWin;
 };
 const hasServerPureClosedTriplet = (player, suit, rank) => {
@@ -4437,7 +4464,7 @@ const buildServerRonWinEntry = (state, player, sourceTile, loserId) => {
   const winCheck = evaluateServerWin(state, player, sourceTile, "ron");
   if (!winCheck.canWin) throw new Error(winCheck.reason || "和了できません");
   const waits = getWinningTilesForServerTenpai(player);
-  if (isServerFuritenForWaits(player, waits)) throw new Error("フリテンのためロンできません");
+  if (isServerFuritenForWaits(player, waits, state)) throw new Error("フリテンのためロンできません");
   const scoreResult = applyServerWinRake(
     state,
     player.id,
@@ -4787,6 +4814,8 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   state.clockStartedAt = null;
   player.discardedTiles ??= [];
   player.discardedTiles.push({ tile, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
+  player.discardedTileKinds ??= [];
+  player.discardedTileKinds.push(tileKindKey(tile));
   player.temporaryForbiddenDiscardKind = "";
   appendHandEvent(state, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard, turnIndex: state.turnIndex ?? 0 });
   if (player.isRiichi && player.ippatsu && !isRiichiDiscard) {
@@ -5249,7 +5278,7 @@ const applyServerAction = (state, event) => {
     }
     if (action === "ron") {
       const waits = getWinningTilesForServerTenpai(player);
-      if (isServerFuritenForWaits(player, waits)) {
+      if (isServerFuritenForWaits(player, waits, state)) {
         console.log("[Ron] rejected", { tableId: state.tableId, playerId: player.id, reason: "フリテンのためロンできません", version: state.version });
         throw new Error("フリテンのためロンできません");
       }
@@ -5741,6 +5770,7 @@ const startNextServerHand = (state) => {
       hand: [],
       drawnTile: null,
       discardedTiles: [],
+      discardedTileKinds: [],
       nukiDoraTiles: [],
       melds: [],
       status: "waiting",
@@ -5813,6 +5843,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
     hand: [],
     drawnTile: null,
     discardedTiles: [],
+    discardedTileKinds: [],
     nukiDoraTiles: [],
     melds: [],
     status: "waiting",
@@ -5839,6 +5870,7 @@ const createServerInitialState = ({ tableId, gameId, players = [], settings = {}
       hand: [],
       drawnTile: null,
       discardedTiles: [],
+      discardedTileKinds: [],
       nukiDoraTiles: [],
       melds: [],
       status: "waiting",
@@ -6470,8 +6502,8 @@ io.on("connection", (socket) => {
     try {
       const { tableId, gameId, userId, resetRoom = false, playerProfile = null } = payload;
       let room = await hydrateRoomFromDbIfNeeded(getOrCreateRoom({ tableId, gameId, resetRoom }));
-      if (!resetRoom && isEndedRoomState(room.state)) {
-        console.log("[AnmikaGameServer] reset ended room on join", { tableId: room.tableId, previousGameId: room.gameId, userId });
+      if (!resetRoom && isEndedRoomState(room.state) && !isWaitingForResultOk(room.state) && !isTsumoLossless3maState(room.state)) {
+        console.log("[AnmikaGameServer] reset final ended room on join", { tableId: room.tableId, previousGameId: room.gameId, userId });
         room = getOrCreateRoom({ tableId, gameId, resetRoom: true });
       }
       console.log("[AnmikaGameServer] join", { socketId: socket.id, tableId: room.tableId, gameId: room.gameId, userId, hasState: Boolean(room.state), version: room.version });

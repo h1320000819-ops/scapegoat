@@ -1384,7 +1384,15 @@
     });
   const connectLobbyGameSocket = async () => {
     if (typeof io !== "function") throw new Error("Socket.IOクライアントを読み込めませんでした。ページを更新してください。");
-    const socket = io(location.origin, { transports: ["websocket", "polling"], reconnection: true });
+    const socket = io(location.origin, {
+      transports: ["websocket", "polling"],
+      upgrade: true,
+      rememberUpgrade: true,
+      reconnection: true,
+      reconnectionDelay: 250,
+      reconnectionDelayMax: 1800,
+      randomizationFactor: 0.2,
+    });
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("ゲームサーバーに接続できません")), 8000);
       socket.once("connect", () => {

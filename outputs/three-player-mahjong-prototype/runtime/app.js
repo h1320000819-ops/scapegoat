@@ -657,8 +657,8 @@ const loadSocketIoClient = async (serverUrl = defaultGameServerUrl()) => {
   }
   return socketClientLoadPromise;
 };
-const SOCKET_ACK_TIMEOUT_MS = 45000;
-const SOCKET_CONNECT_TIMEOUT_MS = 90000;
+const SOCKET_ACK_TIMEOUT_MS = 12000;
+const SOCKET_CONNECT_TIMEOUT_MS = 30000;
 const waitForSocketConnected = (socket, timeoutMs = SOCKET_CONNECT_TIMEOUT_MS) => new Promise((resolve, reject) => {
   if (!socket) {
     saveSocketDebugStatus({ socket: "DISCONNECTED", gameServer: "NG", lastError: "Socketが初期化されていません" });
@@ -719,6 +719,12 @@ const isSocketDisconnectedAckError = (error) => {
   const message = String(error?.message || error || "");
   return message.includes("socket has been disconnected") || message.includes("transport close") || message.includes("ping timeout");
 };
+const isSocketAckTimeoutError = (error) => {
+  const message = String(error?.message || error || "");
+  return message.includes("timed out") || message.includes("timeout");
+};
+const hasIdempotentSocketRequestId = (payload = {}) =>
+  Boolean(payload?.requestId || payload?.payload?.requestId || payload?.payload?.discardRequestId);
 const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_ACK_TIMEOUT_MS, attempt = 0) => {
   await ensureSocketConnected(socket, { timeoutMs: Math.min(timeoutMs, SOCKET_CONNECT_TIMEOUT_MS) });
   saveSocketDebugStatus({
@@ -736,10 +742,11 @@ const socketEmitWithAck = async (socket, eventName, payload, timeoutMs = SOCKET_
     socket.timeout(timeoutMs).emit(eventName, payload, (error, response) => {
     if (error) {
       saveSocketDebugStatus({ lastAction: eventName, lastError: error?.message || String(error), gameServer: "NG" });
-      if (attempt < 2 && isSocketDisconnectedAckError(error)) {
+      const retryable = isSocketDisconnectedAckError(error) || (isSocketAckTimeoutError(error) && hasIdempotentSocketRequestId(payload));
+      if (attempt < 2 && retryable) {
         setTimeout(() => {
           socketEmitWithAck(socket, eventName, payload, timeoutMs, attempt + 1).then(resolve, reject);
-        }, 600 + attempt * 900);
+        }, 250 + attempt * 450);
         return;
       }
       reject(error);
@@ -853,7 +860,7 @@ const submitOnlineGameAction = async (actionType, payload = {}, options = {}) =>
         actionType,
         turnVersion: sync.version ?? 0,
         payload,
-      }, options.timeoutMs ?? (actionType === "resultOk" ? 12000 : SOCKET_ACK_TIMEOUT_MS));
+      }, options.timeoutMs ?? (actionType === "resultOk" ? 6000 : SOCKET_ACK_TIMEOUT_MS));
     } catch (error) {
       if (error.response?.state) {
         saveOnlineSync({
@@ -1908,7 +1915,11 @@ const applySimpleReplayEvent = (state, event) => {
       }
     }
     player.discardedTiles ??= [];
-    if (tile) player.discardedTiles.push({ tile, discardType, isRiichiDiscard: Boolean(event.isRiichiDiscard), turnIndex: event.turnIndex ?? state.turnIndex ?? 0 });
+    if (tile) {
+      player.discardedTiles.push({ tile, discardType, isRiichiDiscard: Boolean(event.isRiichiDiscard), turnIndex: event.turnIndex ?? state.turnIndex ?? 0 });
+      player.discardedTileKinds ??= [];
+      player.discardedTileKinds.push(tileKindKey(tile));
+    }
     state.turnIndex = Math.max(Number(state.turnIndex || 0), Number(event.turnIndex || 0) + 1);
     state.phase = "playing";
     return state;
@@ -2034,7 +2045,11 @@ const getReplaySnapshots = (replay) => {
   );
   if (eventLogCanRebuildReplay) {
     const simpleSnapshots = getSimpleReplayPayload(replay) ? buildSimpleReplaySnapshots(replay) : [];
-    if (simpleSnapshots.length > Math.max(1, replay?.snapshots?.length || 0)) {
+    if (
+      replay?.summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
+      replay?.summary?.scope === "hanchan" ||
+      simpleSnapshots.length > Math.max(1, replay?.snapshots?.length || 0)
+    ) {
       cache.snapshots = simpleSnapshots;
       return cache.snapshots;
     }
@@ -2114,6 +2129,14 @@ const getReplayEvents = (replay) => {
   const simpleEvents = getSimpleReplayPayload(replay)?.events;
   if (simpleEvents) {
     cache.events = simpleEvents;
+    return cache.events;
+  }
+  if (
+    (replay?.summary?.replayFormat === "event-log-v1" || replay?.summary?.eventLogIsPrimary) &&
+    Array.isArray(replay?.events) &&
+    replay.events.length
+  ) {
+    cache.events = normalizeReplayPresentationEvents(replay.events);
     return cache.events;
   }
   if (replayUsesSnapshotSteps(replay)) {
@@ -3105,7 +3128,7 @@ const buildViewStateForPlayer = (gameState, viewerPlayerId) => {
   };
 };
 
-const createPlayer = (id, name, type = "human", score = 0) => ({ id, name, type, score, hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings: { autoWin: false, noCall: false } });
+const createPlayer = (id, name, type = "human", score = 0) => ({ id, name, type, score, hand: [], drawnTile: null, discardedTiles: [], discardedTileKinds: [], nukiDoraTiles: [], melds: [], status: "waiting", isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings: { autoWin: false, noCall: false } });
 const getCurrentPlayer = (state) => state.players[state.currentPlayerIndex];
 const replayPlayerIdentityFromLog = (log, playerId) => {
   if (!playerId) return {};
@@ -3857,9 +3880,23 @@ const getAllWinningCheckTiles = () => getAllTileTypesForWinningCheck().map(creat
 const getWaitTiles = (state, player) => {
   return getWinningTilesForTenpai(state, player);
 };
+const discardedKindKeysForPlayer = (state, player) => {
+  const keys = new Set((player?.discardedTileKinds ?? []).filter(Boolean));
+  for (const discard of player?.discardedTiles ?? []) {
+    const key = tileKindKey(discard?.tile || discard);
+    if (key) keys.add(key);
+  }
+  for (const event of state?.handLog?.events ?? []) {
+    if (event?.type !== "discard" || event.playerId !== player?.id) continue;
+    const key = tileKindKey(event.tile || event.sourceTile);
+    if (key) keys.add(key);
+  }
+  return keys;
+};
 const isPermanentFuriten = (state, player) => {
   const waits = getWaitTiles(state, player).map(tileKindKey);
-  return player.discardedTiles.some((discard) => waits.includes(tileKindKey(discard.tile)));
+  const discardedKeys = discardedKindKeysForPlayer(state, player);
+  return waits.some((wait) => discardedKeys.has(wait));
 };
 const isTerminalOrHonorTile = (tile) => TERMINAL_HONOR.has(tileKindKey(tile));
 const isNagashiYakumanPlayer = (player) => player.discardedTiles.length > 0 && player.discardedTiles.every((discard) => isTerminalOrHonorTile(discard.tile));
@@ -4301,7 +4338,10 @@ class GameController {
     this.monitorSocketStateStall();
     const playerId = this.state.activeClockPlayerId;
     if (!playerId || this.state.screen !== "game" || this.state.handLog.result) return;
-    if (isSocketAuthoritativeGame() && this.state.optimisticDiscardRequestId) return;
+    if (isSocketAuthoritativeGame() && this.state.optimisticDiscardRequestId) {
+      this.monitorSocketStateStall();
+      return;
+    }
     const player = this.getPlayer(playerId);
     const remainingMs = getClockRemainingMs(this.state, playerId);
     if (remainingMs > 0) {
@@ -5276,17 +5316,17 @@ class GameController {
     }
     this.socketInitialStateInFlight = false;
     const socket = globalThis.io(serverUrl, {
-      transports: ["polling", "websocket"],
+      transports: ["websocket", "polling"],
       upgrade: true,
       tryAllTransports: true,
-      rememberUpgrade: false,
+      rememberUpgrade: true,
       autoConnect: false,
       closeOnBeforeunload: false,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 5000,
-      randomizationFactor: 0.5,
+      reconnectionDelay: 250,
+      reconnectionDelayMax: 1800,
+      randomizationFactor: 0.2,
       timeout: SOCKET_CONNECT_TIMEOUT_MS,
       forceNew: false,
       auth: { userId: sync.userId, tableId: sync.tableId, gameId: sync.gameId },
@@ -5538,6 +5578,13 @@ class GameController {
     }
     player.discardedTiles ??= [];
     player.discardedTiles.push({ tile, discardType: drawn ? "tsumogiri" : "tedashi", isRiichiDiscard, turnIndex: this.state.turnIndex ?? 0, optimistic: true });
+    player.discardedTileKinds ??= [];
+    player.discardedTileKinds.push(tileKindKey(tile));
+    if (this.state.activeClockPlayerId === player.id) {
+      this.state.activeClockPlayerId = null;
+      this.state.clockStartedAt = null;
+      this.state.lastClockRenderTick = null;
+    }
     player.temporaryForbiddenDiscardKind = "";
     this.state.pendingAction = null;
     this.state.optimisticDiscardRequestId = requestId;
@@ -6042,7 +6089,7 @@ class GameController {
     const startingScore = ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
     for (const player of this.state.players) {
       const assistSettings = { autoWin: Boolean(player.assistSettings?.autoWin), noCall: false };
-      Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings });
+      Object.assign(player, { hand: [], drawnTile: null, discardedTiles: [], discardedTileKinds: [], nukiDoraTiles: [], melds: [], status: "waiting", score: preserveScores ? player.score : startingScore, isRiichi: false, ippatsu: false, riichiTurnIndex: null, ippatsuOwnDrawStarted: false, sameTurnFuriten: false, riichiDiscardTileIds: [], riichiStickPaid: false, feverRiichiActive: false, feverWinCount: 0, temporaryForbiddenDiscardKind: "", assistSettings });
     }
     for (let i = 0; i < 13; i++) for (const player of this.state.players) { const tile = this.state.liveWall.shift(); if (tile) player.hand.push(tile); }
     for (const player of this.state.players) player.hand = sortHandTiles(player.hand);
@@ -6125,7 +6172,7 @@ class GameController {
       this.state.resultOkPlayerIds = [...new Set([...(this.state.resultOkPlayerIds ?? []), localPlayerId])];
       this.state.handLog.result.resultOkPlayerIds = [...new Set([...(this.state.handLog.result.resultOkPlayerIds ?? []), localPlayerId])];
       this.onStateChanged(this.state);
-      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 12000 }).then(async (response) => {
+      submitOnlineGameAction("resultOk", { localPlayerId, resultId: result.resultId || "", autoAllResultOk: Boolean(options.autoAllResultOk), requestId }, { timeoutMs: 6000 }).then(async (response) => {
         if (response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: response.version ?? response.state.version ?? loadOnlineSync()?.version ?? 0, lastServerState: response.state, lastSyncedAt: Date.now() });
           this.applyOnlineStateSnapshot(response.state);
@@ -6158,17 +6205,17 @@ class GameController {
         this.state.resultAutoCloseHandled = false;
         this.emit();
       }).catch((error) => {
-        this.state.resultOkPlayerIds = (this.state.resultOkPlayerIds ?? []).filter((id) => id !== localPlayerId);
-        if (this.state.handLog?.result?.resultOkPlayerIds) {
-          this.state.handLog.result.resultOkPlayerIds = this.state.handLog.result.resultOkPlayerIds.filter((id) => id !== localPlayerId);
-        }
-        this.state.resultOkSubmitted = false;
-        this.state.resultOkSubmittedResultId = "";
-        this.state.resultAutoCloseHandled = false;
         console.warn("[SocketGame] result ok failed", error);
-        this.state.log.unshift(`OK送信を再試行できます: ${error.message}`);
+        this.state.log.unshift(`OK送信の確認中です。通信復帰後に自動再同期します: ${error.message}`);
         this.emit();
-        this.resyncSocketGameState("resultOkFailed").catch(() => {});
+        this.resyncSocketGameState("resultOkFailed").then((synced) => {
+          if (!synced && Date.now() - Number(this.state.resultOkSubmittedAt || 0) > 12000) {
+            this.state.resultOkSubmitted = false;
+            this.state.resultOkSubmittedResultId = "";
+            this.state.resultAutoCloseHandled = false;
+            this.emit();
+          }
+        }).catch(() => {});
       });
       return;
     }
@@ -6575,7 +6622,7 @@ class GameController {
       console.log("[DiscardPerf] クリック → UI反映", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
       console.log("[DiscardAction] sent", { onlineActionType, tileId, requestId, version: loadOnlineSync()?.version });
       console.log("[DiscardPerf] クリック → サーバー送信", Math.round((performance.now?.() ?? Date.now()) - clickedAt), "ms");
-      submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id, discardRequestId: requestId }, { timeoutMs: 30000 }).catch((error) => {
+      submitOnlineGameAction(onlineActionType, { tileId, tile, localPlayerId: player.id, discardRequestId: requestId }, { timeoutMs: 8000 }).catch((error) => {
         console.warn("[DiscardAction] rejected", error);
         if (error?.response?.state) {
           saveOnlineSync({ ...loadOnlineSync(), version: error.response.version ?? loadOnlineSync()?.version ?? 0, lastServerState: error.response.state, lastSyncedAt: Date.now() });
@@ -6615,6 +6662,8 @@ class GameController {
     player.temporaryForbiddenDiscardKind = "";
     const discardType = drawn ? "tsumogiri" : "tedashi";
     player.discardedTiles.push({ tile, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex });
+    player.discardedTileKinds ??= [];
+    player.discardedTileKinds.push(tileKindKey(tile));
     if (discardWithoutRiichiFromChoice) this.state.pendingAction = null;
     this.recoverClockAfterDiscard(player.id);
     appendHandLogEvent(this.state.handLog, { type: "discard", playerId: player.id, tile, tileId, selectedTileId: tileId, discardType, isRiichiDiscard: isRiichiDeclarationDiscard(this.state.phase), turnIndex: this.state.turnIndex, isCpuAction: isCpuAction || player.type === "cpu" });
@@ -7115,7 +7164,8 @@ class GameController {
       if (!explicitIsMenzen(player) && !hasTurquoise5pInTilesOrMelds(remaining, player.melds ?? [])) return false;
       const waits = getWinningTilesForTenpai(remaining, player.melds ?? []);
       console.log("[WaitAfterDiscard]", formatTile(discard), waits.map(formatTile).join(", "));
-      const discardedKinds = new Set([...player.discardedTiles.map((entry) => tileKindKey(entry.tile)), tileKindKey(discard)]);
+      const discardedKinds = discardedKindKeysForPlayer(this.state, player);
+      discardedKinds.add(tileKindKey(discard));
       return waits.length > 0 && !waits.some((wait) => discardedKinds.has(tileKindKey(wait)));
     }).map((tile) => tile.id);
   }
