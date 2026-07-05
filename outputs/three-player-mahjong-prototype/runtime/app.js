@@ -87,6 +87,9 @@ const UI_ASSETS = {
 };
 const CURRENT_USER_ID = "p1";
 const DEBUG_AUTH_ENABLED = true;
+const AUTH_BROWSER_SESSION_KEY = "anmikaOnlineDebug.authBrowserSessionId";
+const AUTH_ACTIVE_SESSION_PREFIX = "anmikaOnlineDebug.activeAuthSession:";
+const AUTH_REMOTE_SESSION_CHECK_MS = 15000;
 const SUPER_CLUB_CREATOR_USER_ID = "3cda7884-9464-4b26-b7a2-bd79cc5ab65f";
 const SUPER_CLUB_CREATOR_EMAIL = "h1320000819@gamil.com";
 const DEFAULT_ANMIKA_ROCKET_RULE_CONFIG = {
@@ -525,6 +528,70 @@ const buildOptionalServerApiAuthHeaders = ({ anonKey = "", accessToken = "" } = 
     return {};
   }
 };
+const activeAuthBrowserSessionId = () => {
+  try {
+    const existing = localStorage.getItem(AUTH_BROWSER_SESSION_KEY);
+    if (existing) return existing;
+    const next = crypto?.randomUUID?.() || `auth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(AUTH_BROWSER_SESSION_KEY, next);
+    return next;
+  } catch {
+    return "auth-storage-unavailable";
+  }
+};
+const isMissingActiveLoginSessionColumnError = (error) => {
+  const raw = String(error?.message || error || "");
+  return raw.includes("active_login_session_id") || raw.includes("schema cache") || raw.includes("42703");
+};
+const logoutSupersededAuthSession = (reason = "newer login session") => {
+  const sync = loadOnlineSync();
+  console.warn("[Auth] 対局中の古いログインを無効化しました", { reason, tableId: sync?.tableId || "", gameId: sync?.gameId || "" });
+  try { localStorage.removeItem("anmikaAccessToken"); } catch {}
+  try { localStorage.removeItem("anmikaRefreshToken"); } catch {}
+  try { localStorage.removeItem("anmikaDebugUser"); } catch {}
+  if (sync?.enabled) saveOnlineSync({ ...sync, accessToken: "", supersededLoginSessionAt: Date.now(), supersededLoginSessionReason: reason });
+  try { globalThis.__anmikaController?.gameSocket?.disconnect?.(); } catch {}
+};
+const verifyActiveAuthSessionDuringGame = async (reason = "check") => {
+  const sync = loadOnlineSync();
+  if (!sync?.enabled || !sync.userId || !sync.supabaseUrl || !sync.anonKey || !sync.accessToken) return true;
+  const sessionId = activeAuthBrowserSessionId();
+  try {
+    const localActive = localStorage.getItem(AUTH_ACTIVE_SESSION_PREFIX + sync.userId) || "";
+    if (localActive && localActive !== sessionId) {
+      logoutSupersededAuthSession(`local:${reason}`);
+      return false;
+    }
+  } catch {}
+  try {
+    const response = await fetch(
+      `${sync.supabaseUrl.replace(/\/$/, "")}/rest/v1/users?select=user_id,active_login_session_id&user_id=eq.${encodeURIComponent(sync.userId)}&limit=1`,
+      { headers: buildSupabaseAuthHeaders({ anonKey: sync.anonKey, accessToken: sync.accessToken }), cache: "no-store" }
+    );
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      if (!isMissingActiveLoginSessionColumnError(text)) console.warn("[Auth] ログイン端末情報の確認に失敗しました", text);
+      return true;
+    }
+    const rows = await response.json().catch(() => []);
+    const remoteSessionId = Array.isArray(rows) ? rows[0]?.active_login_session_id || "" : "";
+    if (remoteSessionId && remoteSessionId !== sessionId) {
+      logoutSupersededAuthSession(`remote:${reason}`);
+      return false;
+    }
+  } catch (error) {
+    if (!isMissingActiveLoginSessionColumnError(error)) console.warn("[Auth] ログイン端末情報の確認に失敗しました", error);
+  }
+  return true;
+};
+setInterval(() => {
+  if (document.visibilityState !== "visible") return;
+  verifyActiveAuthSessionDuringGame("interval").catch(() => {});
+}, AUTH_REMOTE_SESSION_CHECK_MS);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  verifyActiveAuthSessionDuringGame("visibility").catch(() => {});
+});
 const loadSocketDebugStatus = () => safeReadJson(APP_STORAGE_KEYS.socketDebug, {});
 const saveSocketDebugStatus = (patch = {}) => {
   const sync = loadOnlineSync() || {};
@@ -4205,8 +4272,8 @@ class GameController {
     if (this.state.activeClockPlayerId !== playerId || !this.state.clockStartedAt) return;
     const clock = this.state.playerClocks[playerId];
     clock.remainingMs = Math.max(0, clock.remainingMs - (Date.now() - this.state.clockStartedAt));
-    if (clock.remainingMs <= 5000) clock.isInByoyomi = true;
-    if (completedAction && clock.isInByoyomi) clock.remainingMs = 5000;
+    if (clock.remainingMs <= 10000) clock.isInByoyomi = true;
+    if (completedAction && clock.isInByoyomi) clock.remainingMs = 10000;
     this.state.activeClockPlayerId = null;
     this.state.clockStartedAt = null;
     this.state.lastClockRenderTick = null;
@@ -4221,7 +4288,7 @@ class GameController {
     const clock = this.state.playerClocks[playerId];
     if (!clock) return;
     const roundedSeconds = Math.ceil((clock.remainingMs ?? 0) / 1000);
-    clock.remainingMs = Math.min(roundedSeconds + 2, 30) * 1000;
+    clock.remainingMs = Math.min(Math.max(roundedSeconds + 2, 10), 30) * 1000;
   }
   tickClock() {
     if (this.state.handLog.result && this.state.phase !== "showingWinAnnouncement") {
@@ -5144,31 +5211,16 @@ class GameController {
   maybeReloadAfterInitialOnlineState(reason = "initialOnlineState") {
     const sync = loadOnlineSync();
     if (!sync?.autoReloadAfterLaunch || sync.transport !== "socketio" || !sync.tableId || !sync.gameId) return false;
-    if (this.postLaunchReloadTimer) return true;
-    if (this.state.screen !== "game" || this.state.phase === "onlineLoading") return false;
-    if (!Array.isArray(this.state.players) || this.state.players.length < 3) return false;
-    const reloadKey = String(sync.launchReloadKey || `${sync.tableId}:${sync.gameId}:post-initial-state`);
-    const sessionKey = `anmikaRocket.postInitialStateReloaded:${reloadKey}`;
-    if (sessionStorage.getItem(sessionKey) === "1") {
-      saveOnlineSync({ ...sync, autoReloadAfterLaunch: false });
-      return false;
-    }
-    sessionStorage.setItem(sessionKey, "1");
-    saveOnlineSync({ ...sync, autoReloadAfterLaunch: false, postInitialReloadedAt: Date.now(), postInitialReloadReason: reason });
-    console.log("[DebugLaunch] 初期局面同期後に一度だけ再読み込みします", {
+    saveOnlineSync({ ...sync, autoReloadAfterLaunch: false, postInitialReloadSkippedAt: Date.now(), postInitialReloadReason: reason });
+    console.log("[DebugLaunch] 初期局面同期後の自動再読み込みを止めました", {
       reason,
       tableId: sync.tableId,
       gameId: sync.gameId,
-      reloadKey,
       phase: this.state.phase,
       version: this.state.version,
       turnIndex: this.state.turnIndex,
     });
-    this.postLaunchReloadTimer = setTimeout(() => {
-      this.postLaunchReloadTimer = null;
-      globalThis.location?.reload?.();
-    }, 650);
-    return true;
+    return false;
   }
   async connectSocketGameServer() {
     const sync = loadOnlineSync();
@@ -7776,7 +7828,7 @@ class GameView {
       const remainingMs = getClockRemainingMs(state, playerId);
       const nextText = formatClock(state, playerId);
       if (badge.textContent !== nextText) badge.textContent = nextText;
-      badge.classList.toggle("low", remainingMs <= 5000);
+      badge.classList.toggle("low", remainingMs <= 10000);
       updated = true;
     });
     return updated;
@@ -10059,7 +10111,7 @@ class GameView {
     const isDealer = player.id === dealer?.id;
     const clockMs = this.currentStateForClock ? getClockRemainingMs(this.currentStateForClock, player.id) : null;
     const clockBadge = seat === "bottom" && clockMs !== null && !this.currentStateForClock?.isReplayView
-      ? `<span class="hand-clock-badge ${clockMs <= 5000 ? "low" : ""}" data-clock-player-id="${escapeHtml(player.id)}">${formatClock(this.currentStateForClock, player.id)}</span>`
+      ? `<span class="hand-clock-badge ${clockMs <= 10000 ? "low" : ""}" data-clock-player-id="${escapeHtml(player.id)}">${formatClock(this.currentStateForClock, player.id)}</span>`
       : "";
     const handIcon = "";
     const revealClass = seatView?.isReplayRevealHands && seat !== "bottom" ? `replay-reveal-hand replay-reveal-${seat}` : "";

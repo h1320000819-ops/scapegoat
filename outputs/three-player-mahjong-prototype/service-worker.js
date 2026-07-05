@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260705-allow-same-game-entry-a";
+const CACHE_NAME = "anmika-pwa-20260705-no-midgame-reload-session-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260705-allow-same-game-entry-a",
-  "/runtime/app.js?v=20260705-allow-same-game-entry-a",
-  "/runtime/online-debug.js?v=20260705-allow-same-game-entry-a",
-  "/runtime/pwa.js?v=20260705-allow-same-game-entry-a",
+  "/styles.css?v=20260705-no-midgame-reload-session-a",
+  "/runtime/app.js?v=20260705-no-midgame-reload-session-a",
+  "/runtime/online-debug.js?v=20260705-no-midgame-reload-session-a",
+  "/runtime/pwa.js?v=20260705-no-midgame-reload-session-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

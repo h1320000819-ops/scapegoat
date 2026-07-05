@@ -37,6 +37,9 @@
   const DEBUG_AUTO_OPEN_SUPPRESS_MS = 10 * 60 * 1000;
   const DEBUG_AUTO_START_FAILURE_SUPPRESS_MS = 45000;
   const DEBUG_RETURN_CLUB_KEY = "anmikaOnlineDebug.returnClubId";
+  const AUTH_BROWSER_SESSION_KEY = "anmikaOnlineDebug.authBrowserSessionId";
+  const AUTH_ACTIVE_SESSION_PREFIX = "anmikaOnlineDebug.activeAuthSession:";
+  const AUTH_REMOTE_SESSION_CHECK_MS = 15000;
   const ENABLE_AUTO_TABLE_START = true;
   const DEBUG_FORCE_LEAVE_BUTTONS_ENABLED = false;
   const LOBBY_AUTO_REFRESH_MS = 3000;
@@ -200,6 +203,17 @@
       return "window-storage-unavailable";
     }
   };
+  const activeAuthBrowserSessionId = () => {
+    try {
+      const existing = localStorage.getItem(AUTH_BROWSER_SESSION_KEY);
+      if (existing) return existing;
+      const next = crypto?.randomUUID?.() || `auth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(AUTH_BROWSER_SESSION_KEY, next);
+      return next;
+    } catch {
+      return "auth-storage-unavailable";
+    }
+  };
   const isSameGameIdentity = (a = {}, b = {}) => {
     const left = normalizeGameIdentity(a);
     const right = normalizeGameIdentity(b);
@@ -230,6 +244,15 @@
     const current = loadActiveGameLock();
     if (!current || !isSameGameIdentity(current, identity)) return;
     localStorage.setItem(ACTIVE_GAME_LOCK_KEY, JSON.stringify({ ...current, phase: reason, releasedAt: Date.now(), updatedAt: Date.now() }));
+  };
+  const isTableOpenInAnotherWindow = (tableId, _gameId = "") => {
+    const current = loadActiveGameLock();
+    if (!current || current.releasedAt || current.phase !== "playing") return false;
+    const currentIdentity = normalizeGameIdentity(current);
+    const targetIdentity = normalizeGameIdentity({ tableId });
+    if (currentIdentity.tableId !== targetIdentity.tableId) return false;
+    const ownerWindowId = current.windowId || "";
+    return Boolean(ownerWindowId && ownerWindowId !== activeGameWindowId());
   };
   const loadSocketDebugStatus = () => readJsonStorage("anmikaRocket.socketDebug", {});
   const loadClubIconCache = () => {
@@ -858,7 +881,14 @@
       storage?.removeItem?.(key);
     } catch {}
   };
-  const clearStoredSession = () => {
+  const clearStoredSession = ({ releaseLoginSession = false } = {}) => {
+    const previousUser = state.user;
+    if (releaseLoginSession && previousUser?.id) {
+      const key = AUTH_ACTIVE_SESSION_PREFIX + previousUser.id;
+      try {
+        if (localStorage.getItem(key) === activeAuthBrowserSessionId()) localStorage.removeItem(key);
+      } catch {}
+    }
     state.accessToken = "";
     state.refreshToken = "";
     state.user = null;
@@ -874,6 +904,70 @@
     removeStoredValue(sessionStorage, "anmikaOnlineDebugActiveTableId");
     removeStoredValue(sessionStorage, "anmikaOnlineDebug.launchingTable");
     document.body.dataset.screen = "auth";
+  };
+  const rememberLocalActiveLoginSession = (user = state.user) => {
+    if (!user?.id) return "";
+    const sessionId = activeAuthBrowserSessionId();
+    try {
+      localStorage.setItem(AUTH_ACTIVE_SESSION_PREFIX + user.id, sessionId);
+    } catch {}
+    return sessionId;
+  };
+  const isSupabaseMissingActiveSessionColumn = (error) => {
+    const raw = rawErrorText(error);
+    return raw.includes("active_login_session_id") || raw.includes("active_login_session_updated_at") || raw.includes("schema cache") || raw.includes("42703");
+  };
+  const publishActiveLoginSession = async (user = state.user) => {
+    if (!user?.id || !state.accessToken) return;
+    const sessionId = rememberLocalActiveLoginSession(user);
+    if (!sessionId || sessionId === "auth-storage-unavailable") return;
+    try {
+      await rest("/users?user_id=eq." + encodeURIComponent(user.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          active_login_session_id: sessionId,
+          active_login_session_updated_at: new Date().toISOString(),
+        }),
+      });
+    } catch (error) {
+      if (!isSupabaseMissingActiveSessionColumn(error)) {
+        log("ログイン端末情報の保存に失敗しました。", rawErrorText(error));
+      }
+    }
+  };
+  const forceLogoutByNewerSession = (reason = "newer login session") => {
+    if (!state.user && !state.accessToken) return;
+    console.warn("[Auth] session replaced", { reason, userId: state.user?.id || "" });
+    clearStoredSession();
+    setAuthNotice("別の端末またはブラウザでログインされたため、この画面はログアウトしました。", "warn");
+    clearError();
+    render();
+  };
+  const verifyActiveLoginSession = async (reason = "check") => {
+    if (!state.user?.id || !state.accessToken) return true;
+    const sessionId = activeAuthBrowserSessionId();
+    try {
+      const localActive = localStorage.getItem(AUTH_ACTIVE_SESSION_PREFIX + state.user.id) || "";
+      if (localActive && localActive !== sessionId) {
+        forceLogoutByNewerSession(`local:${reason}`);
+        return false;
+      }
+    } catch {}
+    try {
+      const rows = await rest(
+        "/users?select=user_id,active_login_session_id&user_id=eq." + encodeURIComponent(state.user.id) + "&limit=1"
+      );
+      const remoteSessionId = Array.isArray(rows) ? rows[0]?.active_login_session_id || "" : "";
+      if (remoteSessionId && remoteSessionId !== sessionId) {
+        forceLogoutByNewerSession(`remote:${reason}`);
+        return false;
+      }
+    } catch (error) {
+      if (!isSupabaseMissingActiveSessionColumn(error)) {
+        log("ログイン端末情報の確認に失敗しました。", rawErrorText(error));
+      }
+    }
+    return true;
   };
   const invalidateBrokenSession = (reason = "broken auth header") => {
     console.warn("[Auth] session cleared", { reason });
@@ -1443,6 +1537,8 @@
     if (profile) {
       state.user = profileToUser(profile);
       localStorage.setItem("anmikaDebugUser", JSON.stringify(state.user));
+      rememberLocalActiveLoginSession(state.user);
+      publishActiveLoginSession(state.user).catch((error) => log("ログイン端末情報の保存に失敗しました。", rawErrorText(error)));
     }
     render();
   };
@@ -1697,8 +1793,8 @@
   const signOut = async () => {
     clearInterval(state.pollTimer);
     clearInterval(state.clubPollTimer);
-    log("この端末だけログアウトしました。別ブラウザ・別端末の同一アカウントログインは維持されます。");
-    clearStoredSession();
+    log("ログアウトしました。");
+    clearStoredSession({ releaseLoginSession: true });
     render();
   };
 
@@ -2391,6 +2487,13 @@
     if (!ENABLE_AUTO_TABLE_START) return;
     if (!navigate) return;
     if (!table?.table_id || table.status !== "playing") return;
+    const targetGameId = preferredOnlineGameState?.game_id || newSocketGameId(table.table_id);
+    if (!forceOpen && isTableOpenInAnotherWindow(table.table_id, targetGameId)) {
+      log("この卓は別画面で対局中のため、自動表示を止めました。", { tableId: table.table_id, gameId: targetGameId });
+      state.autoOpenedPlayingTableIds.add(table.table_id);
+      state.onlineGameOpened = true;
+      return;
+    }
     if (!forceOpen && isLaunchInProgress(table.table_id)) return;
     if (!forceOpen && wasAutoOpenedRecently(table.table_id)) return;
     if (forceOpen) clearRecentlyLeftTable(table.table_id);
@@ -2411,7 +2514,7 @@
     if (!isCurrentUserSeatedAt(seats)) return;
     if (!forceOpen && state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
-    const onlineGameState = preferredOnlineGameState || { game_id: newSocketGameId(table.table_id), version: 0, resetRoom: false };
+    const onlineGameState = preferredOnlineGameState || { game_id: targetGameId, version: 0, resetRoom: false };
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
     markAutoOpenedTable(table.table_id);
@@ -3414,6 +3517,12 @@
     const localTableId = `online-debug-${tableId}`;
     const gameId = onlineGameState?.game_id || `socket-game-${tableId}`;
     const currentUser = requireUser();
+    if (!launchOptions.forceOpen && isTableOpenInAnotherWindow(tableId, gameId)) {
+      log("この卓は別画面で対局中のため、新しい対局画面は開きません。", { tableId, gameId });
+      state.onlineGameOpened = true;
+      state.autoOpenedPlayingTableIds.add(tableId);
+      return;
+    }
     if (!claimActiveGameLock({ tableId, localTableId, gameId, userId: currentUser.id }, "startLocalDebugMahjong")) {
       state.onlineGameOpened = false;
       state.autoStartingTableIds.delete(tableId);
@@ -3500,7 +3609,7 @@
       returnUrl: buildOnlineDebugReturnUrl(),
       lastServerState: null,
       lastSyncedAt: 0,
-      autoReloadAfterLaunch: Boolean(launchOptions.autoReloadAfterLaunch),
+      autoReloadAfterLaunch: false,
       launchReloadKey: launchOptions.launchReloadKey || `${tableId}:${gameId}:launch`,
     };
     localStorage.setItem("anmikaRocket.onlineSync", JSON.stringify(onlineSync));
@@ -5870,13 +5979,23 @@
       if (document.visibilityState !== "visible") return;
       probeGameServer().catch(() => {});
     }, GAME_SERVER_PROBE_MS);
+    window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      verifyActiveLoginSession("interval").catch(() => {});
+    }, AUTH_REMOTE_SESSION_CHECK_MS);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
       renderDebug();
       probeGameServer().catch(() => {});
+      verifyActiveLoginSession("visibility").catch(() => {});
     });
     window.addEventListener("storage", (event) => {
-      if (!["anmikaAccessToken", "anmikaRefreshToken", "anmikaDebugUser"].includes(event.key || "")) return;
+      const key = event.key || "";
+      if (state.user?.id && key === AUTH_ACTIVE_SESSION_PREFIX + state.user.id && event.newValue && event.newValue !== activeAuthBrowserSessionId()) {
+        forceLogoutByNewerSession("storage");
+        return;
+      }
+      if (!["anmikaAccessToken", "anmikaRefreshToken", "anmikaDebugUser"].includes(key)) return;
       state.accessToken = localStorage.getItem("anmikaAccessToken") || "";
       state.refreshToken = localStorage.getItem("anmikaRefreshToken") || "";
       try {
@@ -5885,6 +6004,7 @@
         state.user = null;
       }
       if (!state.accessToken || !state.user) document.body.dataset.screen = "auth";
+      verifyActiveLoginSession("storage-token").catch(() => {});
       render();
     });
   };

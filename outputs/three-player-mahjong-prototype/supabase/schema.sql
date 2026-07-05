@@ -18,6 +18,8 @@ create table if not exists public.users (
 alter table public.users add column if not exists login_id text;
 alter table public.users add column if not exists auth_provider text not null default 'password';
 alter table public.users add column if not exists updated_at timestamptz not null default now();
+alter table public.users add column if not exists active_login_session_id text;
+alter table public.users add column if not exists active_login_session_updated_at timestamptz;
 create unique index if not exists users_login_id_unique_idx on public.users(login_id);
 
 create table if not exists public.clubs (

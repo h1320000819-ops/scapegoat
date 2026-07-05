@@ -248,12 +248,12 @@ const stopServerClockForPlayer = (state, playerId, { recoverAfterDiscard = false
   if (state.activeClockPlayerId === playerId && state.clockStartedAt) {
     clock.remainingMs = Math.max(0, Number(clock.remainingMs || 0) - (Date.now() - state.clockStartedAt));
   }
-  if (clock.remainingMs <= 5000) clock.isInByoyomi = true;
+  if (clock.remainingMs <= 10000) clock.isInByoyomi = true;
   if (recoverAfterDiscard) {
-    if (clock.isInByoyomi) clock.remainingMs = 5000;
+    if (clock.isInByoyomi) clock.remainingMs = 10000;
     else {
       const roundedSeconds = Math.ceil(Number(clock.remainingMs || 0) / 1000);
-      clock.remainingMs = Math.min(30, roundedSeconds + 2) * 1000;
+      clock.remainingMs = Math.min(30, Math.max(10, roundedSeconds + 2)) * 1000;
     }
   }
   if (state.activeClockPlayerId === playerId) {
@@ -5960,13 +5960,14 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     }
   }
   if (room && resetRoom && room.state && !isFinalEndedRoomState(room.state)) {
-    console.warn("[AnmikaGameServer] reset active room by explicit resetRoom request", {
+    console.warn("[AnmikaGameServer] ignored resetRoom for active room", {
       tableId: key,
       gameId: room.gameId,
       requestedGameId: gameId || "",
       phase: room.state.phase,
       version: room.version,
     });
+    resetRoom = false;
   }
   if (room && resetRoom) {
     console.log("[AnmikaGameServer] reset room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
@@ -5979,20 +5980,30 @@ const getOrCreateRoom = ({ tableId, gameId, resetRoom = false }) => {
     gameRooms.delete(key);
     deletePersistedRoom(key, "reset existing memory room");
   }
-  if (!room && resetRoom) {
-    deletePersistedRoom(key, "reset without memory room");
-  }
   if (!room) {
-    room = resetRoom ? null : loadPersistedRoom(key, gameId || "");
-    if (room && resetRoom) {
-      console.log("[AnmikaGameServer] ignore persisted room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
+    room = loadPersistedRoom(key, gameId || "");
+    if (room && resetRoom && room.state && !isFinalEndedRoomState(room.state)) {
+      console.warn("[AnmikaGameServer] ignored resetRoom for active persisted room", {
+        tableId: key,
+        gameId: room.gameId,
+        requestedGameId: gameId || "",
+        phase: room.state.phase,
+        version: room.version,
+      });
+      resetRoom = false;
+    } else if (room && resetRoom) {
+      console.log("[AnmikaGameServer] reset persisted room by start request", { tableId: key, previousGameId: room.gameId, nextGameId: gameId });
       room = null;
+      deletePersistedRoom(key, "reset persisted room");
     }
     if (room) {
       if (gameId && !room.gameId) room.gameId = gameId;
       gameRooms.set(key, room);
       return room;
     }
+  }
+  if (!room && resetRoom) {
+    deletePersistedRoom(key, "reset without active room");
   }
   if (!room) {
     room = {
