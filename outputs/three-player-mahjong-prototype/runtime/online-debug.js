@@ -214,7 +214,8 @@
     if (current.releasedAt || current.phase === "ended" || current.phase === "left" || current.phase === "onlineSyncCleared") return true;
     if (Number(current.updatedAt || current.claimedAt || 0) && Date.now() - Number(current.updatedAt || current.claimedAt || 0) > 12 * 60 * 60 * 1000) return true;
     if (!isSameGameIdentity(current, next)) return false;
-    return !current.windowId || current.windowId === next.windowId;
+    const nextWindowId = next.windowId || activeGameWindowId();
+    return !current.windowId || current.windowId === nextWindowId;
   };
   const claimActiveGameLock = (identity = {}, reason = "online-debug") => {
     const next = { ...normalizeGameIdentity(identity), windowId: activeGameWindowId(), phase: "playing", reason, claimedAt: Date.now(), updatedAt: Date.now() };
