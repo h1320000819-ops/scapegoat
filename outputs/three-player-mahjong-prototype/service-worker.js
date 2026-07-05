@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260703-persistent-rule-detail-a";
+const CACHE_NAME = "anmika-pwa-20260705-single-game-window-lock-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260703-persistent-rule-detail-a",
-  "/runtime/app.js?v=20260703-persistent-rule-detail-a",
-  "/runtime/online-debug.js?v=20260703-persistent-rule-detail-a",
-  "/runtime/pwa.js?v=20260703-persistent-rule-detail-a",
+  "/styles.css?v=20260705-single-game-window-lock-a",
+  "/runtime/app.js?v=20260705-single-game-window-lock-a",
+  "/runtime/online-debug.js?v=20260705-single-game-window-lock-a",
+  "/runtime/pwa.js?v=20260705-single-game-window-lock-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",

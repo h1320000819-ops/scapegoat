@@ -188,6 +188,18 @@
     gameId: String(gameId || ""),
     userId: String(userId || ""),
   });
+  const activeGameWindowId = () => {
+    const key = "anmikaRocket.windowInstanceId";
+    try {
+      const existing = sessionStorage.getItem(key);
+      if (existing) return existing;
+      const next = crypto?.randomUUID?.() || `window-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionStorage.setItem(key, next);
+      return next;
+    } catch {
+      return "window-storage-unavailable";
+    }
+  };
   const isSameGameIdentity = (a = {}, b = {}) => {
     const left = normalizeGameIdentity(a);
     const right = normalizeGameIdentity(b);
@@ -201,10 +213,11 @@
     if (!current?.tableId && !current?.gameId) return true;
     if (current.releasedAt || current.phase === "ended" || current.phase === "left" || current.phase === "onlineSyncCleared") return true;
     if (Number(current.updatedAt || current.claimedAt || 0) && Date.now() - Number(current.updatedAt || current.claimedAt || 0) > 12 * 60 * 60 * 1000) return true;
-    return isSameGameIdentity(current, next);
+    if (!isSameGameIdentity(current, next)) return false;
+    return !current.windowId || current.windowId === next.windowId;
   };
   const claimActiveGameLock = (identity = {}, reason = "online-debug") => {
-    const next = { ...normalizeGameIdentity(identity), phase: "playing", reason, claimedAt: Date.now(), updatedAt: Date.now() };
+    const next = { ...normalizeGameIdentity(identity), windowId: activeGameWindowId(), phase: "playing", reason, claimedAt: Date.now(), updatedAt: Date.now() };
     const current = loadActiveGameLock();
     if (!canReplaceActiveGameLock(current, next)) {
       log("この端末では別の対局が進行中です。二重起動を防ぐため開きません。", { current, next });
