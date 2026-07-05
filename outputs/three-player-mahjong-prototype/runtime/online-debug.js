@@ -240,6 +240,11 @@
     localStorage.setItem(ACTIVE_GAME_LOCK_KEY, JSON.stringify({ ...(current && isSameGameIdentity(current, next) ? current : {}), ...next }));
     return true;
   };
+  const forceClaimActiveGameLock = (identity = {}, reason = "force-online-debug") => {
+    const next = { ...normalizeGameIdentity(identity), windowId: activeGameWindowId(), phase: "playing", reason, claimedAt: Date.now(), updatedAt: Date.now() };
+    localStorage.setItem(ACTIVE_GAME_LOCK_KEY, JSON.stringify(next));
+    return true;
+  };
   const releaseActiveGameLock = (identity = {}, reason = "left") => {
     const current = loadActiveGameLock();
     if (!current || !isSameGameIdentity(current, identity)) return;
@@ -546,11 +551,33 @@
   };
   const filledSeatCount = (rows) => rows.filter((seat) => seat.user_id || seat.player_type === "cpu").length;
   const hasCpuSeat = (rows) => rows.some((seat) => seat.player_type === "cpu");
+  const sanitizeLobbySeatsForTable = (table, seats = []) => {
+    const normalized = normalizeSeats(seats, table?.table_id).slice(0, 3);
+    const byIndex = new Map(normalized.map((seat) => [Number(seat.seat_index || 0), seat]));
+    const nextSeats = [0, 1, 2].map((seatIndex) => {
+      const seat = byIndex.get(seatIndex) || { table_id: table?.table_id || "", seat_index: seatIndex, user_id: null, player_type: "empty" };
+      const playerType = seat.player_type === "cpu" ? "cpu" : seat.user_id ? "human" : "empty";
+      return {
+        ...seat,
+        table_id: seat.table_id || table?.table_id || "",
+        seat_index: seatIndex,
+        user_id: playerType === "human" ? seat.user_id : null,
+        player_type: playerType,
+        display_name: playerType === "empty" ? null : seat.display_name,
+        is_last_hand_declared: playerType === "empty" ? false : Boolean(seat.is_last_hand_declared),
+      };
+    });
+    if (table?.status !== "playing") return nextSeats;
+    return nextSeats.map((seat) => {
+      if (seat.player_type === "cpu" || seat.user_id) return seat;
+      return { ...seat, user_id: null, player_type: "empty", display_name: null, is_last_hand_declared: false };
+    });
+  };
   const visibleTableSeats = (table) => {
     const visibleTable = maskRecentlyLeftTable(table);
-    const seats = normalizeSeats(
-      visibleTable?.table_seats || visibleTable?.seats || visibleTable?.tableSeats || state.localSeatsByTable[localSeatKey(visibleTable?.table_id)] || [],
-      visibleTable?.table_id
+    const seats = sanitizeLobbySeatsForTable(
+      visibleTable,
+      visibleTable?.table_seats || visibleTable?.seats || visibleTable?.tableSeats || state.localSeatsByTable[localSeatKey(visibleTable?.table_id)] || []
     );
     if (!isRecentlyLeftTable(visibleTable?.table_id)) return seats;
     return seats.map((seat) => seat.user_id === state.user?.id
@@ -2494,11 +2521,12 @@
       state.onlineGameOpened = true;
       return;
     }
-    if (!forceOpen && isLaunchInProgress(table.table_id)) return;
-    if (!forceOpen && wasAutoOpenedRecently(table.table_id)) return;
     if (forceOpen) clearRecentlyLeftTable(table.table_id);
     else clearRecentlyLeftTableIfExpired();
     const seats = await enrichSeatRowsWithUserProfiles(normalizeSeats(seatRows || table.table_seats || state.localSeatsByTable[localSeatKey(table.table_id)] || [], table.table_id));
+    const currentUserSeated = isCurrentUserSeatedAt(seats);
+    if (!forceOpen && isLaunchInProgress(table.table_id) && !currentUserSeated) return;
+    if (!forceOpen && wasAutoOpenedRecently(table.table_id) && !currentUserSeated) return;
     if (!forceOpen && isRecentlyLeftTable(table.table_id) && !isCurrentUserSeatedAt(seats)) {
       console.log("[LastHand] recently left table: suppress auto-open", table.table_id);
       clearLocalUserSeatsForTable(table.table_id);
@@ -2511,17 +2539,24 @@
       return;
     }
     if (!forceOpen && isRecentlyLeftTable(table.table_id) && isCurrentUserSeatedAt(seats)) clearRecentlyLeftTable(table.table_id);
-    if (!isCurrentUserSeatedAt(seats)) return;
+    if (!currentUserSeated) return;
     if (!forceOpen && state.autoOpenedPlayingTableIds.has(table.table_id) && state.onlineGameOpened) return;
     setActiveTableId(table.table_id);
     const onlineGameState = preferredOnlineGameState || { game_id: targetGameId, version: 0, resetRoom: false };
     state.autoOpenedPlayingTableIds.add(table.table_id);
     state.onlineGameOpened = true;
     markAutoOpenedTable(table.table_id);
-    startLocalDebugMahjong(table.table_id, seats, onlineGameState, {
+    const launched = startLocalDebugMahjong(table.table_id, seats, onlineGameState, {
+      forceOpen,
       autoReloadAfterLaunch: false,
       launchReloadKey: `${table.table_id}:${onlineGameState.game_id || ""}:auto-open`,
     });
+    if (!launched && currentUserSeated) {
+      clearAutoOpenedTable(table.table_id);
+      clearLaunchingTable();
+      state.onlineGameOpened = false;
+      state.autoOpenedPlayingTableIds.delete(table.table_id);
+    }
   };
   const getOrCreateTableRecord = (tableId, seats = null) => {
     let table = state.tables.find((item) => item?.table_id === tableId);
@@ -2564,11 +2599,11 @@
   const tryAutoStartTableFromSeats = async (tableId, seatRows = null, { forceNewGame = false } = {}) => {
     if (!ENABLE_AUTO_TABLE_START) return null;
     tableId = requireTableId(tableId, "自動対局開始");
-    if (!forceNewGame && isLaunchInProgress(tableId)) return null;
-    if (!forceNewGame && wasAutoOpenedRecently(tableId)) return null;
     const seats = normalizeSeats(seatRows || getKnownSeats(tableId), tableId);
     const hasThreeSeats = filledSeatCount(seats) >= 3;
     const currentUserSeated = isCurrentUserSeatedAt(seats);
+    if (!forceNewGame && isLaunchInProgress(tableId) && !currentUserSeated) return null;
+    if (!forceNewGame && wasAutoOpenedRecently(tableId) && !currentUserSeated) return null;
     if (!forceNewGame && isAutoStartBlocked() && !(hasThreeSeats && currentUserSeated)) return null;
     if (!forceNewGame && wasAutoStartFailedRecently(tableId) && !(hasThreeSeats && currentUserSeated)) return null;
     if (forceNewGame) clearRecentlyLeftTable(tableId);
@@ -2675,6 +2710,25 @@
       if (filledSeatCount(seats) < 3) continue;
       await tryAutoStartTableFromSeats(table.table_id, seats).catch((error) => log("対局画面の自動表示に失敗しました。", rawErrorText(error)));
     }
+  };
+  const rescueCurrentUserIntoPlayingTable = async (reason = "refresh") => {
+    if (!ENABLE_AUTO_TABLE_START) return false;
+    if (document.body.dataset.screen !== "club-home") return false;
+    if (!state.user?.id) return false;
+    clearRecentlyLeftTableIfExpired();
+    for (const table of state.tables || []) {
+      if (!table?.table_id || table.status !== "playing" || isRecentlyLeftTable(table.table_id)) continue;
+      const seats = visibleTableSeats(table);
+      if (!isCurrentUserSeatedAt(seats)) continue;
+      log("対局開始済みの卓に着席中のため、対局画面へ戻します。", { tableId: table.table_id, reason });
+      clearAutoOpenedTable(table.table_id);
+      clearLaunchingTable();
+      state.onlineGameOpened = false;
+      state.autoOpenedPlayingTableIds.delete(table.table_id);
+      await openPlayingTableIfNeeded(table, seats, { navigate: true, forceOpen: true });
+      return true;
+    }
+    return false;
   };
   const queueAutoStartCheckForTable = (tableId, seats = null, reason = "auto", options = {}) => {
     if (!ENABLE_AUTO_TABLE_START || !tableId) return;
@@ -3506,7 +3560,7 @@
     return window.location.origin;
   };
   const startLocalDebugMahjong = (tableId, sourceRows, onlineGameState = null, launchOptions = {}) => {
-    if (isLaunchInProgress(tableId)) return;
+    if (!launchOptions.forceOpen && isLaunchInProgress(tableId)) return false;
     const rows = normalizeSeats(sourceRows?.length ? sourceRows : getLocalSeats(tableId), tableId)
       .map((seat) => ({ ...seat, is_last_hand_declared: false, isLastHandDeclared: false }));
     if (filledSeatCount(rows) < 3) {
@@ -3521,13 +3575,18 @@
       log("この卓は別画面で対局中のため、新しい対局画面は開きません。", { tableId, gameId });
       state.onlineGameOpened = true;
       state.autoOpenedPlayingTableIds.add(tableId);
-      return;
+      return false;
     }
-    if (!claimActiveGameLock({ tableId, localTableId, gameId, userId: currentUser.id }, "startLocalDebugMahjong")) {
-      state.onlineGameOpened = false;
-      state.autoStartingTableIds.delete(tableId);
-      clearLaunchingTable();
-      return;
+    const lockIdentity = { tableId, localTableId, gameId, userId: currentUser.id };
+    if (!claimActiveGameLock(lockIdentity, "startLocalDebugMahjong")) {
+      if (launchOptions.forceOpen) {
+        forceClaimActiveGameLock(lockIdentity, "forceEnterPlayingTable");
+      } else {
+        state.onlineGameOpened = false;
+        state.autoStartingTableIds.delete(tableId);
+        clearLaunchingTable();
+        return false;
+      }
     }
     const localUsers = JSON.parse(localStorage.getItem("anmikaRocket.users") || "[]");
     const humanUser = {
@@ -3629,6 +3688,7 @@
         : `${window.location.origin}/${tableHash}`;
     markLaunchingTable(tableId);
     window.location.href = targetUrl;
+    return true;
   };
   const startDebugGame = async (tableId = selectedTableId()) => {
     tableId = requireTableId(normalizeRemoteTableId(tableId) || getStartableTableId(), "デバッグ対局開始");
@@ -5411,6 +5471,7 @@
     state.lobbyRefreshInFlight = true;
     try {
       await loadTables();
+      if (await rescueCurrentUserIntoPlayingTable(reason)) return;
       const tableId = selectedTableId();
       if (tableId && isRecentlyLeftTable(tableId)) {
         state.activeTableId = "";
