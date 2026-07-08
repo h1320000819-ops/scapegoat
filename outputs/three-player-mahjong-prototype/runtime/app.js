@@ -5296,6 +5296,7 @@ class GameController {
       }
       saveSocketDebugStatus({ socket: "CONNECTED", gameServer: "OK", socketId: this.gameSocket.id, socketUrl: serverUrl, lastReconnectReason: "replaceExistingSocketForFreshJoin", lastError: "" });
       this.gameSocket.off("game:state");
+      this.gameSocket.off("game:event");
       this.gameSocket.off("game:needInitialState");
       this.gameSocket.off("server:shutdown");
       this.gameSocket.off("connect");
@@ -5307,6 +5308,7 @@ class GameController {
     }
     if (this.gameSocket) {
       this.gameSocket.off("game:state");
+      this.gameSocket.off("game:event");
       this.gameSocket.off("game:needInitialState");
       this.gameSocket.off("server:shutdown");
       this.gameSocket.off("connect");
@@ -5409,6 +5411,32 @@ class GameController {
         lastError: "",
       });
       if (this.applyOnlineStateSnapshot(state)) this.lastAppliedOnlinePublishedAt = Number(state?.onlineMeta?.publishedAt ?? Date.now());
+    });
+    socket.on("game:event", (event = {}) => {
+      if (!event || event.tableId !== sync.tableId || event.gameId !== sync.gameId) return;
+      const latestSync = loadOnlineSync();
+      const currentVersion = Number(latestSync?.version ?? this.state?.version ?? 0);
+      const eventVersion = Number(event.version || 0);
+      saveSocketDebugStatus({
+        socket: socket.connected ? "CONNECTED" : "DISCONNECTED",
+        gameServer: "OK",
+        serverVersion: eventVersion || currentVersion,
+        currentVersion,
+        tableId: sync.tableId,
+        gameId: sync.gameId,
+        userId: sync.userId,
+        lastAction: `event:${event.actionType || event.type || ""}`,
+        lastError: "",
+        lastServerProcessMs: event.serverProcessMs ?? "",
+      });
+      if (!eventVersion || eventVersion <= currentVersion) return;
+      saveOnlineSync({ ...latestSync, pendingServerVersion: eventVersion, lastEventAt: Date.now(), lastActionType: event.actionType || event.type || "" });
+      if (event.playerId === sync.userId) return;
+      if (this.socketEventResyncTimer) clearTimeout(this.socketEventResyncTimer);
+      this.socketEventResyncTimer = setTimeout(() => {
+        this.socketEventResyncTimer = null;
+        this.resyncSocketGameState(`event:${event.actionType || event.type || "stateChanged"}:${eventVersion}`).catch(() => {});
+      }, 40);
     });
     const sendInitialSocketState = async (reason = "needInitialState") => {
       if (this.socketInitialStateInFlight) return;
@@ -7762,9 +7790,10 @@ class GameView {
   scheduleTableRelayout({ force = false } = {}) {
     if (typeof window === "undefined") return;
     if (this.isResultConfirmationState() && !this.layoutAdjustmentSession) return;
+    const viewportSize = this.viewportCssSize();
     const viewport = {
-      width: Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0),
-      height: Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0),
+      width: Math.round(viewportSize.width),
+      height: Math.round(viewportSize.height),
     };
     const isMobileLandscape = viewport.width > viewport.height && (viewport.width <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
     if (isMobileLandscape && this.lastRelayoutViewport && !force) {
@@ -7901,11 +7930,17 @@ class GameView {
       left: number(style.paddingLeft),
     };
   }
+  viewportCssSize() {
+    const visual = window.visualViewport;
+    return {
+      width: Number(visual?.width ?? document.documentElement.clientWidth ?? 0),
+      height: Number(visual?.height ?? document.documentElement.clientHeight ?? 0),
+    };
+  }
   detectLayoutProfile(safeRect, insets) {
     const width = safeRect.width;
     const height = safeRect.height;
     const aspectRatio = width / Math.max(1, height);
-    const dpr = window.devicePixelRatio || 1;
     const standaloneMode =
       window.matchMedia?.("(display-mode: standalone)")?.matches ||
       window.navigator.standalone === true ||
@@ -7913,7 +7948,6 @@ class GameView {
     const profile = {
       width,
       height,
-      dpr,
       aspectRatio,
       standaloneMode,
       safeAreaInsets: insets,
@@ -7922,7 +7956,7 @@ class GameView {
     const profiles = [
       {
         name: "iphoneSELandscape",
-        match: (item) => item.height <= 380 && item.dpr >= 2,
+        match: (item) => item.height <= 380,
         adjustment: { globalScale: 0.9, centerOffsetY: -2, bottomHandOffsetY: 4, rightHandOffsetX: -10, topHandOffsetY: 4, meldGapScale: 0.8 },
       },
       {
@@ -8077,10 +8111,7 @@ class GameView {
     return { ok: failures.length === 0, failures };
   }
   calculateSafeTableLayout() {
-    const viewport = {
-      width: window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0,
-      height: window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0,
-    };
+    const viewport = this.viewportCssSize();
     const insets = this.safeAreaInsets();
     const availableRect = {
       x: insets.left,
@@ -8088,14 +8119,13 @@ class GameView {
       width: Math.max(1, viewport.width - insets.left - insets.right),
       height: Math.max(1, viewport.height - insets.top - insets.bottom),
     };
+    const scale = Math.min(
+      availableRect.width / MOBILE_VIRTUAL_LAYOUT_WIDTH,
+      availableRect.height / MOBILE_VIRTUAL_LAYOUT_HEIGHT,
+    );
     const virtualAspect = MOBILE_VIRTUAL_LAYOUT_WIDTH / MOBILE_VIRTUAL_LAYOUT_HEIGHT;
-    const availableAspect = availableRect.width / Math.max(1, availableRect.height);
-    const virtualWidth = availableAspect > virtualAspect
-      ? availableRect.height * virtualAspect
-      : availableRect.width;
-    const virtualHeight = availableAspect > virtualAspect
-      ? availableRect.height
-      : availableRect.width / virtualAspect;
+    const virtualWidth = MOBILE_VIRTUAL_LAYOUT_WIDTH * scale;
+    const virtualHeight = MOBILE_VIRTUAL_LAYOUT_HEIGHT * scale;
     const safeRect = {
       x: availableRect.x + (availableRect.width - virtualWidth) / 2,
       y: availableRect.y + (availableRect.height - virtualHeight) / 2,
@@ -8105,6 +8135,7 @@ class GameView {
       virtualWidth: MOBILE_VIRTUAL_LAYOUT_WIDTH,
       virtualHeight: MOBILE_VIRTUAL_LAYOUT_HEIGHT,
       virtualAspect,
+      scale,
     };
     const profile = this.detectLayoutProfile(safeRect, insets);
     let fallback = null;
@@ -8166,24 +8197,25 @@ class GameView {
     table.classList.toggle("layout-debug", localStorage.getItem("anmikaLayoutDebug") === "1");
   }
   layoutDeviceKey(layout = null) {
-    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
-    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
-    const dpr = Math.round((window.devicePixelRatio || 1) * 10) / 10;
+    const viewport = this.viewportCssSize();
+    const viewportWidth = Math.round(viewport.width);
+    const viewportHeight = Math.round(viewport.height);
     const standalone =
       window.matchMedia?.("(display-mode: standalone)")?.matches ||
       window.navigator.standalone === true ||
       document.documentElement.dataset.pwa === "standalone";
     const orientation = viewportWidth >= viewportHeight ? "landscape" : "portrait";
     const profile = layout?.profile?.name || "auto";
-    return `${orientation}:w${viewportWidth}:h${viewportHeight}:dpr${dpr}:${standalone ? "standalone" : "browser"}:${profile}`;
+    return `${orientation}:w${viewportWidth}:h${viewportHeight}:${standalone ? "standalone" : "browser"}:${profile}`;
   }
   layoutDeviceFamily() {
-    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
+    const viewportWidth = Math.round(this.viewportCssSize().width);
     return viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches ? "mobile" : "desktop";
   }
   sharedLayoutDeviceKey(options = {}) {
-    const viewportWidth = Math.round(window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0);
-    const viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0);
+    const viewport = this.viewportCssSize();
+    const viewportWidth = Math.round(viewport.width);
+    const viewportHeight = Math.round(viewport.height);
     const orientation = viewportWidth >= viewportHeight ? "landscape" : "portrait";
     const family = options.family === "desktop" || options.family === "mobile" ? options.family : this.layoutDeviceFamily();
     return `${family}:${orientation}`;
@@ -8194,8 +8226,9 @@ class GameView {
     return String(userId || CURRENT_USER_ID).replace(/[^A-Za-z0-9_-]/g, "_");
   }
   shouldUseSafeTableLayout() {
-    const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
-    const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+    const viewport = this.viewportCssSize();
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
     return viewportWidth > viewportHeight && (viewportWidth <= 940 || window.matchMedia?.("(pointer: coarse)")?.matches);
   }
   mobileTableFitClasses() {
@@ -8616,8 +8649,8 @@ class GameView {
     const safeRect = {
       left: Number.parseFloat(table.style.getPropertyValue("--layout-safe-x") || "0"),
       top: Number.parseFloat(table.style.getPropertyValue("--layout-safe-y") || "0"),
-      width: Number.parseFloat(table.style.getPropertyValue("--layout-safe-width") || window.innerWidth || "0"),
-      height: Number.parseFloat(table.style.getPropertyValue("--layout-safe-height") || window.innerHeight || "0"),
+      width: Number.parseFloat(table.style.getPropertyValue("--layout-safe-width") || String(this.viewportCssSize().width) || "0"),
+      height: Number.parseFloat(table.style.getPropertyValue("--layout-safe-height") || String(this.viewportCssSize().height) || "0"),
     };
     safeRect.right = safeRect.left + safeRect.width;
     safeRect.bottom = safeRect.top + safeRect.height;
@@ -8776,8 +8809,9 @@ class GameView {
     const panelPositionKey = "anmikaLayoutAdjustmentPanelPosition";
     const clampPanelPosition = (left, top) => {
       const rect = panel.getBoundingClientRect();
-      const maxLeft = Math.max(0, (window.innerWidth || document.documentElement.clientWidth || 0) - rect.width - 4);
-      const maxTop = Math.max(0, (window.innerHeight || document.documentElement.clientHeight || 0) - rect.height - 4);
+      const viewport = this.viewportCssSize();
+      const maxLeft = Math.max(0, viewport.width - rect.width - 4);
+      const maxTop = Math.max(0, viewport.height - rect.height - 4);
       return {
         left: Math.max(4, Math.min(maxLeft, Number(left) || 4)),
         top: Math.max(4, Math.min(maxTop, Number(top) || 4)),
@@ -9150,8 +9184,9 @@ class GameView {
         a.right > b.left - pad &&
         a.top < b.bottom + pad &&
         a.bottom > b.top - pad;
-      const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
-      const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+      const viewport = this.viewportCssSize();
+      const viewportWidth = Math.max(0, viewport.width);
+      const viewportHeight = Math.max(0, viewport.height);
       const rectOf = (selector) => {
         const element = table.querySelector(selector);
         if (!element) return null;

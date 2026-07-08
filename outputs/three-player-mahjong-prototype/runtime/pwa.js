@@ -6,9 +6,15 @@
     Boolean(document.fullscreenElement || document.webkitFullscreenElement);
   const isPseudoFullscreen = () =>
     document.documentElement.dataset.fullscreenFallback === "on";
-  const isLandscape = () =>
-    window.matchMedia?.("(orientation: landscape)")?.matches ||
-    window.innerWidth > window.innerHeight;
+  const viewportSize = () => ({
+    width: Math.round(window.visualViewport?.width ?? document.documentElement.clientWidth ?? 0),
+    height: Math.round(window.visualViewport?.height ?? document.documentElement.clientHeight ?? 0),
+  });
+  const isLandscape = () => {
+    const viewport = viewportSize();
+    return window.matchMedia?.("(orientation: landscape)")?.matches ||
+      viewport.width > viewport.height;
+  };
   const isGameScreen = () =>
     document.documentElement.dataset.gameScreen === "on" ||
     document.body.dataset.gameScreen === "on" ||
@@ -31,8 +37,9 @@
   };
   let stableViewport = null;
   const updateViewportSize = ({ force = false } = {}) => {
-    let height = Math.round(window.visualViewport?.height || window.innerHeight);
-    let width = Math.round(window.visualViewport?.width || window.innerWidth);
+    const viewport = viewportSize();
+    let height = viewport.height;
+    let width = viewport.width;
     const gameLandscape = isGameScreen() && isMobile() && (width > height || isLandscape());
     if (gameLandscape && stableViewport && stableViewport.orientation === "landscape" && !force) {
       const widthDelta = Math.abs(width - stableViewport.width);

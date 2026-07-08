@@ -3212,12 +3212,9 @@ button:hover {
   html[data-fullscreen="on"],
   html[data-fullscreen="on"] body,
   body[data-fullscreen="on"] .app-shell:has(.mahjong-table) {
-    height: 100vh;
     height: var(--anmika-viewport-height, 100dvh);
-    max-height: 100vh;
     max-height: var(--anmika-viewport-height, 100dvh);
     overflow: hidden;
-    width: 100vw;
     width: var(--anmika-viewport-width, 100vw);
   }
 

@@ -43,6 +43,11 @@ const serverDiagnostics = {
   lastException: null,
   lastGameStateSyncFailure: null,
   lastReplaySave: null,
+  eventsSent: 0,
+  statesSent: 0,
+  bytesSent: 0,
+  actionCount: 0,
+  actionTotalMs: 0,
 };
 
 const now = () => Date.now();
@@ -106,6 +111,20 @@ const compactMemoryUsage = () => {
   try {
     const usage = process.memoryUsage();
     return Object.fromEntries(Object.entries(usage).map(([key, value]) => [key, Math.round(Number(value || 0) / 1024 / 1024)]));
+  } catch {
+    return {};
+  }
+};
+const compactCpuUsage = () => {
+  try {
+    const elapsedMicros = Math.max(1, (Date.now() - serverDiagnostics.startedAt) * 1000);
+    const usage = process.cpuUsage();
+    const usedMicros = Number(usage.user || 0) + Number(usage.system || 0);
+    return {
+      userMs: Math.round(Number(usage.user || 0) / 1000),
+      systemMs: Math.round(Number(usage.system || 0) / 1000),
+      averagePercentOneCore: Math.round((usedMicros / elapsedMicros) * 1000) / 10,
+    };
   } catch {
     return {};
   }
@@ -191,6 +210,11 @@ const getAnmikaServerDiagnostics = () => ({
   ok: true,
   socketIo: Boolean(io),
   rooms: gameRooms.size,
+  connections: io?.engine?.clientsCount || 0,
+  eventsSent: serverDiagnostics.eventsSent,
+  statesSent: serverDiagnostics.statesSent,
+  approxBytesSent: serverDiagnostics.bytesSent,
+  averageActionMs: serverDiagnostics.actionCount ? Math.round((serverDiagnostics.actionTotalMs / serverDiagnostics.actionCount) * 10) / 10 : 0,
   activeReplaySnapshots: [...gameRooms.values()].map((room) => ({
     tableId: room.tableId,
     gameId: room.gameId,
@@ -202,6 +226,7 @@ const getAnmikaServerDiagnostics = () => ({
   replayJson: getReplayJsonDiagnostics(),
   uptimeMs: Date.now() - serverDiagnostics.startedAt,
   memoryMb: compactMemoryUsage(),
+  cpu: compactCpuUsage(),
   lastException: serverDiagnostics.lastException,
   lastGameStateSyncFailure: serverDiagnostics.lastGameStateSyncFailure,
   lastReplaySave: serverDiagnostics.lastReplaySave,
@@ -325,6 +350,36 @@ const publicRoomState = (room, viewerId = null) => ({
   eventCount: room.events.length,
   connections: roomPlayerConnectionList(room),
 });
+const estimateJsonBytes = (value) => {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return 0;
+  }
+};
+const roomLightEvent = (room, event, extra = {}) => ({
+  id: event?.id || `event-${randomUUID()}`,
+  type: event?.actionType || event?.type || "stateChanged",
+  actionType: event?.actionType || "",
+  playerId: event?.playerId || "",
+  tableId: room?.tableId || event?.tableId || "",
+  gameId: room?.gameId || event?.gameId || "",
+  version: Number(room?.version || room?.state?.version || event?.version || 0),
+  turnIndex: Number(room?.state?.turnIndex || 0),
+  phase: room?.state?.phase || "",
+  handId: room?.state?.handLog?.handId || "",
+  resultId: getCurrentResultId(room?.state) || "",
+  createdAt: event?.createdAt || now(),
+  ...extra,
+});
+const emitRoomLightEvent = (room, event, extra = {}) => {
+  if (!room || room.stopped) return null;
+  const payload = roomLightEvent(room, event, extra);
+  serverDiagnostics.eventsSent += 1;
+  serverDiagnostics.bytesSent += estimateJsonBytes(payload) * Math.max(1, room.sockets?.size || 1);
+  io.to(`table:${room.tableId}`).emit("game:event", payload);
+  return payload;
+};
 
 const playerRecordsFromState = (state) => {
   const seats = asArray(state?.seats);
@@ -6104,7 +6159,10 @@ const broadcastState = (room) => {
   if (!room || room.stopped) return;
   for (const [socketId, meta] of room.sockets.entries()) {
     try {
-      io.to(socketId).emit("game:state", publicRoomState(room, meta?.userId || null));
+      const payload = publicRoomState(room, meta?.userId || null);
+      serverDiagnostics.statesSent += 1;
+      serverDiagnostics.bytesSent += estimateJsonBytes(payload);
+      io.to(socketId).emit("game:state", payload);
     } catch (error) {
       const exceptionId = logServerException("game:state:broadcast", error, {
         tableId: room?.tableId,
@@ -6141,7 +6199,7 @@ const scheduleStartupStateBurst = (room, reason = "startupBurst") => {
           publishedBy: null,
           publishedAt: now(),
         };
-        broadcastState(current);
+        emitRoomLightEvent(current, { type: "stateChanged", actionType: reason, createdAt: now() }, { burst: true });
       } catch (error) {
         logServerException("game:startupBurst", error, { tableId, gameId, version });
       }
@@ -6166,7 +6224,7 @@ const scheduleStateBroadcastBurst = (room, reason = "stateBurst") => {
           publishedBy: null,
           publishedAt: now(),
         };
-        broadcastState(current);
+        emitRoomLightEvent(current, { type: "stateChanged", actionType: reason, createdAt: now() }, { burst: true });
       } catch (error) {
         logServerException("game:stateBurst", error, { tableId, gameId, version, reason });
       }
@@ -6625,6 +6683,7 @@ io.on("connection", (socket) => {
   socket.on("game:action", async (payload = {}, ack) => {
     let room = null;
     let playerIdForAck = payload?.playerId || socket.data.userId || null;
+    const actionStartedAt = now();
     try {
       const { tableId, gameId, playerId, actionType, turnVersion, payload: rawActionPayload } = payload;
       let actionPayload = rawActionPayload;
@@ -6766,8 +6825,10 @@ io.on("connection", (socket) => {
           room.processedRequestIds = new Set([...room.processedRequestIds].slice(-300));
         }
       }
-      io.to(`table:${room.tableId}`).emit("game:event", event);
-      broadcastState(room);
+      const actionElapsedMs = now() - actionStartedAt;
+      serverDiagnostics.actionCount += 1;
+      serverDiagnostics.actionTotalMs += actionElapsedMs;
+      emitRoomLightEvent(room, event, { serverProcessMs: actionElapsedMs });
       scheduleRoomServerEffect(room);
       scheduleRoomClockTimeout(room);
       scheduleRoomResultTimeout(room);
@@ -6775,7 +6836,7 @@ io.on("connection", (socket) => {
       if (ACTION_DEBUG_LOGS) {
         console.log("[Action] accepted", { tableId: room.tableId, gameId: room.gameId, playerId, actionType, serverVersion: room.version, phase: room.state?.phase });
       }
-      ack?.({ ok: true, event, ...publicRoomState(room, playerId) });
+      ack?.({ ok: true, event: roomLightEvent(room, event, { serverProcessMs: actionElapsedMs }), ...publicRoomState(room, playerId) });
       if (afterAckTask) {
         setTimeout(() => {
           afterAckTask().catch((error) =>

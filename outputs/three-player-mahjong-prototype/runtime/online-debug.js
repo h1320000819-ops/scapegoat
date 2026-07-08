@@ -5834,7 +5834,9 @@
     const serverException = state.gameServerProbe.lastException;
     const serverSyncFailure = state.gameServerProbe.lastGameStateSyncFailure;
     const socketExceptionAt = socketDebug.lastExceptionAt ? new Date(socketDebug.lastExceptionAt).toLocaleString("ja-JP") : "";
+    const diagnostics = state.gameServerProbe.diagnostics || {};
     const memory = state.gameServerProbe.memoryMb;
+    const cpu = diagnostics.cpu || {};
     const serverExceptionLine = serverException
       ? `${serverException.exceptionId || "no-id"} ${serverException.source || ""}: ${serverException.error?.message || ""}`
       : "なし";
@@ -5855,6 +5857,10 @@
       `Server Last Exception: ${serverExceptionLine}`,
       `GameState Sync Failure: ${syncFailureLine}`,
       `Server Memory: ${memoryLine}`,
+      `Server CPU: ${cpu.averagePercentOneCore ?? "未取得"}% / user=${cpu.userMs ?? "?"}ms system=${cpu.systemMs ?? "?"}ms`,
+      `Server Rooms: ${diagnostics.rooms ?? "未取得"} / Connections: ${diagnostics.connections ?? "未取得"}`,
+      `Server Events: sent=${diagnostics.eventsSent ?? "?"} states=${diagnostics.statesSent ?? "?"} bytes≈${diagnostics.approxBytesSent ?? "?"}`,
+      `Server Avg Action: ${diagnostics.averageActionMs ?? "未取得"}ms`,
       "",
       `Supabase URL: ${config.url || "未設定"}`,
       `Supabase: ${config.url && config.anonKey ? "OK" : "設定不足"}`,

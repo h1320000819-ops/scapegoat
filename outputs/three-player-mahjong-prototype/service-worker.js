@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260708-riichi-button-fix-a";
+const CACHE_NAME = "anmika-pwa-20260708-socket-light-events-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260708-riichi-button-fix-a",
-  "/runtime/app.js?v=20260708-riichi-button-fix-a",
-  "/runtime/online-debug.js?v=20260708-riichi-button-fix-a",
-  "/runtime/pwa.js?v=20260708-riichi-button-fix-a",
+  "/styles.css?v=20260708-socket-light-events-a",
+  "/runtime/app.js?v=20260708-socket-light-events-a",
+  "/runtime/online-debug.js?v=20260708-socket-light-events-a",
+  "/runtime/pwa.js?v=20260708-socket-light-events-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
