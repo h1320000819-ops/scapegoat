@@ -633,7 +633,7 @@ const applyDisconnectedGraceActions = (room, playerIds = []) => {
     const active = currentPlayer(room.state);
     if (active?.id !== playerId) continue;
     if (room.state.phase === "waitingForRiichiDiscard") {
-      const tileId = pickServerRiichiTimeoutDiscardTileId(player);
+      const tileId = pickServerRiichiTimeoutDiscardTileId(room.state, player);
       if (!tileId) continue;
       applyServerRiichiDiscard(room.state, player, tileId);
       appendHandEvent(room.state, { type: "disconnectedGraceRiichiDiscard", playerId, tile: player.discardedTiles?.at(-1)?.tile || null, turnIndex: room.state.turnIndex ?? 0 });
@@ -4199,7 +4199,7 @@ const resolveServerPochiWin = (state, player, pochiTile, winType = "tsumo", lose
   }
   return best;
 };
-const getServerRiichiDiscardTileIds = (player) => {
+const getServerRiichiDiscardTileIds = (state, player) => {
   if (!player || player.type === "cpu" || player.isRiichi) return [];
   const hasOpenMeld = ensureArray(player.melds).some((meld) => meld?.type !== "ankan");
   if (hasOpenMeld && !hasTurquoise5pInHandOrMeldsServer(player)) return [];
@@ -4232,17 +4232,17 @@ const pickRandomServerTileId = (tileIds = []) => {
   if (!ids.length) return "";
   return ids[Math.floor(Math.random() * ids.length)] || "";
 };
-const getServerRiichiTimeoutDiscardTileIds = (player) => {
-  const recalculatedTileIds = getServerRiichiDiscardTileIds(player);
+const getServerRiichiTimeoutDiscardTileIds = (state, player) => {
+  const recalculatedTileIds = getServerRiichiDiscardTileIds(state, player);
   if (!recalculatedTileIds.length) return [];
   const recalculatedSet = new Set(recalculatedTileIds);
   const storedTileIds = ensureArray(player?.riichiDiscardTileIds).filter((tileId) => recalculatedSet.has(tileId));
   return storedTileIds.length ? [...new Set(storedTileIds)] : recalculatedTileIds;
 };
-const pickServerRiichiTimeoutDiscardTileId = (player) => pickRandomServerTileId(getServerRiichiTimeoutDiscardTileIds(player));
+const pickServerRiichiTimeoutDiscardTileId = (state, player) => pickRandomServerTileId(getServerRiichiTimeoutDiscardTileIds(state, player));
 const queueServerDiscardTurnOptions = (state, player, source = { type: "discardTurn" }) => {
   if (!player || player.type === "cpu" || player.isRiichi) return false;
-  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(state, player);
   if (!riichiDiscardTileIds.length) {
     console.log("[PonRiichi] unavailable", {
       tableId: state.tableId,
@@ -4371,7 +4371,7 @@ const queueServerSelfDrawOptions = (state, player) => {
   if (player.isRiichi && canKanNow) {
     if (riichiAnkanTile) options.push({ type: "kan", playerId: player.id, sourceTile: riichiAnkanTile, tile: riichiAnkanTile, options: { kanType: "ankan" } });
   }
-  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(state, player);
   if (riichiDiscardTileIds.length > 0) {
     player.riichiDiscardTileIds = riichiDiscardTileIds;
     options.push({ type: "riichi", playerId: player.id, options: { discardTileIds: riichiDiscardTileIds } });
@@ -4832,7 +4832,7 @@ const discardForServer = (state, player, tileId, { isRiichiDiscard = false, reso
   return tile;
 };
 const applyServerRiichiDiscard = (state, player, tileId) => {
-  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+  const riichiDiscardTileIds = getServerRiichiDiscardTileIds(state, player);
   if (!riichiDiscardTileIds.length) throw new Error("リーチできる打牌がありません");
   if (!tileId || !riichiDiscardTileIds.includes(tileId)) throw new Error("その牌ではリーチできません");
   player.riichiDiscardTileIds = riichiDiscardTileIds;
@@ -5115,7 +5115,7 @@ const applyServerAction = (state, event) => {
   }
 
   if (action === "riichi") {
-    const riichiDiscardTileIds = getServerRiichiDiscardTileIds(player);
+    const riichiDiscardTileIds = getServerRiichiDiscardTileIds(state, player);
     if (!riichiDiscardTileIds.length) throw new Error("リーチできる打牌がありません");
     if (payload.tileId && !riichiDiscardTileIds.includes(payload.tileId)) {
       throw new Error("その牌ではリーチできません");
@@ -5454,7 +5454,7 @@ const applyServerClockTimeout = (state) => {
   const active = currentPlayer(state);
   if (active?.id !== playerId) return false;
   if (state.phase === "waitingForRiichiDiscard") {
-    const riichiDiscardTileIds = getServerRiichiTimeoutDiscardTileIds(player);
+    const riichiDiscardTileIds = getServerRiichiTimeoutDiscardTileIds(state, player);
     const selectedTileId = riichiDiscardTileIds.includes(player.selectedRiichiDiscardTileId) ? player.selectedRiichiDiscardTileId : "";
     const tileId = selectedTileId || pickRandomServerTileId(riichiDiscardTileIds);
     if (!tileId) return false;
