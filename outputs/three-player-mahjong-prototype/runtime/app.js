@@ -145,11 +145,24 @@ const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.chipValuePoints,
   northNukiDoraEnabled: Boolean(config?.northNukiDoraEnabled),
   umaType: ["20-0--20", "30-0--30", "20-10--30"].includes(config?.umaType) ? config.umaType : DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.umaType,
+  rocket19Enabled: false,
+  baibaEnabled: false,
+  otokogiEnabled: false,
+  feverRiichiEnabled: false,
+  turquoise5pCount: 0,
 });
+const isTsumoLossless3maConfig = (config = {}) => Boolean(
+  config?.fiveTileComposition ||
+  config?.flowerComposition ||
+  config?.settlementTiming === "hanchan" ||
+  config?.noTsumoLoss === true
+);
 const normalizeRuleConfigForRule = (ruleId = "anmika-rocket", config = {}) =>
-  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
+  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || isTsumoLossless3maConfig(config) ? normalizeTsumoLossless3maRuleConfig(config) : normalizeAnmikaRocketRuleConfig(config);
 const isTsumoLossless3maState = (state) =>
-  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
+  state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID ||
+  isTsumoLossless3maConfig(state?.settings?.ruleConfig);
 const resultWinnerIds = (result) => result?.type === "win"
   ? [
     ...(Array.isArray(result.winners) ? result.winners.map((winner) => typeof winner === "string" ? winner : winner?.winnerId || winner?.playerId || winner?.id || "") : []),
@@ -3769,7 +3782,8 @@ class RuleEngine {
         yakuList: input.yaku,
         doraDetails,
         dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora },
-        bonuses: { honba: honba * 1000, chipPending: false },
+        bonuses: { honba: honba * 1000, chipPending: false, baiba: 0, rocket: 0 },
+        baibaDetails: { multiplier: 1, labels: [] },
         tsumoPayments: input.winType === "tsumo" ? { childPay, dealerPay } : null,
       };
     }
@@ -8002,8 +8016,8 @@ class GameView {
     const discardGap = clamp(discardTileW * 0.11 * Number(profile.adjustment?.discardGapScale || 1), 1, 3);
     const riverW = discardTileW * 8 + discardGap * 7;
     const riverH = discardTileH * 3 + discardGap * 2;
-    const centerW = clamp(width * 0.22, 142, 184) * scale;
-    const centerH = clamp(height * 0.25, 86, 112) * scale;
+    const centerW = clamp(width * 0.24, 150, 196) * scale;
+    const centerH = clamp(height * 0.29, 98, 132) * scale;
     const bottomLaneH = Math.max(selfTileH + 24, height * 0.19);
     const topLaneH = Math.max(otherTileH + 22, height * 0.13);
     const rightLaneW = clamp(otherTileW * 4 + edge * 3, 60, Math.min(116, width * 0.16));

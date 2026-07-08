@@ -2955,12 +2955,25 @@ const normalizeTsumoLossless3maRuleConfig = (config = {}) => ({
   chipValuePoints: [2000, 5000, 10000].includes(Number(config?.chipValuePoints)) ? Number(config.chipValuePoints) : 5000,
   northNukiDoraEnabled: Boolean(config?.northNukiDoraEnabled),
   umaType: ["20-0--20", "30-0--30", "20-10--30"].includes(config?.umaType) ? config.umaType : "20-0--20",
+  rocket19Enabled: false,
+  baibaEnabled: false,
+  otokogiEnabled: false,
+  feverRiichiEnabled: false,
+  turquoise5pCount: 0,
 });
+const isTsumoLossless3maConfig = (config = {}) => Boolean(
+  config?.fiveTileComposition ||
+  config?.flowerComposition ||
+  config?.settlementTiming === "hanchan" ||
+  config?.noTsumoLoss === true
+);
 const normalizeRuleConfigForRule = (ruleId, config = {}) =>
-  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? normalizeTsumoLossless3maRuleConfig(config) : normalizeRuleConfig(config);
+  ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || isTsumoLossless3maConfig(config) ? normalizeTsumoLossless3maRuleConfig(config) : normalizeRuleConfig(config);
 
 const isTsumoLossless3maState = (state) =>
-  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID;
+  state?.settings?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ||
+  state?.settings?.gameType === TSUMO_LOSSLESS_3MA_RULE_ID ||
+  isTsumoLossless3maConfig(state?.settings?.ruleConfig);
 const startingScoreForRule = (ruleId, ruleConfig = {}) =>
   ruleId === TSUMO_LOSSLESS_3MA_RULE_ID ? Number(ruleConfig?.startingScore ?? DEFAULT_TSUMO_LOSSLESS_3MA_RULE_CONFIG.startingScore) : 0;
 const isNorthNukiTile = (state, tile) =>
@@ -4114,9 +4127,10 @@ const calculateServerScoreResult = (state, player, winType, tile, loserId, yaku,
         uraDora ? { name: "裏ドラ", han: uraDora } : null,
       ].filter(Boolean),
       dora: { normal: normalDora, colored, nuki, visible: visibleDora, ura: uraDora },
-      bonuses: { honba: honba * 1000, chipPending: false },
+      bonuses: { honba: honba * 1000, chipPending: false, baiba: 0, rocket: 0 },
       chipSettlement: null,
       baibaMultiplier: 1,
+      baibaDetails: { multiplier: 1, conditionCount: 0, hasBaiba: false, hasSpecialUra: false, hasRedOrBluePochiTsumo: false, pochiColor: null, labels: [] },
       payments,
       paymentDeltas: Object.entries(payments).map(([playerId, delta]) => ({ playerId, delta })),
       winnerGain: payments[player.id] || 0,

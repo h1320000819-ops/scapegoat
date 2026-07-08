@@ -342,14 +342,25 @@ button:hover {
 }
 
 .center-info {
+  --center-inner-padding: clamp(2px, calc(var(--center-info-height) * 0.045), 8px);
+  --center-round-font: clamp(8px, calc(var(--center-info-height) * 0.105), 15px);
+  --center-score-font: clamp(6px, calc(var(--center-info-height) * 0.073), 10px);
+  --center-role-font: clamp(5px, calc(var(--center-info-height) * 0.068), 10px);
+  --center-wall-font: clamp(6px, calc(var(--center-info-height) * 0.078), 11px);
+  --center-dora-label-font: clamp(6px, calc(var(--center-info-height) * 0.07), 10px);
+  --center-dora-tile-height: clamp(14px, calc(var(--center-info-height) * 0.21), 31px);
+  --center-dora-tile-width: calc(var(--center-dora-tile-height) * 0.71);
   background: rgba(7, 14, 22, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto minmax(0, auto) auto minmax(0, 1fr);
   height: var(--center-info-height);
   left: 50%;
   overflow: hidden;
-  padding: 8px;
+  padding: var(--center-inner-padding);
   position: absolute;
   text-align: center;
   top: calc(50% + var(--center-y-offset));
@@ -359,16 +370,20 @@ button:hover {
 }
 
 .center-info-allred {
-  height: calc(var(--center-info-height) + 18px);
+  height: var(--center-info-height);
 }
 
 .round-label {
   color: #62e6ee;
-  font-size: 15px;
+  font-size: var(--center-round-font);
   font-weight: 800;
   letter-spacing: 0;
   line-height: 1;
-  margin-bottom: 6px;
+  margin-bottom: clamp(1px, calc(var(--center-info-height) * 0.035), 6px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .round-baiba-label {
@@ -385,10 +400,12 @@ button:hover {
 
 .center-scores {
   display: grid;
-  font-size: 10px;
-  gap: 2px;
+  font-size: var(--center-score-font);
+  gap: clamp(1px, calc(var(--center-info-height) * 0.014), 2px);
   list-style: none;
-  margin: 0 0 6px;
+  margin: 0 0 clamp(1px, calc(var(--center-info-height) * 0.035), 6px);
+  min-height: 0;
+  overflow: hidden;
   padding: 0;
 }
 
@@ -419,11 +436,11 @@ button:hover {
   border-radius: 999px;
   color: #2f2100;
   display: inline-flex;
-  font-size: 10px;
+  font-size: var(--center-role-font);
   font-style: normal;
   font-weight: 900;
   line-height: 1;
-  padding: 3px 6px;
+  padding: clamp(1px, calc(var(--center-info-height) * 0.02), 3px) clamp(3px, calc(var(--center-info-height) * 0.04), 6px);
 }
 
 .dealer-score {
@@ -433,12 +450,12 @@ button:hover {
 .center-wall {
   display: flex;
   flex-direction: column;
-  font-size: 11px;
+  font-size: var(--center-wall-font);
   font-weight: 800;
   gap: 2px;
   justify-content: center;
   line-height: 1.15;
-  min-width: 48px;
+  min-width: clamp(28px, calc(var(--center-info-width) * 0.22), 48px);
   text-align: left;
 }
 
@@ -446,10 +463,12 @@ button:hover {
   align-items: start;
   border-top: 1px solid rgba(255, 255, 255, 0.18);
   display: grid;
-  gap: 7px;
+  gap: clamp(3px, calc(var(--center-info-width) * 0.03), 7px);
   grid-template-columns: max-content minmax(0, 1fr);
-  margin-top: 4px;
-  padding-top: 4px;
+  margin-top: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: clamp(1px, calc(var(--center-info-height) * 0.027), 4px);
 }
 
 .center-dora {
@@ -458,15 +477,19 @@ button:hover {
   gap: 3px;
   justify-content: start;
   line-height: 1;
-  min-height: 42px;
+  min-height: 0;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .center-dora > span {
   color: #b9d5ce;
-  font-size: 10px;
+  font-size: var(--center-dora-label-font);
   font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .center-dora-tiles {
@@ -475,9 +498,9 @@ button:hover {
   flex-wrap: nowrap;
   gap: 2px;
   justify-content: flex-start;
-  min-height: 34px;
+  min-height: 0;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .center-baiba {
@@ -1066,15 +1089,16 @@ button:hover {
 }
 
 .center-dora .tile {
-  height: 31px;
-  min-width: 22px;
+  height: var(--center-dora-tile-height);
+  min-width: var(--center-dora-tile-width);
+  width: var(--center-dora-tile-width);
 }
 
 .center-dora .tile-image,
 .center-dora .tile-fallback {
-  height: 31px;
-  min-width: 22px;
-  width: 22px;
+  height: var(--center-dora-tile-height);
+  min-width: var(--center-dora-tile-width);
+  width: var(--center-dora-tile-width);
 }
 
 .discard.tsumogiri,
@@ -3364,6 +3388,7 @@ button:hover {
   .center-info {
     border-radius: 6px;
     font-size: 6px;
+    height: var(--center-info-height);
     min-height: var(--center-info-height);
     max-height: none;
     overflow: hidden;
@@ -3373,7 +3398,8 @@ button:hover {
   }
 
   .center-info-allred {
-    min-height: calc(var(--center-info-height) + 14px);
+    height: var(--center-info-height);
+    min-height: var(--center-info-height);
   }
 
   .round-label {
@@ -3422,8 +3448,8 @@ button:hover {
     display: grid;
     gap: 1px;
     justify-content: start;
-    min-height: 18px;
-    overflow: visible;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .center-dora > span {
@@ -3433,17 +3459,17 @@ button:hover {
 
   .center-dora-tiles {
     align-items: flex-start;
-    min-height: 14px;
-    overflow: visible;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .center-dora .tile,
   .center-dora .tile-button,
   .center-dora .tile-image,
   .center-dora .tile-fallback {
-    height: 20px;
-    min-width: 14px;
-    width: 14px;
+    height: var(--center-dora-tile-height);
+    min-width: var(--center-dora-tile-width);
+    width: var(--center-dora-tile-width);
   }
 
   .discard-area {
