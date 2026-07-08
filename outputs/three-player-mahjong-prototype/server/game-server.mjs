@@ -1056,6 +1056,16 @@ const clearRoomSeatsAndPlayersAfterUnfilledContinuation = async (room, reason = 
   room.lastHandLeaveSyncedUserIds = new Set();
   room.disconnectedLeaveSyncedUserIds = new Set();
   room.pendingDisconnectedStatePlayerLeaveUserIds = new Set();
+  room.state.phase = "gameEnded";
+  room.state.finalResult ??= {
+    createdAt: now(),
+    reason,
+    finalScores: {},
+    settlement: null,
+  };
+  room.state.handLog ??= { handId: `socket-${room.state.activeTableId || room.state.tableId || "table"}-${Date.now()}`, events: [] };
+  room.state.handLog.result ??= { type: "gameEnded", reason };
+  room.state.handLog.result.finalResult ??= room.state.finalResult;
   appendHandEvent(room.state, { type: "tableClosedAfterUnfilledContinuation", reason, turnIndex: room.state.turnIndex ?? 0 });
   if (hasSupabaseServerWriter() && isUuid(tableId)) {
     await supabaseRest(`/table_seats?table_id=eq.${encodeURIComponent(tableId)}`, {
@@ -1079,8 +1089,27 @@ const clearRoomSeatsAndPlayersAfterUnfilledContinuation = async (room, reason = 
     }).catch((error) => console.warn("[Tables] mark waiting after clear failed", { tableId, reason, error: error?.message || String(error) }));
   }
   room.updatedAt = now();
+  room.version = Number(room.version || 0) + 1;
+  room.state.version = room.version;
+  room.state.onlineMeta = {
+    ...(room.state.onlineMeta || {}),
+    transport: "socket.io",
+    reason,
+    publishedBy: null,
+    publishedAt: now(),
+  };
+  broadcastState(room);
   stopAndForgetRoom(room, reason);
   return true;
+};
+const declaredLastHandPlayerIds = (state) => {
+  const ids = [
+    ...asArray(state?.lastHandDeclaredBy),
+    ...normalizeServerSeats(state?.seats)
+      .filter((seat) => Boolean(seat?.isLastHandDeclared ?? seat?.is_last_hand_declared))
+      .map((seat) => seat.playerId || seat.userId || seat.user_id),
+  ].filter(Boolean);
+  return [...new Set(ids)];
 };
 const nextHanchanPlayersFromSeats = (state) => {
   const seats = normalizeServerSeats(state?.seats);
@@ -1135,6 +1164,23 @@ const mergeJoinedPlayerProfile = (room, userId, profile = {}) => {
 const startNextRoomGameFromSeatsIfReady = async (room, { reason = "nextGameAutoStart", requireTsumoLossless = false } = {}) => {
   if (!room?.state || room.state.phase !== "gameEnded") return false;
   if (requireTsumoLossless && !isTsumoLossless3maState(room.state)) return false;
+  const lastHandPlayerIds = declaredLastHandPlayerIds(room.state);
+  if (lastHandPlayerIds.length > 0) {
+    appendHandEvent(room.state, {
+      type: "lastHandTableDissolved",
+      playerIds: lastHandPlayerIds,
+      reason,
+      turnIndex: room.state.turnIndex ?? 0,
+    });
+    console.warn("[LastHand] table dissolved after game end", {
+      tableId: room.tableId,
+      gameId: room.gameId,
+      reason,
+      playerIds: lastHandPlayerIds,
+    });
+    await clearRoomSeatsAndPlayersAfterUnfilledContinuation(room, `${reason}:lastHandDissolve`);
+    return false;
+  }
   const previousHumanPlayerIds = asArray(room.state.players)
     .filter((player) => player?.id && player.type !== "cpu" && isUuid(player.id))
     .map((player) => player.id);
@@ -2878,7 +2924,9 @@ const queueResultSideEffectsOnce = (room, resultId, reason = "resultOk") => {
   if (room.resultSideEffectQueuedIds.has(resultId)) return false;
   room.resultSideEffectQueuedIds.add(resultId);
   room.resultPointSyncResultId = resultId;
-  queueReplayEffectsSnapshot(room);
+  if (!isTsumoLossless3maState(room.state)) {
+    queueReplayEffectsSnapshot(room);
+  }
   setTimeout(() => {
     try {
       safeSyncClubPointEffects(room, reason);

@@ -348,7 +348,7 @@ button:hover {
   --center-role-font: clamp(5px, calc(var(--center-info-height) * 0.068), 10px);
   --center-wall-font: clamp(6px, calc(var(--center-info-height) * 0.078), 11px);
   --center-dora-label-font: clamp(6px, calc(var(--center-info-height) * 0.07), 10px);
-  --center-dora-tile-height: clamp(14px, calc(var(--center-info-height) * 0.21), 31px);
+  --center-dora-tile-height: clamp(12px, calc(var(--center-info-height) * 0.165), 24px);
   --center-dora-tile-width: calc(var(--center-dora-tile-height) * 0.71);
   background: rgba(7, 14, 22, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -356,7 +356,7 @@ button:hover {
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto minmax(0, auto) auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, auto) auto minmax(0, max-content);
   height: var(--center-info-height);
   left: 50%;
   overflow: hidden;
@@ -460,7 +460,7 @@ button:hover {
 }
 
 .center-bottom-info {
-  align-items: start;
+  align-items: center;
   border-top: 1px solid rgba(255, 255, 255, 0.18);
   display: grid;
   gap: clamp(3px, calc(var(--center-info-width) * 0.03), 7px);
@@ -468,13 +468,13 @@ button:hover {
   margin-top: 0;
   min-height: 0;
   overflow: hidden;
-  padding-top: clamp(1px, calc(var(--center-info-height) * 0.027), 4px);
+  padding-top: clamp(1px, calc(var(--center-info-height) * 0.018), 3px);
 }
 
 .center-dora {
-  align-items: start;
+  align-items: center;
   display: grid;
-  gap: 3px;
+  gap: 1px;
   justify-content: start;
   line-height: 1;
   min-height: 0;
@@ -493,7 +493,7 @@ button:hover {
 }
 
 .center-dora-tiles {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   flex-wrap: nowrap;
   gap: 2px;
@@ -3436,7 +3436,7 @@ button:hover {
   }
 
   .center-bottom-info {
-    align-items: start;
+    align-items: center;
     gap: 3px;
     grid-template-columns: 34px minmax(0, 1fr);
     margin-top: 0;
@@ -3444,7 +3444,7 @@ button:hover {
   }
 
   .center-dora {
-    align-items: start;
+    align-items: center;
     display: grid;
     gap: 1px;
     justify-content: start;
@@ -3458,7 +3458,7 @@ button:hover {
   }
 
   .center-dora-tiles {
-    align-items: flex-start;
+    align-items: center;
     min-height: 0;
     overflow: hidden;
   }

@@ -4675,7 +4675,7 @@
   };
   const replayRuleName = (summary = {}) => {
     const ruleId = summary.ruleId || summary.rule_id || summary.gameType || "";
-    if (ruleId === "tsumo-lossless-3ma") return "全赤三麻";
+    if (ruleId === "tsumo-lossless-red-3ma" || ruleId === "tsumo-lossless-3ma") return "全赤三麻";
     if (ruleId === "anmika-rocket") return "アンミカロケット";
     return summary.ruleName || summary.rule_name || ruleId || "ルール不明";
   };
@@ -4695,6 +4695,45 @@
     .map((player) => player.name || player.displayName || player.id)
     .filter(Boolean)
     .join(" / ") || "対局者不明";
+  const isTsumoLosslessReplaySummary = (summary = {}) => {
+    const ruleId = summary.ruleId || summary.rule_id || summary.gameType || "";
+    return ruleId === "tsumo-lossless-red-3ma" || ruleId === "tsumo-lossless-3ma" || String(summary.ruleName || summary.rule_name || "").includes("全赤");
+  };
+  const replaySummaryRank = (row = {}) => {
+    const summary = row.summary || {};
+    return [
+      summary.scope === "hanchan" ? 1 : 0,
+      Number(summary.handMarkers?.length || 0),
+      Number(summary.eventCount || 0),
+      Number(summary.snapshotCount || 0),
+      Date.parse(summary.endedAt || row.created_at || "") || 0,
+    ];
+  };
+  const preferReplayRow = (candidate, current) => {
+    if (!current) return candidate;
+    const a = replaySummaryRank(candidate);
+    const b = replaySummaryRank(current);
+    for (let index = 0; index < a.length; index++) {
+      if (a[index] !== b[index]) return a[index] > b[index] ? candidate : current;
+    }
+    return candidate;
+  };
+  const collapseTsumoLosslessReplayRows = (rows = []) => {
+    const grouped = new Map();
+    const singles = [];
+    for (const row of asArray(rows)) {
+      const summary = row.summary || {};
+      if (!isTsumoLosslessReplaySummary(summary) || !(summary.gameId || row.game_id)) {
+        singles.push(row);
+        continue;
+      }
+      const key = ["allred", summary.clubId || row.club_id || "", summary.tableId || row.table_id || "", summary.gameId || row.game_id || ""].join(":");
+      grouped.set(key, preferReplayRow(row, grouped.get(key)));
+    }
+    return [...singles, ...grouped.values()].sort((a, b) =>
+      (Date.parse(b.summary?.endedAt || b.created_at || "") || 0) - (Date.parse(a.summary?.endedAt || a.created_at || "") || 0)
+    );
+  };
   const replaySummaryIncludesCurrentUser = (summary = {}) => {
     const userId = state.user?.id || "";
     if (!userId) return false;
@@ -4847,7 +4886,7 @@
         if (!raw.includes("get_my_replays") && !raw.includes("schema cache") && !raw.includes("Could not find the function")) throw error;
         rows = await rest("/replays?select=replay_id,club_id,table_id,game_id,summary,created_at&order=created_at.desc&limit=300");
       }
-      rows = asArray(rows).filter((row) => canCurrentUserReadReplaySummary(row)).slice(0, 300);
+      rows = collapseTsumoLosslessReplayRows(asArray(rows).filter((row) => canCurrentUserReadReplaySummary(row))).slice(0, 300);
       if (!rows.length) {
         body.innerHTML = `
           <p class="muted">牌譜はまだありません。</p>

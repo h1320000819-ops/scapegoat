@@ -1441,24 +1441,70 @@ const replayResultSummaryFromState = (state, result) => {
   if (result.type === "win") return `${playerName(result.winnerId)} ${result.winType === "tsumo" ? "ツモ" : "ロン"}${paymentText ? ` / ${paymentText}` : ""}`;
   return result.type || "結果";
 };
+const isTsumoLosslessReplaySummary = (summary = {}) =>
+  summary?.ruleId === TSUMO_LOSSLESS_3MA_RULE_ID || String(summary?.ruleName || "").includes("全赤");
+const replaySummaryGroupKey = (summary = {}, replayId = "") => {
+  if (!isTsumoLosslessReplaySummary(summary) || !summary.gameId) return `single:${replayId}`;
+  return ["allred", summary.clubId || "", summary.tableId || "", summary.gameId || ""].join(":");
+};
+const replaySummaryRank = (summary = {}, createdAt = "") => [
+  summary.scope === "hanchan" ? 1 : 0,
+  Number(summary.handMarkers?.length || 0),
+  Number(summary.eventCount || 0),
+  Number(summary.snapshotCount || 0),
+  Date.parse(summary.endedAt || createdAt || "") || 0,
+];
+const preferReplaySummaryEntry = (candidate, current) => {
+  if (!current) return candidate;
+  const a = replaySummaryRank(candidate.summary, candidate.createdAt);
+  const b = replaySummaryRank(current.summary, current.createdAt);
+  for (let index = 0; index < a.length; index++) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? candidate : current;
+  }
+  return candidate;
+};
+const collapseTsumoLosslessReplayEntries = (entries = []) => {
+  const grouped = new Map();
+  const singles = [];
+  for (const entry of entries) {
+    const summary = entry?.summary || {};
+    const replayId = entry?.replayId || summary.replayId || "";
+    const key = replaySummaryGroupKey(summary, replayId);
+    if (!key.startsWith("allred:")) {
+      singles.push(entry);
+      continue;
+    }
+    grouped.set(key, preferReplaySummaryEntry(entry, grouped.get(key)));
+  }
+  return [...singles, ...grouped.values()];
+};
 const replayRepository = {
-  listReplays: () => loadReplays()
+  listReplays: () => collapseTsumoLosslessReplayEntries(loadReplays()
     .filter((replay) => replay?.summary || replay?.replayId)
-    .map((replay) => ({
-      replayId: replay.summary?.replayId ?? replay.replayId,
-      replayUrl: replay.summary?.replayUrl ?? replayUrlFor(replay.summary?.replayId ?? replay.replayId),
-      clubId: replay.summary?.clubId ?? replay.initialState?.selectedClubId ?? replay.initialState?.activeClubId ?? loadTables().find((table) => table.id === (replay.summary?.tableId ?? replay.initialState?.activeTableId))?.clubId,
-      tableId: replay.summary?.tableId ?? replay.initialState?.activeTableId,
-      ruleId: replay.summary?.ruleId ?? "anmika-rocket",
-      ruleName: replay.summary?.ruleName ?? replayRuleName(replay.summary?.ruleId ?? "anmika-rocket"),
-      startedAt: replay.summary?.startedAt ?? replay.initialState?.handLog?.handId?.split("-").at(-1) ?? now(),
-      endedAt: replay.summary?.endedAt ?? now(),
-      players: replay.summary?.players ?? replay.initialState?.players?.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })) ?? [],
-      resultLabel: replay.summary?.resultLabel ?? replay.initialState?.handLog?.result?.type ?? "牌譜",
-      resultSummary: replay.summary?.resultSummary ?? replayResultSummaryFromState(replay.initialState, replay.initialState?.handLog?.result),
-      accessGranted: Boolean(replay.accessGranted || replay.summary?.accessGranted),
-    }))
-    .filter((summary) => summary.replayId),
+    .map((replay) => {
+      const replayId = replay.summary?.replayId ?? replay.replayId;
+      const summary = {
+        replayId,
+        replayUrl: replay.summary?.replayUrl ?? replayUrlFor(replayId),
+        clubId: replay.summary?.clubId ?? replay.initialState?.selectedClubId ?? replay.initialState?.activeClubId ?? loadTables().find((table) => table.id === (replay.summary?.tableId ?? replay.initialState?.activeTableId))?.clubId,
+        tableId: replay.summary?.tableId ?? replay.initialState?.activeTableId,
+        gameId: replay.summary?.gameId ?? replay.gameId ?? replay.initialState?.gameId,
+        ruleId: replay.summary?.ruleId ?? "anmika-rocket",
+        ruleName: replay.summary?.ruleName ?? replayRuleName(replay.summary?.ruleId ?? "anmika-rocket"),
+        scope: replay.summary?.scope,
+        startedAt: replay.summary?.startedAt ?? replay.initialState?.handLog?.handId?.split("-").at(-1) ?? now(),
+        endedAt: replay.summary?.endedAt ?? now(),
+        players: replay.summary?.players ?? replay.initialState?.players?.map((player) => ({ playerId: player.id, name: player.name, finalScore: player.score })) ?? [],
+        resultLabel: replay.summary?.resultLabel ?? replay.initialState?.handLog?.result?.type ?? "牌譜",
+        resultSummary: replay.summary?.resultSummary ?? replayResultSummaryFromState(replay.initialState, replay.initialState?.handLog?.result),
+        accessGranted: Boolean(replay.accessGranted || replay.summary?.accessGranted),
+        handMarkers: replay.summary?.handMarkers,
+        eventCount: replay.summary?.eventCount,
+        snapshotCount: replay.summary?.snapshotCount,
+      };
+      return { ...summary, summary, createdAt: replay.createdAt };
+    })
+    .filter((summary) => summary.replayId)),
   getReplay: (id) => loadReplays().find((replay) => replay.replayId === id || replay.summary?.replayId === id),
   listReplaysByClub: (clubId) => replayRepository.listReplays().filter((summary) => summary.clubId === clubId),
   saveReplay: (replay) => {
@@ -2891,6 +2937,15 @@ const getDiscardStatus = (gameState, viewerPlayerId, tileId = null) => {
 const getDiscardBlockReason = (gameState, viewerPlayerId, tileId = null) => getDiscardStatus(gameState, viewerPlayerId, tileId).reason;
 const canDiscard = (gameState, viewerPlayerId, tileId = null) => getDiscardStatus(gameState, viewerPlayerId, tileId).can;
 const shouldEndAfterResultOk = (gameState) => Boolean(gameState.settings?.isLastHand) && !isTsumoLossless3maState(gameState);
+const isOnlineTableDissolvedAfterLastHand = (gameState) => {
+  if (gameState?.phase !== "gameEnded") return false;
+  const reason = `${gameState?.onlineMeta?.reason || ""} ${gameState?.finalResult?.reason || ""} ${gameState?.handLog?.result?.reason || ""}`;
+  if (reason.includes("lastHandDissolve")) return true;
+  return (Array.isArray(gameState?.handLog?.events) ? gameState.handLog.events : []).some((event) =>
+    event?.type === "lastHandTableDissolved" ||
+    (event?.type === "tableClosedAfterUnfilledContinuation" && String(event?.reason || "").includes("lastHandDissolve"))
+  );
+};
 const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   const localUserId = sync?.userId || gameState?.onlineSync?.userId || CURRENT_USER_ID;
   if (!localUserId) return false;
@@ -2906,7 +2961,10 @@ const didLocalPlayerDeclareLastHand = (gameState, sync) => {
   return declaredBy.includes(localUserId);
 };
 const shouldLeaveOnlineTableAfterGameEnded = (gameState, sync) =>
-  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && !isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync));
+  Boolean(sync?.tableId && gameState?.phase === "gameEnded" && (
+    isOnlineTableDissolvedAfterLastHand(gameState) ||
+    (!isTsumoLossless3maState(gameState) && didLocalPlayerDeclareLastHand(gameState, sync))
+  ));
 const shouldShowForceLeaveButton = (gameState) =>
   Boolean(gameState?.screen === "game" && isSocketAuthoritativeGame() && !gameState?.isReplayView);
 const normalizeSignedZero = (value) => Object.is(value, -0) ? 0 : value;
