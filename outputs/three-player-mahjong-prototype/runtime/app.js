@@ -9576,6 +9576,7 @@ class GameView {
           <label>メールアドレス/ログインID<input type="text" data-login-user-id /></label>
           <label>パスワード<input type="password" data-login-password /></label>
           <button type="button" data-login-account>ログイン</button>
+          ${DEBUG_AUTH_ENABLED ? `<button type="button" class="secondary" data-debug-login>デバッグログイン</button>` : ""}
         </section>
         <section class="auth-box">
           <h3>アカウント作成</h3>

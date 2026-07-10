@@ -1,14 +1,14 @@
-const CACHE_NAME = "anmika-pwa-20260708-center-dora-fit-a";
+const CACHE_NAME = "anmika-pwa-20260710-debug-login-a";
 const TILE_CACHE_NAME = "anmika-tile-assets-v14";
 const APP_SHELL = [
   "/",
   "/index.html",
   "/online-debug/index.html",
   "/replay.html",
-  "/styles.css?v=20260708-center-dora-fit-a",
-  "/runtime/app.js?v=20260708-center-dora-fit-a",
-  "/runtime/online-debug.js?v=20260708-center-dora-fit-a",
-  "/runtime/pwa.js?v=20260708-center-dora-fit-a",
+  "/styles.css?v=20260710-debug-login-a",
+  "/runtime/app.js?v=20260710-debug-login-a",
+  "/runtime/online-debug.js?v=20260710-debug-login-a",
+  "/runtime/pwa.js?v=20260710-debug-login-a",
   "/runtime/supabase-public-config.js",
   "/manifest.json",
   "/public/icons/anmika-icon.svg",
