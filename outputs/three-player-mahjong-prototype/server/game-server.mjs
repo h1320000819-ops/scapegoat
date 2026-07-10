@@ -2920,11 +2920,18 @@ const safeSyncClubPointEffects = (room, reason = "unspecified") => {
 };
 const queueResultSideEffectsOnce = (room, resultId, reason = "resultOk") => {
   if (!room?.state || !resultId) return false;
+  if (isTsumoLossless3maState(room.state) && (room.state.phase !== "gameEnded" || !room.state.finalResult)) {
+    return false;
+  }
   room.resultSideEffectQueuedIds ??= new Set();
   if (room.resultSideEffectQueuedIds.has(resultId)) return false;
   room.resultSideEffectQueuedIds.add(resultId);
   room.resultPointSyncResultId = resultId;
-  if (!isTsumoLossless3maState(room.state)) {
+  if (isTsumoLossless3maState(room.state)) {
+    syncReplayEffects(room).catch((error) => {
+      console.error("[ReplaySync] all-red final replay save failed", { tableId: room?.tableId, gameId: room?.gameId, resultId, error });
+    });
+  } else {
     queueReplayEffectsSnapshot(room);
   }
   setTimeout(() => {
@@ -6390,6 +6397,14 @@ const scheduleRoomResultTimeout = (room) => {
       if (!applyAutoResultOk(room.state)) {
         scheduleRoomResultTimeout(room);
         return;
+      }
+      if (isTsumoLossless3maState(room.state) && room.state.phase === "gameEnded" && room.state.finalResult) {
+        const finalSyncId = [
+          room.gameId || room.tableId || "game",
+          "gameEnded",
+          room.state.finalResult?.createdAt || room.state.finalResult?.reason || getCurrentResultId(room.state) || "final",
+        ].join(":");
+        queueResultSideEffectsOnce(room, finalSyncId, "resultOkAutoGameEnded");
       }
       advanceServerCpuTurns(room.state);
       room.version = Number(room.version || 0) + 1;
